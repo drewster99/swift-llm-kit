@@ -27,7 +27,8 @@ public struct KeychainService: Sendable {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: providerID
+            kSecAttrAccount as String: providerID,
+            kSecUseDataProtectionKeychain as String: true
         ]
 
         // Try to update first
@@ -56,6 +57,7 @@ public struct KeychainService: Sendable {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: providerID,
+            kSecUseDataProtectionKeychain as String: true,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
@@ -75,7 +77,8 @@ public struct KeychainService: Sendable {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: providerID
+            kSecAttrAccount as String: providerID,
+            kSecUseDataProtectionKeychain as String: true
         ]
 
         let status = SecItemDelete(query as CFDictionary)
