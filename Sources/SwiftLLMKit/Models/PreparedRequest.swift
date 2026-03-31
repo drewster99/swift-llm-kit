@@ -17,14 +17,14 @@ public struct PreparedRequest: @unchecked Sendable {
     /// The app merges its own keys (messages, tools) into this dictionary before sending.
     public let baseBody: [String: Any]
     /// The provider type, so the app knows which message format to use.
-    public let providerType: ProviderType
+    public let providerType: ProviderAPIType
     /// Whether the configuration requested streaming.
     public let streaming: Bool
 
     public init(
         urlRequest: URLRequest,
         baseBody: [String: Any],
-        providerType: ProviderType,
+        providerType: ProviderAPIType,
         streaming: Bool
     ) {
         self.urlRequest = urlRequest

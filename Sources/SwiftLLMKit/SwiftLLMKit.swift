@@ -34,6 +34,8 @@ public final class LLMKitManager {
     public private(set) var isRefreshing: Bool = false
     /// Most recent persistence error, if any. Observable so UI can show an alert/banner.
     public var persistenceError: String?
+    /// When true, providers created by `makeProvider(for:)` will log full request/response JSON.
+    public var verboseLogging: Bool = false
     /// Errors from the most recent model refresh, keyed by provider name.
     public private(set) var refreshErrors: [String: String] = [:]
 
@@ -485,6 +487,55 @@ public final class LLMKitManager {
             providerType: provider.apiType,
             streaming: config.streaming
         )
+    }
+
+    // MARK: - Provider Factory
+
+    /// Creates a configured LLM provider for the given configuration ID.
+    ///
+    /// Resolves the `ModelConfiguration`, its associated `ModelProvider`, and builds
+    /// an API key closure that reads from Keychain at point of use.
+    ///
+    /// - Parameter configurationID: The UUID of a `ModelConfiguration`.
+    /// - Returns: A fully configured `LLMProvider` ready to send messages.
+    /// - Throws: `SwiftLLMKitError` if the configuration or provider cannot be found.
+    public func makeProvider(for configurationID: UUID) throws -> any LLMProvider {
+        guard let config = configurations.first(where: { $0.id == configurationID }) else {
+            throw SwiftLLMKitError.configurationNotFound(id: configurationID)
+        }
+        guard let modelProvider = providers.first(where: { $0.id == config.providerID }) else {
+            throw SwiftLLMKitError.providerNotFound(id: config.providerID)
+        }
+
+        let providerID = modelProvider.id
+        let keychainRef = self.keychain
+        let readAPIKey: @Sendable () -> String = {
+            keychainRef.apiKey(forProviderID: providerID) ?? ""
+        }
+        let verbose = self.verboseLogging
+
+        switch modelProvider.apiType {
+        case .anthropic:
+            return AnthropicProvider(
+                configuration: config, provider: modelProvider,
+                readAPIKey: readAPIKey, verboseLogging: verbose
+            )
+        case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI:
+            return OpenAICompatibleProvider(
+                configuration: config, provider: modelProvider,
+                readAPIKey: readAPIKey, verboseLogging: verbose
+            )
+        case .ollama:
+            return OllamaProvider(
+                configuration: config, provider: modelProvider,
+                readAPIKey: readAPIKey, verboseLogging: verbose
+            )
+        case .gemini:
+            return GeminiProvider(
+                configuration: config, provider: modelProvider,
+                readAPIKey: readAPIKey, verboseLogging: verbose
+            )
+        }
     }
 
     // MARK: - Private persistence helpers

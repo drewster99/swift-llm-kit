@@ -73,3 +73,14 @@ public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
         validationError = try container.decodeIfPresent(String.self, forKey: .validationError)
     }
 }
+
+// MARK: - Convenience Accessors
+
+extension ModelConfiguration {
+    /// Alias for `modelID`, matching the field name used by LLM provider APIs.
+    public var model: String { modelID }
+    /// Alias for `maxOutputTokens`, matching common provider API naming.
+    public var maxTokens: Int { maxOutputTokens }
+    /// Alias for `maxContextTokens`, the total context window budget in tokens.
+    public var contextWindowSize: Int { maxContextTokens }
+}
