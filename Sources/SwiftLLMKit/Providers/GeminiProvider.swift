@@ -66,7 +66,7 @@ public struct GeminiProvider: LLMProvider {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        let body = buildRequestBody(messages: messages, tools: tools)
+        let body = try buildRequestBody(messages: messages, tools: tools)
         let requestData = try JSONSerialization.data(withJSONObject: body)
         request.httpBody = requestData
 
@@ -98,7 +98,7 @@ public struct GeminiProvider: LLMProvider {
     private func buildRequestBody(
         messages: [LLMMessage],
         tools: [LLMToolDefinition]
-    ) -> [String: Any] {
+    ) throws -> [String: Any] {
         var systemParts: [String] = []
         var conversationMessages: [LLMMessage] = []
 
@@ -112,7 +112,7 @@ public struct GeminiProvider: LLMProvider {
 
         // Gemini requires strict user/model alternation. Merge consecutive same-role
         // messages (e.g. a tool result followed by a user message) into one content entry.
-        let rawContents = conversationMessages.map(encodeContent)
+        let rawContents = try conversationMessages.map(encodeContent)
         let mergedContents = Self.mergeConsecutiveSameRole(rawContents)
 
         var body: [String: Any] = [
@@ -146,7 +146,7 @@ public struct GeminiProvider: LLMProvider {
         return body
     }
 
-    private func encodeContent(_ message: LLMMessage) -> [String: Any] {
+    private func encodeContent(_ message: LLMMessage) throws -> [String: Any] {
         let role = geminiRole(for: message)
 
         switch message.content {
@@ -166,11 +166,11 @@ public struct GeminiProvider: LLMProvider {
             return ["role": role, "parts": parts]
 
         case .toolCalls(let calls):
-            let parts: [[String: Any]] = calls.map { call in
+            let parts: [[String: Any]] = try calls.map { call in
                 [
                     "functionCall": [
                         "name": call.name,
-                        "args": parseJSONObject(call.arguments)
+                        "args": try parseJSONObject(call.arguments)
                     ] as [String: Any]
                 ]
             }
@@ -182,7 +182,7 @@ public struct GeminiProvider: LLMProvider {
                 parts.append([
                     "functionCall": [
                         "name": call.name,
-                        "args": parseJSONObject(call.arguments)
+                        "args": try parseJSONObject(call.arguments)
                     ] as [String: Any]
                 ])
             }
@@ -236,9 +236,9 @@ public struct GeminiProvider: LLMProvider {
         // produce a valid tool call. Surface these as actionable text so the agent can retry.
         let finishReason = candidate["finishReason"] as? String
         if let finishReason, finishReason != "STOP" && finishReason != "MAX_TOKENS" {
+            let finishMessage = candidate["finishMessage"] as? String ?? finishReason
+            logger.warning("Gemini finished with \(finishReason, privacy: .public): \(finishMessage, privacy: .public)")
             if candidate["content"] == nil {
-                let finishMessage = candidate["finishMessage"] as? String ?? finishReason
-                logger.warning("Gemini finished with \(finishReason, privacy: .public): \(finishMessage, privacy: .public)")
                 return LLMResponse(
                     text: "[Gemini error: \(finishReason)] \(finishMessage)",
                     toolCalls: []
@@ -275,9 +275,9 @@ public struct GeminiProvider: LLMProvider {
                 } else {
                     argString = "{}"
                 }
-                // Use function name as the synthetic ID because Gemini has no real tool call IDs,
-                // and functionResponse needs the function name back (not a UUID).
-                toolCalls.append(LLMToolCall(id: name, name: name, arguments: argString))
+                // Gemini has no real tool call IDs. Use UUID for internal routing;
+                // functionResponse matching uses the `name` field, not the `id`.
+                toolCalls.append(LLMToolCall(id: UUID().uuidString, name: name, arguments: argString))
             }
         }
 
@@ -313,15 +313,14 @@ public struct GeminiProvider: LLMProvider {
 
     // MARK: - Helpers
 
-    private func parseJSONObject(_ jsonString: String) -> Any {
+    private func parseJSONObject(_ jsonString: String) throws -> Any {
         guard let data = jsonString.data(using: .utf8) else {
-            return [String: Any]()
+            throw LLMProviderError.malformedResponse(detail: "tool arguments not valid UTF-8: \(jsonString.prefix(200))")
         }
         do {
             return try JSONSerialization.jsonObject(with: data)
         } catch {
-            logger.warning("Failed to parse JSON arguments: \(error.localizedDescription, privacy: .public)")
-            return [String: Any]()
+            throw LLMProviderError.malformedResponse(detail: "tool arguments JSON parse failed: \(error.localizedDescription), input: \(jsonString.prefix(200))")
         }
     }
 }

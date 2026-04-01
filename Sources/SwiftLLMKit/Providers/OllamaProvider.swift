@@ -20,6 +20,38 @@ public struct OllamaProvider: LLMProvider {
     private let verboseLogging: Bool
     private let session: URLSession
 
+    // MARK: - Static regex patterns (compiled once)
+
+    // Patterns are string literals so NSRegularExpression init cannot fail; `try!` is safe.
+    private static let xmlBlockRegex = try! NSRegularExpression(
+        pattern: #"<function_calls>\s*(.*?)\s*</function_calls>"#,
+        options: [.dotMatchesLineSeparators]
+    )
+    private static let invokeRegex = try! NSRegularExpression(
+        pattern: #"<invoke\s+name="([^"]+)">\s*(.*?)\s*</invoke>"#,
+        options: [.dotMatchesLineSeparators]
+    )
+    private static let paramRegex = try! NSRegularExpression(
+        pattern: #"<parameter\s+name="([^"]+)"(?:\s+[^>]*)?>([^<]*)</parameter>"#,
+        options: [.dotMatchesLineSeparators]
+    )
+    private static let xmlStripRegex = try! NSRegularExpression(
+        pattern: #"<function_calls>\s*.*?\s*</function_calls>"#,
+        options: [.dotMatchesLineSeparators]
+    )
+    private static let toolCodeBlockRegex = try! NSRegularExpression(
+        pattern: #"```tool_code\s*\n(.*?)\n\s*```"#,
+        options: [.dotMatchesLineSeparators]
+    )
+    private static let toolCodeCallRegex = try! NSRegularExpression(
+        pattern: #"^(\w+)\((.*)\)$"#,
+        options: [.dotMatchesLineSeparators]
+    )
+    private static let toolCodeStripRegex = try! NSRegularExpression(
+        pattern: #"```tool_code\s*\n.*?\n\s*```"#,
+        options: [.dotMatchesLineSeparators]
+    )
+
     public init(
         configuration: ModelConfiguration,
         provider: ModelProvider,
@@ -276,11 +308,14 @@ public struct OllamaProvider: LLMProvider {
                 if let argsObj = function["arguments"] {
                     if let argsString = argsObj as? String {
                         arguments = argsString
-                    } else if let argsData = try? JSONSerialization.data(withJSONObject: argsObj),
-                              let argsString = String(data: argsData, encoding: .utf8) {
-                        arguments = argsString
                     } else {
-                        arguments = "{}"
+                        do {
+                            let argsData = try JSONSerialization.data(withJSONObject: argsObj)
+                            arguments = String(data: argsData, encoding: .utf8) ?? "{}"
+                        } catch {
+                            logger.warning("Failed to serialize tool arguments for \(name, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                            arguments = "{}"
+                        }
                     }
                 } else {
                     arguments = "{}"
@@ -338,15 +373,8 @@ public struct OllamaProvider: LLMProvider {
     private static func parseXMLToolCalls(from content: String) -> [LLMToolCall] {
         var calls: [LLMToolCall] = []
 
-        // Find all <function_calls>...</function_calls> blocks
-        let blockPattern = #"<function_calls>\s*(.*?)\s*</function_calls>"#
-        guard let blockRegex = try? NSRegularExpression(
-            pattern: blockPattern,
-            options: [.dotMatchesLineSeparators]
-        ) else { return [] }
-
         let nsContent = content as NSString
-        let blockMatches = blockRegex.matches(
+        let blockMatches = xmlBlockRegex.matches(
             in: content,
             range: NSRange(location: 0, length: nsContent.length)
         )
@@ -363,12 +391,6 @@ public struct OllamaProvider: LLMProvider {
     private static func parseInvocations(from block: String) -> [LLMToolCall] {
         var calls: [LLMToolCall] = []
 
-        let invokePattern = #"<invoke\s+name="([^"]+)">\s*(.*?)\s*</invoke>"#
-        guard let invokeRegex = try? NSRegularExpression(
-            pattern: invokePattern,
-            options: [.dotMatchesLineSeparators]
-        ) else { return [] }
-
         let nsBlock = block as NSString
         let invokeMatches = invokeRegex.matches(
             in: block,
@@ -383,11 +405,14 @@ public struct OllamaProvider: LLMProvider {
             let argsJSON: String
             if arguments.isEmpty {
                 argsJSON = "{}"
-            } else if let argsData = try? JSONSerialization.data(withJSONObject: arguments),
-                      let argsString = String(data: argsData, encoding: .utf8) {
-                argsJSON = argsString
             } else {
-                argsJSON = "{}"
+                do {
+                    let argsData = try JSONSerialization.data(withJSONObject: arguments)
+                    argsJSON = String(data: argsData, encoding: .utf8) ?? "{}"
+                } catch {
+                    logger.warning("Failed to serialize XML tool arguments for \(toolName, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                    argsJSON = "{}"
+                }
             }
 
             calls.append(LLMToolCall(id: UUID().uuidString, name: toolName, arguments: argsJSON))
@@ -400,12 +425,6 @@ public struct OllamaProvider: LLMProvider {
     private static func parseParameters(from body: String) -> [String: Any] {
         var params: [String: Any] = [:]
 
-        let paramPattern = #"<parameter\s+name="([^"]+)"(?:\s+[^>]*)?>([^<]*)</parameter>"#
-        guard let paramRegex = try? NSRegularExpression(
-            pattern: paramPattern,
-            options: [.dotMatchesLineSeparators]
-        ) else { return params }
-
         let nsBody = body as NSString
         let paramMatches = paramRegex.matches(
             in: body,
@@ -416,7 +435,8 @@ public struct OllamaProvider: LLMProvider {
             let name = nsBody.substring(with: paramMatch.range(at: 1))
             let value = nsBody.substring(with: paramMatch.range(at: 2))
 
-            // Try to interpret as JSON value (number, bool, etc.) before falling back to string
+            // try? justified: probing whether the string is a JSON number/bool; plain strings
+            // are the expected fallback, not an error condition.
             if let data = value.data(using: .utf8),
                let jsonValue = try? JSONSerialization.jsonObject(with: data) {
                 // Only use JSON interpretation for non-string types to avoid
@@ -436,12 +456,7 @@ public struct OllamaProvider: LLMProvider {
 
     /// Removes `<function_calls>...</function_calls>` blocks from content text.
     private static func stripXMLToolCalls(from content: String) -> String {
-        let pattern = #"<function_calls>\s*.*?\s*</function_calls>"#
-        guard let regex = try? NSRegularExpression(
-            pattern: pattern,
-            options: [.dotMatchesLineSeparators]
-        ) else { return content }
-        return regex.stringByReplacingMatches(
+        xmlStripRegex.stringByReplacingMatches(
             in: content,
             range: NSRange(location: 0, length: (content as NSString).length),
             withTemplate: ""
@@ -461,15 +476,8 @@ public struct OllamaProvider: LLMProvider {
     private static func parseToolCodeCalls(from content: String) -> [LLMToolCall] {
         var calls: [LLMToolCall] = []
 
-        // Match ```tool_code ... ``` blocks
-        let blockPattern = #"```tool_code\s*\n(.*?)\n\s*```"#
-        guard let blockRegex = try? NSRegularExpression(
-            pattern: blockPattern,
-            options: [.dotMatchesLineSeparators]
-        ) else { return [] }
-
         let nsContent = content as NSString
-        let matches = blockRegex.matches(
+        let matches = toolCodeBlockRegex.matches(
             in: content,
             range: NSRange(location: 0, length: nsContent.length)
         )
@@ -478,15 +486,8 @@ public struct OllamaProvider: LLMProvider {
             let body = nsContent.substring(with: match.range(at: 1))
                 .trimmingCharacters(in: .whitespacesAndNewlines)
 
-            // Parse: function_name(arg1: value1, arg2: "value2")
-            let callPattern = #"^(\w+)\((.*)\)$"#
-            guard let callRegex = try? NSRegularExpression(
-                pattern: callPattern,
-                options: [.dotMatchesLineSeparators]
-            ) else { continue }
-
             let nsBody = body as NSString
-            guard let callMatch = callRegex.firstMatch(
+            guard let callMatch = toolCodeCallRegex.firstMatch(
                 in: body,
                 range: NSRange(location: 0, length: nsBody.length)
             ) else { continue }
@@ -499,11 +500,14 @@ public struct OllamaProvider: LLMProvider {
             let argsJSON: String
             if arguments.isEmpty {
                 argsJSON = "{}"
-            } else if let argsData = try? JSONSerialization.data(withJSONObject: arguments),
-                      let json = String(data: argsData, encoding: .utf8) {
-                argsJSON = json
             } else {
-                argsJSON = "{}"
+                do {
+                    let argsData = try JSONSerialization.data(withJSONObject: arguments)
+                    argsJSON = String(data: argsData, encoding: .utf8) ?? "{}"
+                } catch {
+                    logger.warning("Failed to serialize tool_code arguments for \(funcName, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                    argsJSON = "{}"
+                }
             }
 
             calls.append(LLMToolCall(id: UUID().uuidString, name: funcName, arguments: argsJSON))
@@ -578,12 +582,7 @@ public struct OllamaProvider: LLMProvider {
 
     /// Removes ` ```tool_code ... ``` ` blocks from content text.
     private static func stripToolCodeBlocks(from content: String) -> String {
-        let pattern = #"```tool_code\s*\n.*?\n\s*```"#
-        guard let regex = try? NSRegularExpression(
-            pattern: pattern,
-            options: [.dotMatchesLineSeparators]
-        ) else { return content }
-        return regex.stringByReplacingMatches(
+        toolCodeStripRegex.stringByReplacingMatches(
             in: content,
             range: NSRange(location: 0, length: (content as NSString).length),
             withTemplate: ""

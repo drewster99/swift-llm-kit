@@ -1,5 +1,8 @@
 import Foundation
+import os
 import Security
+
+private let logger = Logger(subsystem: "SwiftLLMKit", category: "Keychain")
 
 /// Manages API key storage in the macOS Keychain.
 ///
@@ -66,6 +69,9 @@ public struct KeychainService: Sendable {
         let status = SecItemCopyMatching(query as CFDictionary, &result)
 
         guard status == errSecSuccess, let data = result as? Data else {
+            if status != errSecItemNotFound {
+                logger.warning("Keychain read failed for provider \(providerID, privacy: .public): OSStatus \(status)")
+            }
             return nil
         }
         return String(data: data, encoding: .utf8)

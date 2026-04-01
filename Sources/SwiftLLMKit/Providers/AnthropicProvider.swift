@@ -29,10 +29,7 @@ public struct AnthropicProvider: LLMProvider {
         messages: [LLMMessage],
         tools: [LLMToolDefinition]
     ) async throws -> LLMResponse {
-        // Normalize: accept both "https://api.anthropic.com" and ".../v1" as endpoint.
-        let base = provider.endpoint.path.hasSuffix("/v1")
-            ? provider.endpoint
-            : provider.endpoint.appendingPathComponent("v1")
+        let base = provider.endpoint.ensureAnthropicV1()
         let url = base.appendingPathComponent("messages")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -40,7 +37,7 @@ public struct AnthropicProvider: LLMProvider {
         request.setValue(readAPIKey(), forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
 
-        let body = buildRequestBody(messages: messages, tools: tools)
+        let body = try buildRequestBody(messages: messages, tools: tools)
         let requestData = try JSONSerialization.data(withJSONObject: body)
         request.httpBody = requestData
 
@@ -70,7 +67,7 @@ public struct AnthropicProvider: LLMProvider {
     private func buildRequestBody(
         messages: [LLMMessage],
         tools: [LLMToolDefinition]
-    ) -> [String: Any] {
+    ) throws -> [String: Any] {
         // Anthropic requires system prompt separate from messages.
         // Concatenate all system messages so per-turn context doesn't overwrite the base prompt.
         var systemParts: [String] = []
@@ -89,7 +86,7 @@ public struct AnthropicProvider: LLMProvider {
         // Merge consecutive same-role messages. The Anthropic API requires strict user/assistant
         // alternation. Multiple tool_result messages (role "user") can follow an assistant tool_use,
         // and must be combined into a single user message with all tool_result content blocks.
-        let encodedMessages = Self.mergeConsecutiveSameRole(conversationMessages.map(encodeMessage))
+        let encodedMessages = Self.mergeConsecutiveSameRole(try conversationMessages.map(encodeMessage))
 
         let thinkingEnabled = (configuration.thinkingBudget ?? 0) > 0
 
@@ -139,7 +136,7 @@ public struct AnthropicProvider: LLMProvider {
         }
     }
 
-    private func encodeMessage(_ message: LLMMessage) -> [String: Any] {
+    private func encodeMessage(_ message: LLMMessage) throws -> [String: Any] {
         let role = anthropicRole(for: message)
 
         switch message.content {
@@ -167,12 +164,12 @@ public struct AnthropicProvider: LLMProvider {
                 "content": text
             ]
         case .toolCalls(let calls):
-            let content: [[String: Any]] = calls.map { call in
+            let content: [[String: Any]] = try calls.map { call in
                 [
                     "type": "tool_use",
                     "id": call.id,
                     "name": call.name,
-                    "input": Self.parseToolArguments(call.arguments)
+                    "input": try Self.parseToolArguments(call.arguments)
                 ]
             }
             return ["role": "assistant", "content": content]
@@ -180,12 +177,12 @@ public struct AnthropicProvider: LLMProvider {
             var content: [[String: Any]] = [
                 ["type": "text", "text": text]
             ]
-            content.append(contentsOf: calls.map { call in
+            try content.append(contentsOf: calls.map { call in
                 [
                     "type": "tool_use",
                     "id": call.id,
                     "name": call.name,
-                    "input": Self.parseToolArguments(call.arguments)
+                    "input": try Self.parseToolArguments(call.arguments)
                 ] as [String: Any]
             })
             return ["role": "assistant", "content": content]
@@ -247,16 +244,14 @@ public struct AnthropicProvider: LLMProvider {
     }
 
     /// Parses a JSON argument string back into a Foundation object for the API request body.
-    private static func parseToolArguments(_ jsonString: String) -> Any {
+    private static func parseToolArguments(_ jsonString: String) throws -> Any {
         guard let data = jsonString.data(using: .utf8) else {
-            logger.warning("Tool arguments not valid UTF-8: \(jsonString.prefix(200))")
-            return [String: Any]()
+            throw LLMProviderError.malformedResponse(detail: "tool arguments not valid UTF-8: \(jsonString.prefix(200))")
         }
         do {
             return try JSONSerialization.jsonObject(with: data)
         } catch {
-            logger.warning("Tool arguments re-parse failed: \(error.localizedDescription) input=\(jsonString.prefix(200))")
-            return [String: Any]()
+            throw LLMProviderError.malformedResponse(detail: "tool arguments JSON parse failed: \(error.localizedDescription), input: \(jsonString.prefix(200))")
         }
     }
 

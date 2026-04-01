@@ -24,10 +24,7 @@ public struct ModelFetchService: Sendable {
         case .ollama:
             modelsURL = provider.endpoint.appendingPathComponent("tags")
         case .anthropic:
-            let base = provider.endpoint.path.hasSuffix("/v1")
-                ? provider.endpoint.deletingLastPathComponent()
-                : provider.endpoint
-            modelsURL = base.appendingPathComponent("v1/models")
+            modelsURL = provider.endpoint.strippingAnthropicV1().appendingPathComponent("v1/models")
         case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI:
             modelsURL = provider.endpoint.appendingPathComponent("models")
         case .gemini:

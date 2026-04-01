@@ -344,10 +344,11 @@ public final class LLMKitManager {
             return
         }
 
-        // Temperature bounds
-        guard (0...2).contains(config.temperature) else {
+        // Temperature bounds (per-provider)
+        let tempRange = provider.apiType.temperatureRange
+        guard tempRange.contains(config.temperature) else {
             configurations[index].isValid = false
-            configurations[index].validationError = "Temperature must be between 0 and 2"
+            configurations[index].validationError = "Temperature must be between \(tempRange.lowerBound) and \(tempRange.upperBound) for \(provider.apiType.displayName)"
             return
         }
 
@@ -412,10 +413,7 @@ public final class LLMKitManager {
         let url: URL
         switch provider.apiType {
         case .anthropic:
-            let base = provider.endpoint.path.hasSuffix("/v1")
-                ? provider.endpoint
-                : provider.endpoint.appendingPathComponent("v1")
-            url = base.appendingPathComponent("messages")
+            url = provider.endpoint.ensureAnthropicV1().appendingPathComponent("messages")
         case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI:
             url = provider.endpoint.appendingPathComponent("chat/completions")
         case .ollama:

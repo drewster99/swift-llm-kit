@@ -42,6 +42,22 @@ public enum ProviderAPIType: String, Codable, Sendable, CaseIterable, Equatable 
         case .zAI: return "z.ai"
         }
     }
+    /// The valid temperature range for this provider's API.
+    /// Models may further constrain this (see `ModelInfo.temperatureRange`).
+    public var temperatureRange: ClosedRange<Double> {
+        switch self {
+        case .anthropic:
+            return 0...1
+        case .gemini:
+            return 0...2
+        case .openAICompatible, .xAI, .zAI, .mistral, .huggingFace:
+            return 0...2
+        case .ollama, .lmStudio:
+            // Ollama/LM Studio accept wide ranges; models may clip internally
+            return 0...5
+        }
+    }
+
     /// The default API endpoint URL for this provider type.
     public var defaultEndpoint: URL { endpointPresets[0].url }
 
@@ -100,6 +116,22 @@ public struct EndpointPreset: Sendable {
             preconditionFailure("Invalid endpoint URL literal: \(urlString)")
         }
         self.url = url
+    }
+}
+
+// MARK: - URL Helpers
+
+extension URL {
+    /// Returns the URL with `/v1` appended if not already present.
+    /// Anthropic endpoints accept both `https://api.anthropic.com` and `.../v1`.
+    func ensureAnthropicV1() -> URL {
+        path.hasSuffix("/v1") ? self : appendingPathComponent("v1")
+    }
+
+    /// Returns the URL with `/v1` stripped, if present.
+    /// Used when the v1 prefix is added per-request (e.g. model listing).
+    func strippingAnthropicV1() -> URL {
+        path.hasSuffix("/v1") ? deletingLastPathComponent() : self
     }
 }
 
