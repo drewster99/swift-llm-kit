@@ -55,8 +55,12 @@ public struct KeychainService: Sendable {
     }
 
     /// Retrieves the API key for the given provider, or `nil` if not stored.
+    ///
+    /// Checks the data protection keychain first. If not found, falls back to the
+    /// legacy login keychain and migrates the entry forward automatically.
     public func apiKey(forProviderID providerID: String) -> String? {
-        let query: [String: Any] = [
+        // Try data protection keychain first
+        let dpQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: providerID,
@@ -66,15 +70,46 @@ public struct KeychainService: Sendable {
         ]
 
         var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let dpStatus = SecItemCopyMatching(dpQuery as CFDictionary, &result)
 
-        guard status == errSecSuccess, let data = result as? Data else {
-            if status != errSecItemNotFound {
-                logger.warning("Keychain read failed for provider \(providerID, privacy: .public): OSStatus \(status)")
-            }
+        if dpStatus == errSecSuccess, let data = result as? Data,
+           let key = String(data: data, encoding: .utf8) {
+            return key
+        }
+
+        if dpStatus != errSecItemNotFound {
+            logger.warning("Keychain read failed for provider \(providerID, privacy: .public): OSStatus \(dpStatus)")
+        }
+
+        // Fall back to legacy (login) keychain for pre-migration entries
+        let legacyQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: providerID,
+            kSecUseDataProtectionKeychain as String: false,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+
+        var legacyResult: AnyObject?
+        let legacyStatus = SecItemCopyMatching(legacyQuery as CFDictionary, &legacyResult)
+
+        guard legacyStatus == errSecSuccess, let legacyData = legacyResult as? Data,
+              let key = String(data: legacyData, encoding: .utf8) else {
             return nil
         }
-        return String(data: data, encoding: .utf8)
+
+        // Migrate to data protection keychain
+        logger.info("Migrating API key for \(providerID, privacy: .public) to data protection keychain")
+        do {
+            try save(apiKey: key, forProviderID: providerID)
+            // Remove legacy entry after successful migration
+            SecItemDelete(legacyQuery as CFDictionary)
+        } catch {
+            logger.warning("Migration to data protection keychain failed for \(providerID, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
+
+        return key
     }
 
     /// Deletes the API key for the given provider.
