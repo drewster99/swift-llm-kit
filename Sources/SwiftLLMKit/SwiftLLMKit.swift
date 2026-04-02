@@ -465,9 +465,15 @@ public final class LLMKitManager {
         switch provider.apiType {
         case .anthropic:
             body["max_tokens"] = config.maxOutputTokens
+            // Anthropic requires temperature = 1 when extended thinking is enabled.
             if let budget = config.thinkingBudget, budget > 0 {
-                body["thinking"] = ["type": "enabled", "budget_tokens": budget] as [String: Any]
+                body["temperature"] = 1.0
+                body["thinking"] = ["type": "enabled", "budget_tokens": max(budget, 1024)] as [String: Any]
             }
+            // Enable prompt caching for all Anthropic requests.
+            body["cache_control"] = config.extendedCacheTTL
+                ? ["type": "ephemeral", "ttl": "1h"] as [String: Any]
+                : ["type": "ephemeral"] as [String: Any]
         case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI:
             body["max_tokens"] = config.maxOutputTokens
         case .ollama:
