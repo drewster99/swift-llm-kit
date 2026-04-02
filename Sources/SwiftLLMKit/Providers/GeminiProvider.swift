@@ -141,6 +141,11 @@ public struct GeminiProvider: LLMProvider {
                     }
                 ] as [String: Any]
             ]
+            body["toolConfig"] = [
+                "functionCallingConfig": [
+                    "mode": "AUTO"
+                ]
+            ] as [String: Any]
         }
 
         return body
