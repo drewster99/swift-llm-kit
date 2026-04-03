@@ -1,15 +1,21 @@
 import Foundation
 
 /// Token usage statistics returned by the provider after an LLM call.
-public struct TokenUsage: Sendable {
+public struct TokenUsage: Sendable, Codable {
     /// Number of tokens in the input (prompt + context).
     public let inputTokens: Int
     /// Number of tokens generated in the output.
     public let outputTokens: Int
+    /// Anthropic: tokens served from prompt cache (cheaper than uncached input). 0 for other providers.
+    public let cacheReadTokens: Int
+    /// Anthropic: tokens written to prompt cache this request. 0 for other providers.
+    public let cacheWriteTokens: Int
 
-    public init(inputTokens: Int, outputTokens: Int) {
+    public init(inputTokens: Int, outputTokens: Int, cacheReadTokens: Int = 0, cacheWriteTokens: Int = 0) {
         self.inputTokens = inputTokens
         self.outputTokens = outputTokens
+        self.cacheReadTokens = cacheReadTokens
+        self.cacheWriteTokens = cacheWriteTokens
     }
 }
 
