@@ -268,11 +268,15 @@ public struct AnthropicProvider: LLMProvider {
             throw LLMProviderError.malformedResponse(detail: "missing content blocks, keys: [\(keys)], body: \(preview)")
         }
 
-        // Log cache metrics for observability.
+        // Parse token usage.
+        var tokenUsage: TokenUsage?
         if let usage = json["usage"] as? [String: Any] {
+            let input = usage["input_tokens"] as? Int ?? 0
+            let output = usage["output_tokens"] as? Int ?? 0
+            tokenUsage = TokenUsage(inputTokens: input, outputTokens: output)
+
             let cacheRead = usage["cache_read_input_tokens"] as? Int ?? 0
             let cacheCreation = usage["cache_creation_input_tokens"] as? Int ?? 0
-            let input = usage["input_tokens"] as? Int ?? 0
             if cacheRead > 0 || cacheCreation > 0 {
                 logger.info("Cache: read=\(cacheRead) created=\(cacheCreation) uncached=\(input)")
             }
@@ -308,7 +312,8 @@ public struct AnthropicProvider: LLMProvider {
         return LLMResponse(
             text: text?.isEmpty == true ? nil : text,
             toolCalls: toolCalls,
-            reasoning: reasoning
+            reasoning: reasoning,
+            usage: tokenUsage
         )
     }
 }
