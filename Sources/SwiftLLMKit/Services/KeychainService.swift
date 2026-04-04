@@ -4,13 +4,22 @@ import Security
 
 private let logger = Logger(subsystem: "SwiftLLMKit", category: "Keychain")
 
-/// Manages API key storage in the macOS Keychain.
+/// Manages API key storage in the macOS Keychain with an in-memory cache.
 ///
 /// Each provider's API key is stored as a generic password with:
 /// - Service: `<keychainServicePrefix>.<appBundleID>`
 /// - Account: provider ID
+///
+/// Keys are cached in RAM after the first successful Keychain read to avoid
+/// transient Keychain access failures (contention, lock-screen delays) that
+/// would otherwise produce empty API keys and downstream 401 errors.
 public struct KeychainService: Sendable {
     private let service: String
+
+    /// In-memory cache of API keys, keyed by provider ID. Protected by a lock
+    /// since `KeychainService` is a value-type `Sendable` struct shared across
+    /// multiple provider closures.
+    private let cache: APIKeyCache
 
     /// Creates a keychain service scoped to the given identifiers.
     /// - Parameters:
@@ -18,9 +27,13 @@ public struct KeychainService: Sendable {
     ///   - appIdentifier: Typically `Bundle.main.bundleIdentifier`.
     public init(keychainServicePrefix: String, appIdentifier: String) {
         self.service = "\(keychainServicePrefix).\(appIdentifier)"
+        self.cache = APIKeyCache()
     }
 
     /// Stores or updates an API key for the given provider.
+    ///
+    /// Invalidates the in-memory cache for this provider so subsequent reads
+    /// pick up the new key.
     /// - Throws: `KeychainError` if the operation fails.
     public func save(apiKey: String, forProviderID providerID: String) throws {
         guard let data = apiKey.data(using: .utf8) else {
@@ -52,13 +65,23 @@ public struct KeychainService: Sendable {
         } else if updateStatus != errSecSuccess {
             throw KeychainError.saveFailed(status: updateStatus)
         }
+
+        // Update the cache with the new key so subsequent reads are immediate.
+        cache.set(apiKey, forProviderID: providerID)
     }
 
     /// Retrieves the API key for the given provider, or `nil` if not stored.
     ///
-    /// Checks the data protection keychain first. If not found, falls back to the
-    /// legacy login keychain and migrates the entry forward automatically.
+    /// Returns the cached value if available. Otherwise reads from the data protection
+    /// keychain (falling back to legacy keychain with automatic migration) and caches
+    /// the result on success. If the Keychain read fails transiently but a cached value
+    /// exists, the cached value is returned.
     public func apiKey(forProviderID providerID: String) -> String? {
+        // Fast path: return cached key if available.
+        if let cached = cache.get(forProviderID: providerID) {
+            return cached
+        }
+
         // Try data protection keychain first
         let dpQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -74,6 +97,7 @@ public struct KeychainService: Sendable {
 
         if dpStatus == errSecSuccess, let data = result as? Data,
            let key = String(data: data, encoding: .utf8) {
+            cache.set(key, forProviderID: providerID)
             return key
         }
 
@@ -109,6 +133,7 @@ public struct KeychainService: Sendable {
             logger.warning("Migration to data protection keychain failed for \(providerID, privacy: .public): \(error.localizedDescription, privacy: .public)")
         }
 
+        cache.set(key, forProviderID: providerID)
         return key
     }
 
@@ -126,6 +151,46 @@ public struct KeychainService: Sendable {
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw KeychainError.deleteFailed(status: status)
         }
+
+        cache.remove(forProviderID: providerID)
+    }
+
+    /// Drops all cached API keys, forcing the next read to go to Keychain.
+    public func invalidateAllCachedKeys() {
+        cache.removeAll()
+    }
+}
+
+/// Thread-safe in-memory cache for API keys.
+///
+/// Uses `NSLock` for synchronization since accesses are brief and non-blocking.
+/// Shared by reference across `KeychainService` value copies.
+final class APIKeyCache: Sendable {
+    private let lock = NSLock()
+    private nonisolated(unsafe) var store: [String: String] = [:]
+
+    func get(forProviderID providerID: String) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return store[providerID]
+    }
+
+    func set(_ key: String, forProviderID providerID: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        store[providerID] = key
+    }
+
+    func remove(forProviderID providerID: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        store[providerID] = nil
+    }
+
+    func removeAll() {
+        lock.lock()
+        defer { lock.unlock() }
+        store.removeAll()
     }
 }
 

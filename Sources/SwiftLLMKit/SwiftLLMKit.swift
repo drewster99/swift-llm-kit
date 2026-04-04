@@ -512,9 +512,14 @@ public final class LLMKitManager {
         }
 
         let providerID = modelProvider.id
+        let providerName = modelProvider.name
         let keychainRef = self.keychain
         let readAPIKey: @Sendable () -> String = {
-            keychainRef.apiKey(forProviderID: providerID) ?? ""
+            guard let key = keychainRef.apiKey(forProviderID: providerID), !key.isEmpty else {
+                logger.error("API key missing for provider '\(providerName, privacy: .public)' (id: \(providerID, privacy: .public)) — Keychain returned nil. Requests will fail with authentication errors.")
+                return ""
+            }
+            return key
         }
         let verbose = self.verboseLogging
 
