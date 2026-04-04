@@ -13,11 +13,16 @@ public protocol LLMProvider: Sendable {
     ) async throws -> LLMResponse
 }
 
-/// A URLSession configured with a 10-minute request timeout for LLM API calls.
+/// A URLSession configured with generous timeouts for LLM API calls.
 /// Local models (Ollama) can take minutes to generate complex responses;
 /// the default 60-second URLSession timeout causes spurious failures.
+///
+/// - `timeoutIntervalForRequest` (10 min): max gap between data packets.
+/// - `timeoutIntervalForResource` (15 min): hard cap on total request duration.
+///   Without this, the default is 7 days — dead connections after sleep/wake can hang indefinitely.
 public let llmURLSession: URLSession = {
     let config = URLSessionConfiguration.default
     config.timeoutIntervalForRequest = 600
+    config.timeoutIntervalForResource = 900
     return URLSession(configuration: config)
 }()
