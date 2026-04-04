@@ -229,10 +229,19 @@ public struct OpenAICompatibleProvider: LLMProvider {
             }
         }
 
+        // Parse token usage.
+        var tokenUsage: TokenUsage?
+        if let usage = json["usage"] as? [String: Any] {
+            let input = usage["prompt_tokens"] as? Int ?? 0
+            let output = usage["completion_tokens"] as? Int ?? 0
+            tokenUsage = TokenUsage(inputTokens: input, outputTokens: output)
+        }
+
         return LLMResponse(
             text: text?.isEmpty == true ? nil : text,
             toolCalls: toolCalls,
-            reasoning: reasoningContent
+            reasoning: reasoningContent,
+            usage: tokenUsage
         )
     }
 }

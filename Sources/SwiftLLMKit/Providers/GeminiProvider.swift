@@ -286,9 +286,18 @@ public struct GeminiProvider: LLMProvider {
             }
         }
 
+        // Parse token usage from usageMetadata.
+        var tokenUsage: TokenUsage?
+        if let usageMeta = json["usageMetadata"] as? [String: Any] {
+            let input = usageMeta["promptTokenCount"] as? Int ?? 0
+            let output = usageMeta["candidatesTokenCount"] as? Int ?? 0
+            tokenUsage = TokenUsage(inputTokens: input, outputTokens: output)
+        }
+
         return LLMResponse(
             text: text?.isEmpty == true ? nil : text,
-            toolCalls: toolCalls
+            toolCalls: toolCalls,
+            usage: tokenUsage
         )
     }
 

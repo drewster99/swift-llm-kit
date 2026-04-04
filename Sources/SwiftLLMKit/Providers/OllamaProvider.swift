@@ -293,6 +293,14 @@ public struct OllamaProvider: LLMProvider {
             throw LLMProviderError.malformedResponse(detail: "missing message, keys: [\(keys)], body: \(preview)")
         }
 
+        // Parse token usage.
+        var tokenUsage: TokenUsage?
+        let promptEval = json["prompt_eval_count"] as? Int ?? 0
+        let eval = json["eval_count"] as? Int ?? 0
+        if promptEval > 0 || eval > 0 {
+            tokenUsage = TokenUsage(inputTokens: promptEval, outputTokens: eval)
+        }
+
         let text = message["content"] as? String
         let toolCallsRaw = message["tool_calls"] as? [[String: Any]]
 
@@ -347,14 +355,16 @@ public struct OllamaProvider: LLMProvider {
                 let remainingText = strippedContent.trimmingCharacters(in: .whitespacesAndNewlines)
                 return LLMResponse(
                     text: remainingText.isEmpty ? nil : remainingText,
-                    toolCalls: parsedCalls
+                    toolCalls: parsedCalls,
+                    usage: tokenUsage
                 )
             }
         }
 
         return LLMResponse(
             text: text?.isEmpty == true ? nil : text,
-            toolCalls: toolCalls
+            toolCalls: toolCalls,
+            usage: tokenUsage
         )
     }
 
