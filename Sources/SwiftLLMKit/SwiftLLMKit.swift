@@ -530,9 +530,14 @@ public final class LLMKitManager {
                 readAPIKey: readAPIKey, verboseLogging: verbose
             )
         case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI:
+            // Mistral API supports parallel tool calls but LiteLLM metadata doesn't flag it.
+            let supportsParallel = modelInfo(providerID: modelProvider.id, modelID: config.modelID)?
+                .capabilities.parallelToolCalls ?? false
+            let enableParallel = supportsParallel || modelProvider.apiType == .mistral
             return OpenAICompatibleProvider(
                 configuration: config, provider: modelProvider,
-                readAPIKey: readAPIKey, verboseLogging: verbose
+                readAPIKey: readAPIKey, verboseLogging: verbose,
+                parallelToolCalls: enableParallel
             )
         case .ollama:
             return OllamaProvider(

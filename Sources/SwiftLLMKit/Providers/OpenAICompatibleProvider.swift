@@ -9,6 +9,7 @@ public struct OpenAICompatibleProvider: LLMProvider {
     private let provider: ModelProvider
     private let readAPIKey: @Sendable () -> String
     private let verboseLogging: Bool
+    private let parallelToolCalls: Bool
     private let session: URLSession
     /// Stable conversation ID for xAI prompt caching. Generated once per provider instance.
     private let conversationID: String
@@ -18,12 +19,14 @@ public struct OpenAICompatibleProvider: LLMProvider {
         provider: ModelProvider,
         readAPIKey: @Sendable @escaping () -> String,
         verboseLogging: Bool = false,
+        parallelToolCalls: Bool = false,
         session: URLSession = llmURLSession
     ) {
         self.configuration = configuration
         self.provider = provider
         self.readAPIKey = readAPIKey
         self.verboseLogging = verboseLogging
+        self.parallelToolCalls = parallelToolCalls
         self.session = session
         self.conversationID = UUID().uuidString
     }
@@ -114,6 +117,9 @@ public struct OpenAICompatibleProvider: LLMProvider {
                         "parameters": tool.parameters.mapValues(\.rawValue)
                     ] as [String: Any]
                 ] as [String: Any]
+            }
+            if parallelToolCalls {
+                body["parallel_tool_calls"] = true
             }
         }
 
