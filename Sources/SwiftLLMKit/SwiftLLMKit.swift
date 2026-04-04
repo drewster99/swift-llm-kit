@@ -352,10 +352,11 @@ public final class LLMKitManager {
             return
         }
 
-        // Thinking budget is Anthropic-only
-        if let budget = config.thinkingBudget, budget > 0, provider.apiType != .anthropic {
+        // Thinking budget is only supported for Anthropic and Alibaba Cloud
+        if let budget = config.thinkingBudget, budget > 0,
+           provider.apiType != .anthropic && provider.apiType != .alibabaCloud {
             configurations[index].isValid = false
-            configurations[index].validationError = "Thinking budget is only supported for Anthropic providers"
+            configurations[index].validationError = "Thinking budget is only supported for Anthropic and Alibaba Cloud providers"
             return
         }
 
@@ -414,7 +415,7 @@ public final class LLMKitManager {
         switch provider.apiType {
         case .anthropic:
             url = provider.endpoint.ensureAnthropicV1().appendingPathComponent("messages")
-        case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI:
+        case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaLlama, .alibabaCloud:
             url = provider.endpoint.appendingPathComponent("chat/completions")
         case .ollama:
             url = provider.endpoint.appendingPathComponent("chat")
@@ -442,7 +443,7 @@ public final class LLMKitManager {
                 request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
             }
             request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI:
+        case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaLlama, .alibabaCloud:
             if let apiKey, !apiKey.isEmpty {
                 request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
             }
@@ -458,9 +459,11 @@ public final class LLMKitManager {
         // Build base body
         var body: [String: Any] = [
             "model": config.modelID,
-            "temperature": config.temperature,
             "stream": config.streaming
         ]
+        if !config.useDefaultTemperature {
+            body["temperature"] = config.temperature
+        }
 
         switch provider.apiType {
         case .anthropic:
@@ -474,15 +477,16 @@ public final class LLMKitManager {
             body["cache_control"] = config.extendedCacheTTL
                 ? ["type": "ephemeral", "ttl": "1h"] as [String: Any]
                 : ["type": "ephemeral"] as [String: Any]
-        case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI:
+        case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaLlama, .alibabaCloud:
             body["max_tokens"] = config.maxOutputTokens
         case .ollama:
             body["options"] = ["num_predict": config.maxOutputTokens] as [String: Any]
         case .gemini:
-            body["generationConfig"] = [
-                "maxOutputTokens": config.maxOutputTokens,
-                "temperature": config.temperature
-            ] as [String: Any]
+            var genConfig: [String: Any] = ["maxOutputTokens": config.maxOutputTokens]
+            if !config.useDefaultTemperature {
+                genConfig["temperature"] = config.temperature
+            }
+            body["generationConfig"] = genConfig
         }
 
         return PreparedRequest(
@@ -529,7 +533,7 @@ public final class LLMKitManager {
                 configuration: config, provider: modelProvider,
                 readAPIKey: readAPIKey, verboseLogging: verbose
             )
-        case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI:
+        case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaLlama, .alibabaCloud:
             // Mistral API supports parallel tool calls but LiteLLM metadata doesn't flag it.
             let supportsParallel = modelInfo(providerID: modelProvider.id, modelID: config.modelID)?
                 .capabilities.parallelToolCalls ?? false

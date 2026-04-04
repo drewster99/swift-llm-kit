@@ -16,11 +16,14 @@ public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
     public var maxOutputTokens: Int
     /// Total context window budget in tokens (for conversation pruning).
     public var maxContextTokens: Int
-    /// Anthropic extended thinking token budget. Only relevant for `.anthropic` providers.
+    /// Extended thinking token budget. Relevant for `.anthropic` and `.alibabaCloud` providers.
     public var thinkingBudget: Int?
     /// Use 1-hour prompt cache TTL instead of the default 5-minute ephemeral cache.
     /// Only relevant for `.anthropic` providers. Cached tokens cost 2x the base input price.
     public var extendedCacheTTL: Bool
+    /// When true, temperature is omitted from the API request, letting the model use its default.
+    /// Useful for models (e.g. Alibaba QVQ) that require their default temperature.
+    public var useDefaultTemperature: Bool
     /// Whether to request streaming responses.
     public var streaming: Bool
     /// Set during validation — `false` if the config references a missing provider/model.
@@ -38,6 +41,7 @@ public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
         maxContextTokens: Int = 128_000,
         thinkingBudget: Int? = nil,
         extendedCacheTTL: Bool = false,
+        useDefaultTemperature: Bool = false,
         streaming: Bool = true,
         isValid: Bool = true,
         validationError: String? = nil
@@ -51,6 +55,7 @@ public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
         self.maxContextTokens = maxContextTokens
         self.thinkingBudget = thinkingBudget
         self.extendedCacheTTL = extendedCacheTTL
+        self.useDefaultTemperature = useDefaultTemperature
         self.streaming = streaming
         self.isValid = isValid
         self.validationError = validationError
@@ -68,6 +73,7 @@ public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
         maxContextTokens = try container.decode(Int.self, forKey: .maxContextTokens)
         thinkingBudget = try container.decodeIfPresent(Int.self, forKey: .thinkingBudget)
         extendedCacheTTL = try container.decodeIfPresent(Bool.self, forKey: .extendedCacheTTL) ?? false
+        useDefaultTemperature = try container.decodeIfPresent(Bool.self, forKey: .useDefaultTemperature) ?? false
         streaming = try container.decode(Bool.self, forKey: .streaming)
         isValid = try container.decode(Bool.self, forKey: .isValid)
         validationError = try container.decodeIfPresent(String.self, forKey: .validationError)

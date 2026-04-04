@@ -118,10 +118,9 @@ public struct OllamaProvider: LLMProvider {
             "model": configuration.model,
             "stream": false,
             "messages": messages.map(encodeMessage),
-            "options": [
-                "temperature": configuration.temperature,
-                "num_predict": configuration.maxTokens
-            ] as [String: Any]
+            "options": configuration.useDefaultTemperature
+                ? ["num_predict": configuration.maxTokens] as [String: Any]
+                : ["temperature": configuration.temperature, "num_predict": configuration.maxTokens] as [String: Any]
         ]
 
         if !tools.isEmpty {

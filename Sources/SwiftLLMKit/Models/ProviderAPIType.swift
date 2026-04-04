@@ -11,6 +11,8 @@ public enum ProviderAPIType: String, Codable, Sendable, CaseIterable, Equatable 
     case lmStudio
     case xAI
     case zAI
+    case metaLlama
+    case alibabaCloud
 
     /// The prefix LiteLLM uses for this provider's models (e.g. "mistral/" for `mistral/mistral-large-2512`).
     /// Returns `nil` for local-only providers that have no LiteLLM pricing data.
@@ -25,6 +27,8 @@ public enum ProviderAPIType: String, Codable, Sendable, CaseIterable, Equatable 
         case .lmStudio: return nil
         case .xAI: return "xai"
         case .zAI: return nil
+        case .metaLlama: return "meta-llama"
+        case .alibabaCloud: return nil
         }
     }
 
@@ -40,6 +44,8 @@ public enum ProviderAPIType: String, Codable, Sendable, CaseIterable, Equatable 
         case .lmStudio: return "LM Studio"
         case .xAI: return "xAI (Grok)"
         case .zAI: return "z.ai"
+        case .metaLlama: return "Meta Llama"
+        case .alibabaCloud: return "Alibaba Cloud"
         }
     }
     /// The valid temperature range for this provider's API.
@@ -50,7 +56,7 @@ public enum ProviderAPIType: String, Codable, Sendable, CaseIterable, Equatable 
             return 0...1
         case .gemini:
             return 0...2
-        case .openAICompatible, .xAI, .zAI, .mistral, .huggingFace:
+        case .openAICompatible, .xAI, .zAI, .mistral, .huggingFace, .metaLlama, .alibabaCloud:
             return 0...2
         case .ollama, .lmStudio:
             // Ollama/LM Studio accept wide ranges; models may clip internally
@@ -91,6 +97,14 @@ public enum ProviderAPIType: String, Codable, Sendable, CaseIterable, Equatable 
             return [
                 EndpointPreset("z.ai (General)", "https://api.z.ai/api/paas/v4"),
                 EndpointPreset("z.ai (Coding)", "https://api.z.ai/api/coding/paas/v4"),
+            ]
+        case .metaLlama:
+            return [EndpointPreset("Meta Llama", "https://api.llama.com/v1")]
+        case .alibabaCloud:
+            return [
+                EndpointPreset("Alibaba Cloud (US)", "https://dashscope-us.aliyuncs.com/compatible-mode/v1"),
+                EndpointPreset("Alibaba Cloud (Singapore)", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"),
+                EndpointPreset("Alibaba Cloud (Beijing)", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
             ]
         }
     }

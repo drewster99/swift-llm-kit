@@ -117,10 +117,9 @@ public struct GeminiProvider: LLMProvider {
 
         var body: [String: Any] = [
             "contents": mergedContents,
-            "generationConfig": [
-                "temperature": configuration.temperature,
-                "maxOutputTokens": configuration.maxTokens
-            ] as [String: Any]
+            "generationConfig": configuration.useDefaultTemperature
+                ? ["maxOutputTokens": configuration.maxTokens] as [String: Any]
+                : ["temperature": configuration.temperature, "maxOutputTokens": configuration.maxTokens] as [String: Any]
         ]
 
         if !systemParts.isEmpty {

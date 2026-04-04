@@ -102,10 +102,19 @@ public struct OpenAICompatibleProvider: LLMProvider {
 
         var body: [String: Any] = [
             "model": configuration.model,
-            "temperature": configuration.temperature,
             "max_tokens": configuration.maxTokens,
             "messages": orderedMessages
         ]
+        if !configuration.useDefaultTemperature {
+            body["temperature"] = configuration.temperature
+        }
+
+        // Alibaba Cloud thinking support (uses different keys than Anthropic).
+        if provider.apiType == .alibabaCloud,
+           let budget = configuration.thinkingBudget, budget > 0 {
+            body["enable_thinking"] = true
+            body["thinking_budget"] = max(budget, 1024)
+        }
 
         if !tools.isEmpty {
             body["tools"] = tools.map { tool in
@@ -119,6 +128,10 @@ public struct OpenAICompatibleProvider: LLMProvider {
                 ] as [String: Any]
             }
             if parallelToolCalls {
+                body["parallel_tool_calls"] = true
+            }
+            // Alibaba Cloud defaults parallel_tool_calls to false; enable explicitly.
+            if provider.apiType == .alibabaCloud {
                 body["parallel_tool_calls"] = true
             }
         }

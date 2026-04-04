@@ -93,13 +93,16 @@ public struct AnthropicProvider: LLMProvider {
         var body: [String: Any] = [
             "model": configuration.model,
             "max_tokens": configuration.maxTokens,
-            // Anthropic requires temperature = 1 when extended thinking is enabled.
-            "temperature": thinkingEnabled ? 1.0 : configuration.temperature,
             "messages": encodedMessages,
             "cache_control": configuration.extendedCacheTTL
                 ? ["type": "ephemeral", "ttl": "1h"] as [String: Any]
                 : ["type": "ephemeral"] as [String: Any]
         ]
+
+        // Anthropic requires temperature = 1 when extended thinking is enabled.
+        if !configuration.useDefaultTemperature || thinkingEnabled {
+            body["temperature"] = thinkingEnabled ? 1.0 : configuration.temperature
+        }
 
         if let systemPrompt {
             body["system"] = systemPrompt
