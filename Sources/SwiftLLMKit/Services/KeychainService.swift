@@ -47,9 +47,10 @@ public struct KeychainService: Sendable {
             kSecUseDataProtectionKeychain as String: true
         ]
 
-        // Try to update first
+        // Try to update first — also set accessibility so existing items are migrated.
         let updateAttributes: [String: Any] = [
-            kSecValueData as String: data
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
         ]
 
         let updateStatus = SecItemUpdate(query as CFDictionary, updateAttributes as CFDictionary)
@@ -58,6 +59,7 @@ public struct KeychainService: Sendable {
             // Item doesn't exist yet — add it
             var addQuery = query
             addQuery[kSecValueData as String] = data
+            addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
             let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
             guard addStatus == errSecSuccess else {
                 throw KeychainError.saveFailed(status: addStatus)
@@ -97,6 +99,7 @@ public struct KeychainService: Sendable {
 
         if dpStatus == errSecSuccess, let data = result as? Data,
            let key = String(data: data, encoding: .utf8) {
+            migrateAccessibilityIfNeeded(query: dpQuery)
             cache.set(key, forProviderID: providerID)
             return key
         }
@@ -135,6 +138,46 @@ public struct KeychainService: Sendable {
 
         cache.set(key, forProviderID: providerID)
         return key
+    }
+
+    /// Ensures a keychain item uses `kSecAttrAccessibleAfterFirstUnlock`.
+    ///
+    /// Called after a successful read to migrate items that were saved with the
+    /// default accessibility (`WhenUnlocked`). Only writes if the current
+    /// accessibility differs from the target.
+    private func migrateAccessibilityIfNeeded(query: [String: Any]) {
+        // Build an attributes-only query to check the current accessibility.
+        var attrQuery = query
+        attrQuery.removeValue(forKey: kSecReturnData as String)
+        attrQuery[kSecReturnAttributes as String] = true
+        attrQuery[kSecMatchLimit as String] = kSecMatchLimitOne
+
+        var attrResult: AnyObject?
+        let attrStatus = SecItemCopyMatching(attrQuery as CFDictionary, &attrResult)
+
+        if attrStatus == errSecSuccess,
+           let attrs = attrResult as? [String: Any],
+           let current = attrs[kSecAttrAccessible as String] as? String,
+           current == kSecAttrAccessibleAfterFirstUnlock as String {
+            return  // Already correct — no write needed.
+        }
+
+        // Strip read-specific keys to build a match-only query for the update.
+        var matchQuery = query
+        matchQuery.removeValue(forKey: kSecReturnData as String)
+        matchQuery.removeValue(forKey: kSecMatchLimit as String)
+
+        let updateAttrs: [String: Any] = [
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
+        ]
+
+        let providerID = query[kSecAttrAccount as String] as? String ?? "unknown"
+        let status = SecItemUpdate(matchQuery as CFDictionary, updateAttrs as CFDictionary)
+        if status == errSecSuccess {
+            logger.info("Migrated keychain accessibility to AfterFirstUnlock for provider \(providerID, privacy: .public)")
+        } else {
+            logger.warning("Accessibility migration failed for provider \(providerID, privacy: .public): OSStatus \(status)")
+        }
     }
 
     /// Deletes the API key for the given provider.
