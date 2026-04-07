@@ -46,6 +46,15 @@ public final class LLMKitManager {
     private let fetchService: ModelFetchService
     private let metadataService: ModelMetadataService
 
+    // MARK: - Override Layers
+
+    /// App-bundled model metadata overrides (gap-fill priority above LiteLLM).
+    private let bundledRegistry: BundledModelMetadataRegistry
+
+    /// User-provided model metadata overrides (highest priority, force-replaces).
+    /// Keyed by `"providerID/modelID"`.
+    private var userOverrides: [String: ModelMetadataOverride] = [:]
+
     /// Tracks whether each dataset loaded successfully. Prevents saving empty data
     /// over a file that failed to decode (e.g. after a schema change).
     private var providersLoadedOK = false
@@ -73,6 +82,16 @@ public final class LLMKitManager {
             storageDirectory: storage.baseDirectory,
             userDefaultsSuiteName: suiteName
         )
+        self.bundledRegistry = BundledModelMetadataRegistry.load()
+    }
+
+    /// Updates user-provided model metadata overrides at runtime.
+    ///
+    /// Overrides are keyed by `"providerID/modelID"` and force-replace all
+    /// lower-priority metadata sources. Call this when the user edits overrides
+    /// in the UI, then trigger a refresh to re-enrich the model catalog.
+    public func setUserOverrides(_ overrides: [String: ModelMetadataOverride]) {
+        self.userOverrides = overrides
     }
 
     // MARK: - Persistence
@@ -281,26 +300,53 @@ public final class LLMKitManager {
                     apiKey: apiKey
                 )
 
-                // 3. Enrich with LiteLLM metadata
+                // 3. Enrich with layered metadata overrides.
+                //    Provider API is the base. Gap-fillers run highest-priority first so
+                //    they claim nil fields before lower-priority sources can.
+                //    Priority: user (force-replace) > provider API (base) > bundled (gap-fill) > LiteLLM (gap-fill)
                 for i in providerModels.indices {
-                    if let litellm = await metadataService.metadata(for: providerModels[i].modelID, providerType: provider.apiType) {
-                        // Provider data is authoritative; LiteLLM fills gaps
-                        if providerModels[i].maxInputTokens == nil {
-                            providerModels[i].maxInputTokens = litellm.maxInputTokens
-                        }
-                        if providerModels[i].maxOutputTokens == nil {
-                            providerModels[i].maxOutputTokens = litellm.maxOutputTokens
-                        }
-                        if let cost = litellm.inputCostPerToken {
-                            providerModels[i].inputCostPerMillionTokens = cost * 1_000_000
-                        }
-                        if let cost = litellm.outputCostPerToken {
-                            providerModels[i].outputCostPerMillionTokens = cost * 1_000_000
-                        }
-                        if !litellm.supportsChatCompletions {
-                            providerModels[i].supportsChatCompletions = false
-                        }
-                        litellm.mergeCapabilities(into: &providerModels[i].capabilities)
+                    let modelID = providerModels[i].modelID
+
+                    // Layer 1: App-bundled (gap-fill, higher priority than LiteLLM)
+                    if let bundled = bundledRegistry.override(providerAPIType: provider.apiType.rawValue, modelID: modelID) {
+                        bundled.apply(to: &providerModels[i], forceReplace: false)
+                    }
+
+                    // Layer 2: LiteLLM (gap-fill, fills anything still nil after bundled)
+                    if let litellm = await metadataService.metadata(for: modelID, providerType: provider.apiType) {
+                        let litellmOverride = ModelMetadataOverride(
+                            maxInputTokens: litellm.maxInputTokens,
+                            maxOutputTokens: litellm.maxOutputTokens,
+                            capabilities: ModelCapabilitiesOverride(
+                                toolUse: litellm.supportsToolUse ? true : nil,
+                                vision: litellm.supportsVision ? true : nil,
+                                reasoning: litellm.supportsReasoning ? true : nil,
+                                promptCaching: litellm.supportsPromptCaching ? true : nil,
+                                computerUse: litellm.supportsComputerUse ? true : nil,
+                                audioInput: litellm.supportsAudioInput ? true : nil,
+                                audioOutput: litellm.supportsAudioOutput ? true : nil,
+                                videoInput: litellm.supportsVideoInput ? true : nil,
+                                responseSchema: litellm.supportsResponseSchema ? true : nil,
+                                parallelToolCalls: litellm.supportsParallelToolCalls ? true : nil,
+                                pdfInput: litellm.supportsPdfInput ? true : nil,
+                                webSearch: litellm.supportsWebSearch ? true : nil,
+                                systemMessages: litellm.supportsSystemMessages ? true : nil,
+                                assistantPrefill: litellm.supportsAssistantPrefill ? true : nil,
+                                toolChoice: litellm.supportsToolChoice ? true : nil
+                            ),
+                            pricing: litellm.pricing,
+                            supportsChatCompletions: litellm.supportsChatCompletions ? nil : false
+                        )
+                        litellmOverride.apply(to: &providerModels[i], forceReplace: false)
+                    }
+
+                    // Layer 3: Provider API data is already the base (providerModels[i]).
+                    // Gap-fillers above never replace provider-reported values.
+
+                    // Layer 4: User overrides (force-replace — user always wins)
+                    let userKey = "\(provider.id)/\(modelID)"
+                    if let userOverride = userOverrides[userKey] {
+                        userOverride.apply(to: &providerModels[i], forceReplace: true)
                     }
                 }
 

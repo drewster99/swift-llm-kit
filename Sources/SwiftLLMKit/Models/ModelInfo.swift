@@ -1,7 +1,7 @@
 import Foundation
 
 /// Metadata about a specific model available from a provider.
-public struct ModelInfo: Codable, Identifiable, Sendable, Equatable {
+public struct ModelInfo: Identifiable, Sendable, Equatable {
     /// Composite identifier: `providerID/modelID`.
     public var id: String { "\(providerID)/\(modelID)" }
 
@@ -23,12 +23,33 @@ public struct ModelInfo: Codable, Identifiable, Sendable, Equatable {
     public var sizeLabel: String?
     /// Quantization level, e.g. "Q4_K_M" (Ollama).
     public var quantizationLabel: String?
-    /// Input cost in USD per million tokens.
-    public var inputCostPerMillionTokens: Double?
-    /// Output cost in USD per million tokens.
-    public var outputCostPerMillionTokens: Double?
+    /// Rich pricing data for this model. Supports tiered pricing, cache
+    /// pricing, and service tier variants.
+    public var pricing: ModelPricing?
     /// Whether this model supports `/v1/chat/completions`. Defaults to `true` unless LiteLLM says otherwise.
     public var supportsChatCompletions: Bool
+
+    // MARK: - Backward-compatible pricing accessors
+
+    /// Input cost in USD per million tokens (base tier, uncached).
+    /// Backed by ``pricing``. Setting this creates a base pricing tier if needed.
+    public var inputCostPerMillionTokens: Double? {
+        get { pricing?.base.input.map { $0 * 1_000_000 } }
+        set {
+            if pricing == nil && newValue != nil { pricing = ModelPricing() }
+            pricing?.base.input = newValue.map { $0 / 1_000_000 }
+        }
+    }
+
+    /// Output cost in USD per million tokens (base tier).
+    /// Backed by ``pricing``. Setting this creates a base pricing tier if needed.
+    public var outputCostPerMillionTokens: Double? {
+        get { pricing?.base.output.map { $0 * 1_000_000 } }
+        set {
+            if pricing == nil && newValue != nil { pricing = ModelPricing() }
+            pricing?.base.output = newValue.map { $0 / 1_000_000 }
+        }
+    }
 
     public init(
         providerID: String,
@@ -40,8 +61,7 @@ public struct ModelInfo: Codable, Identifiable, Sendable, Equatable {
         capabilities: ModelCapabilities = ModelCapabilities(),
         sizeLabel: String? = nil,
         quantizationLabel: String? = nil,
-        inputCostPerMillionTokens: Double? = nil,
-        outputCostPerMillionTokens: Double? = nil,
+        pricing: ModelPricing? = nil,
         supportsChatCompletions: Bool = true
     ) {
         self.providerID = providerID
@@ -53,8 +73,7 @@ public struct ModelInfo: Codable, Identifiable, Sendable, Equatable {
         self.capabilities = capabilities
         self.sizeLabel = sizeLabel
         self.quantizationLabel = quantizationLabel
-        self.inputCostPerMillionTokens = inputCostPerMillionTokens
-        self.outputCostPerMillionTokens = outputCostPerMillionTokens
+        self.pricing = pricing
         self.supportsChatCompletions = supportsChatCompletions
     }
 
@@ -63,5 +82,64 @@ public struct ModelInfo: Codable, Identifiable, Sendable, Equatable {
         guard let createdAt else { return false }
         let cutoff = Calendar.current.date(byAdding: .day, value: -90, to: Date()) ?? Date.distantPast
         return createdAt > cutoff
+    }
+}
+
+// MARK: - Codable (backward-compatible)
+
+extension ModelInfo: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case providerID, modelID, displayName, createdAt
+        case maxInputTokens, maxOutputTokens, capabilities
+        case sizeLabel, quantizationLabel, pricing, supportsChatCompletions
+        // Legacy keys for reading old persisted data
+        case inputCostPerMillionTokens, outputCostPerMillionTokens
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        providerID = try container.decode(String.self, forKey: .providerID)
+        modelID = try container.decode(String.self, forKey: .modelID)
+        let name = try container.decodeIfPresent(String.self, forKey: .displayName) ?? ""
+        displayName = name.isEmpty ? modelID : name
+        createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt)
+        maxInputTokens = try container.decodeIfPresent(Int.self, forKey: .maxInputTokens)
+        maxOutputTokens = try container.decodeIfPresent(Int.self, forKey: .maxOutputTokens)
+        capabilities = try container.decodeIfPresent(ModelCapabilities.self, forKey: .capabilities) ?? ModelCapabilities()
+        sizeLabel = try container.decodeIfPresent(String.self, forKey: .sizeLabel)
+        quantizationLabel = try container.decodeIfPresent(String.self, forKey: .quantizationLabel)
+        supportsChatCompletions = try container.decodeIfPresent(Bool.self, forKey: .supportsChatCompletions) ?? true
+
+        // Read new pricing field, or fall back to legacy flat cost fields.
+        if let p = try container.decodeIfPresent(ModelPricing.self, forKey: .pricing) {
+            pricing = p
+        } else {
+            let legacyInput = try container.decodeIfPresent(Double.self, forKey: .inputCostPerMillionTokens)
+            let legacyOutput = try container.decodeIfPresent(Double.self, forKey: .outputCostPerMillionTokens)
+            if legacyInput != nil || legacyOutput != nil {
+                pricing = ModelPricing(base: PricingTier(
+                    input: legacyInput.map { $0 / 1_000_000 },
+                    output: legacyOutput.map { $0 / 1_000_000 }
+                ))
+            } else {
+                pricing = nil
+            }
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(providerID, forKey: .providerID)
+        try container.encode(modelID, forKey: .modelID)
+        try container.encode(displayName, forKey: .displayName)
+        try container.encodeIfPresent(createdAt, forKey: .createdAt)
+        try container.encodeIfPresent(maxInputTokens, forKey: .maxInputTokens)
+        try container.encodeIfPresent(maxOutputTokens, forKey: .maxOutputTokens)
+        try container.encode(capabilities, forKey: .capabilities)
+        try container.encodeIfPresent(sizeLabel, forKey: .sizeLabel)
+        try container.encodeIfPresent(quantizationLabel, forKey: .quantizationLabel)
+        try container.encodeIfPresent(pricing, forKey: .pricing)
+        try container.encode(supportsChatCompletions, forKey: .supportsChatCompletions)
+        // Legacy fields intentionally not written — new format only.
     }
 }

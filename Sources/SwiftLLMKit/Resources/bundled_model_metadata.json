@@ -1,0 +1,5 @@
+{
+    "version": 1,
+    "description": "App-bundled model metadata overrides. These fill gaps where provider APIs and LiteLLM data may be stale or incomplete. Keyed by providerAPIType/modelID.",
+    "entries": {}
+}

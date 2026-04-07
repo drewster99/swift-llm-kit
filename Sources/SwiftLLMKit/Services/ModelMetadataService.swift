@@ -234,8 +234,7 @@ public actor ModelMetadataService {
                 let entry = LiteLLMEntry(
                     maxInputTokens: modelDict["max_input_tokens"] as? Int,
                     maxOutputTokens: modelDict["max_output_tokens"] as? Int,
-                    inputCostPerToken: modelDict["input_cost_per_token"] as? Double,
-                    outputCostPerToken: modelDict["output_cost_per_token"] as? Double,
+                    pricing: Self.parsePricing(from: modelDict),
                     supportsToolUse: modelDict["supports_function_calling"] as? Bool ?? false,
                     supportsVision: modelDict["supports_vision"] as? Bool ?? false,
                     supportsReasoning: modelDict["supports_reasoning"] as? Bool ?? false,
@@ -246,13 +245,17 @@ public actor ModelMetadataService {
                     supportsVideoInput: modelDict["supports_video_input"] as? Bool ?? false,
                     supportsResponseSchema: modelDict["supports_response_schema"] as? Bool ?? false,
                     supportsParallelToolCalls: modelDict["supports_parallel_tool_calls"] as? Bool ?? false,
+                    supportsPdfInput: modelDict["supports_pdf_input"] as? Bool ?? false,
+                    supportsWebSearch: modelDict["supports_web_search"] as? Bool ?? false,
+                    supportsSystemMessages: modelDict["supports_system_messages"] as? Bool ?? false,
+                    supportsAssistantPrefill: modelDict["supports_assistant_prefill"] as? Bool ?? false,
+                    supportsToolChoice: modelDict["supports_tool_choice"] as? Bool ?? false,
                     mode: modelDict["mode"] as? String,
                     supportedEndpoints: modelDict["supported_endpoints"] as? [String]
                 )
 
                 index[key] = entry
                 let strippedKey = Self.stripProviderPrefix(key)
-                // Only set in stripped index if different from the full key
                 if strippedKey != key {
                     stripped[strippedKey] = entry
                 }
@@ -263,6 +266,109 @@ public actor ModelMetadataService {
         } catch {
             logger.error("Failed to parse LiteLLM JSON: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    // MARK: - Pricing Parser
+
+    /// Parses rich pricing data from a LiteLLM model dictionary.
+    ///
+    /// Handles base rates, token-count threshold tiers (e.g. `_above_200k_tokens`),
+    /// service tier variants (`_priority`, `_flex`, `_batches`), and extended cache
+    /// TTL rates (`_above_1hr`).
+    private static func parsePricing(from dict: [String: Any]) -> ModelPricing? {
+        let baseInput = dict["input_cost_per_token"] as? Double
+        let baseOutput = dict["output_cost_per_token"] as? Double
+        let baseCacheRead = dict["cache_read_input_token_cost"] as? Double
+        let baseCacheWrite = dict["cache_creation_input_token_cost"] as? Double
+
+        guard baseInput != nil || baseOutput != nil else { return nil }
+
+        let base = PricingTier(
+            input: baseInput,
+            output: baseOutput,
+            cacheRead: baseCacheRead,
+            cacheWrite: baseCacheWrite
+        )
+
+        // Scan for token threshold tiers (e.g. "input_cost_per_token_above_200k_tokens").
+        var thresholdMap: [Int: PricingTier] = [:]
+        for (key, value) in dict {
+            guard let cost = value as? Double else { continue }
+            guard let threshold = Self.parseTokenThreshold(from: key) else { continue }
+            // Skip service-tier and time-tier combined keys
+            if key.hasSuffix("_priority") || key.hasSuffix("_flex") || key.hasSuffix("_batches") { continue }
+            if key.contains("_above_1hr") { continue }
+
+            var tier = thresholdMap[threshold] ?? PricingTier()
+            if key.contains("input_cost_per_token") { tier.input = cost }
+            else if key.contains("output_cost_per_token") { tier.output = cost }
+            else if key.contains("cache_read_input_token_cost") { tier.cacheRead = cost }
+            else if key.contains("cache_creation_input_token_cost") { tier.cacheWrite = cost }
+            thresholdMap[threshold] = tier
+        }
+        let tokenThresholdTiers = thresholdMap.map { TokenThresholdTier(tokenThreshold: $0.key, rates: $0.value) }.sorted()
+
+        // Scan for service tier variants (_priority, _flex, _batches).
+        var serviceTiers: [String: PricingTier] = [:]
+        let serviceSuffixes = ["_priority", "_flex", "_batches"]
+        for (key, value) in dict {
+            guard let cost = value as? Double else { continue }
+            for suffix in serviceSuffixes {
+                guard key.hasSuffix(suffix) else { continue }
+                // Skip combined threshold+service keys
+                if Self.parseTokenThreshold(from: key) != nil { continue }
+                let tierName = String(suffix.dropFirst()) // remove leading underscore
+                var tier = serviceTiers[tierName] ?? PricingTier()
+                if key.contains("input_cost_per_token") { tier.input = cost }
+                else if key.contains("output_cost_per_token") { tier.output = cost }
+                else if key.contains("cache_read_input_token_cost") { tier.cacheRead = cost }
+                else if key.contains("cache_creation_input_token_cost") { tier.cacheWrite = cost }
+                serviceTiers[tierName] = tier
+            }
+        }
+
+        // Extended cache TTL (Anthropic's _above_1hr).
+        var extendedCacheTier: CacheWriteOverride?
+        if let extCacheWrite = dict["cache_creation_input_token_cost_above_1hr"] as? Double {
+            var thresholdOverrides: [TokenThresholdCacheWrite] = []
+            // Check for combined 1hr + threshold keys (e.g. "cache_creation_input_token_cost_above_1hr_above_200k_tokens")
+            for (key, value) in dict {
+                guard key.contains("cache_creation_input_token_cost_above_1hr_above_"),
+                      let cost = value as? Double,
+                      let threshold = Self.parseTokenThreshold(from: key) else { continue }
+                thresholdOverrides.append(TokenThresholdCacheWrite(tokenThreshold: threshold, cacheWrite: cost))
+            }
+            thresholdOverrides.sort { $0.tokenThreshold < $1.tokenThreshold }
+            extendedCacheTier = CacheWriteOverride(cacheWrite: extCacheWrite, thresholdOverrides: thresholdOverrides)
+        }
+
+        return ModelPricing(
+            base: base,
+            tokenThresholdTiers: tokenThresholdTiers,
+            serviceTiers: serviceTiers,
+            extendedCacheTier: extendedCacheTier
+        )
+    }
+
+    /// Extracts a token threshold from a LiteLLM key like "input_cost_per_token_above_200k_tokens".
+    /// Returns the threshold in tokens (e.g. 200_000 for "200k"), or `nil` if the key
+    /// doesn't contain a threshold pattern.
+    private static func parseTokenThreshold(from key: String) -> Int? {
+        // Match patterns like "_above_128k_tokens", "_above_200k_tokens", "_above_272k_tokens"
+        guard let range = key.range(of: #"_above_(\d+)k?_tokens"#, options: .regularExpression) else {
+            return nil
+        }
+        let match = key[range]
+        // Extract the numeric part
+        guard let digitRange = match.range(of: #"\d+"#, options: .regularExpression) else {
+            return nil
+        }
+        guard let number = Int(match[digitRange]) else { return nil }
+        // "k" suffix means thousands
+        if match.contains("k_tokens") {
+            return number * 1000
+        }
+        return number
     }
 
     private func loadCachedHeaders() -> [String: String] {
@@ -311,10 +417,8 @@ public actor ModelMetadataService {
 public struct LiteLLMEntry: Sendable {
     public let maxInputTokens: Int?
     public let maxOutputTokens: Int?
-    /// Cost per single token for input, in USD.
-    public let inputCostPerToken: Double?
-    /// Cost per single token for output, in USD.
-    public let outputCostPerToken: Double?
+    /// Rich pricing data parsed from all cost-related fields.
+    public let pricing: ModelPricing?
     public let supportsToolUse: Bool
     public let supportsVision: Bool
     public let supportsReasoning: Bool
@@ -325,6 +429,11 @@ public struct LiteLLMEntry: Sendable {
     public let supportsVideoInput: Bool
     public let supportsResponseSchema: Bool
     public let supportsParallelToolCalls: Bool
+    public let supportsPdfInput: Bool
+    public let supportsWebSearch: Bool
+    public let supportsSystemMessages: Bool
+    public let supportsAssistantPrefill: Bool
+    public let supportsToolChoice: Bool
     public let mode: String?
     /// API endpoints this model supports (e.g. `["/v1/chat/completions"]`, `["/v1/realtime"]`).
     public let supportedEndpoints: [String]?
@@ -335,7 +444,7 @@ public struct LiteLLMEntry: Sendable {
         return endpoints.contains("/v1/chat/completions")
     }
 
-    /// Merges this LiteLLM entry's capabilities into an existing `ModelCapabilities`,
+    /// Merges this LiteLLM entry's capabilities into an existing ``ModelCapabilities``,
     /// filling in only fields that are currently `false`.
     public func mergeCapabilities(into capabilities: inout ModelCapabilities) {
         if supportsToolUse { capabilities.toolUse = true }
@@ -348,6 +457,11 @@ public struct LiteLLMEntry: Sendable {
         if supportsVideoInput { capabilities.videoInput = true }
         if supportsResponseSchema { capabilities.responseSchema = true }
         if supportsParallelToolCalls { capabilities.parallelToolCalls = true }
+        if supportsPdfInput { capabilities.pdfInput = true }
+        if supportsWebSearch { capabilities.webSearch = true }
+        if supportsSystemMessages { capabilities.systemMessages = true }
+        if supportsAssistantPrefill { capabilities.assistantPrefill = true }
+        if supportsToolChoice { capabilities.toolChoice = true }
     }
 }
 

@@ -13,7 +13,10 @@ let package = Package(
     targets: [
         .target(
             name: "SwiftLLMKit",
-            path: "Sources/SwiftLLMKit"
+            path: "Sources/SwiftLLMKit",
+            resources: [
+                .process("Resources")
+            ]
         ),
         .testTarget(
             name: "SwiftLLMKitTests",
