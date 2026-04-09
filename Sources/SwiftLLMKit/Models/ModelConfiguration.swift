@@ -2,8 +2,10 @@ import Foundation
 
 /// A user-defined configuration pairing a provider + model with inference settings.
 public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
-    /// Unique identifier for this configuration.
-    public let id: UUID
+    /// Unique identifier for this configuration. Mutable so callers can clone an
+    /// existing configuration via `var copy = original; copy.id = UUID()` without
+    /// having to enumerate every other field by hand.
+    public var id: UUID
     /// User-defined name, e.g. "Claude Heavy", "Local Fast".
     public var name: String
     /// References `ModelProvider.id`.
