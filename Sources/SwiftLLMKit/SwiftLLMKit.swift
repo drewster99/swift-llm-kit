@@ -38,6 +38,12 @@ public final class LLMKitManager {
     public var verboseLogging: Bool = false
     /// Errors from the most recent model refresh, keyed by provider name.
     public private(set) var refreshErrors: [String: String] = [:]
+    /// Incremented every time any provider's API key is written via `addProvider`,
+    /// `updateProvider`, or `setBuiltInProviderAPIKey`. Observable so SwiftUI views
+    /// that read from `apiKey(for:)` (which goes through Keychain and is therefore
+    /// not reactive by itself) can key off this counter to re-render when a key
+    /// changes externally (e.g. undo/redo from another window).
+    public private(set) var apiKeyChangeCounter: Int = 0
 
     // MARK: - Services
 
@@ -166,6 +172,7 @@ public final class LLMKitManager {
     public func addProvider(_ provider: ModelProvider, apiKey: String) throws {
         if !apiKey.isEmpty {
             try keychain.save(apiKey: apiKey, forProviderID: provider.id)
+            apiKeyChangeCounter &+= 1
         }
         providers.append(provider)
         saveProviders()
@@ -187,6 +194,7 @@ public final class LLMKitManager {
             } else {
                 try keychain.save(apiKey: apiKey, forProviderID: provider.id)
             }
+            apiKeyChangeCounter &+= 1
         }
 
         // Built-in providers refuse mutation of name/apiType/endpoint — clamp to the preset.
@@ -217,6 +225,7 @@ public final class LLMKitManager {
         } else {
             try keychain.save(apiKey: apiKey, forProviderID: id)
         }
+        apiKeyChangeCounter &+= 1
     }
 
     /// Deletes a provider. Throws if any configuration references it, or if it is a
