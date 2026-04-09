@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "builtin.anthropic",
+      "displayName": "Anthropic",
+      "apiType": "anthropic",
+      "endpoint": "https://api.anthropic.com",
+      "popular": true
+    },
+    {
+      "id": "builtin.gemini",
+      "displayName": "Gemini",
+      "apiType": "gemini",
+      "endpoint": "https://generativelanguage.googleapis.com/v1beta",
+      "popular": true
+    },
+    {
+      "id": "builtin.openai",
+      "displayName": "OpenAI",
+      "apiType": "openAICompatible",
+      "endpoint": "https://api.openai.com/v1",
+      "popular": true
+    },
+    {
+      "id": "builtin.xai",
+      "displayName": "Grok",
+      "apiType": "xAI",
+      "endpoint": "https://api.x.ai/v1",
+      "popular": true
+    },
+    {
+      "id": "builtin.alibabacloud",
+      "displayName": "Alibaba Cloud",
+      "apiType": "alibabaCloud",
+      "endpoint": "https://dashscope-us.aliyuncs.com/compatible-mode/v1",
+      "popular": false
+    },
+    {
+      "id": "builtin.huggingface",
+      "displayName": "Hugging Face",
+      "apiType": "huggingFace",
+      "endpoint": "https://router.huggingface.co/v1",
+      "popular": false
+    },
+    {
+      "id": "builtin.lmstudio",
+      "displayName": "LM Studio",
+      "apiType": "lmStudio",
+      "endpoint": "http://localhost:1234/v1",
+      "popular": false
+    },
+    {
+      "id": "builtin.metallama",
+      "displayName": "Meta Llama",
+      "apiType": "metaLlama",
+      "endpoint": "https://api.llama.com/v1",
+      "popular": false
+    },
+    {
+      "id": "builtin.mistral",
+      "displayName": "Mistral",
+      "apiType": "mistral",
+      "endpoint": "https://api.mistral.ai/v1",
+      "popular": false
+    },
+    {
+      "id": "builtin.ollama",
+      "displayName": "Ollama (local)",
+      "apiType": "ollama",
+      "endpoint": "http://localhost:11434/api",
+      "popular": false
+    },
+    {
+      "id": "builtin.ollama-cloud",
+      "displayName": "Ollama (cloud)",
+      "apiType": "ollama",
+      "endpoint": "https://ollama.com/api",
+      "popular": false
+    },
+    {
+      "id": "builtin.zai",
+      "displayName": "z.ai",
+      "apiType": "zAI",
+      "endpoint": "https://api.z.ai/api/paas/v4",
+      "popular": false
+    }
+  ]
+}
