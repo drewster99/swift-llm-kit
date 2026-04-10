@@ -315,14 +315,42 @@ public final class LLMKitManager {
 
     // MARK: - Refresh
 
-    /// Refreshes model lists if the YYYYMMDD gate allows.
+    /// Refreshes model lists if the YYYYMMDD gate allows, and additionally fills in
+    /// any "straggler" providers whose cache slice is empty but which have a usable
+    /// credential (or are no-auth local providers).
+    ///
+    /// Without the straggler pass, providers that failed a prior fetch — or that were
+    /// added in a later app version after the catalog was first populated — would stay
+    /// empty forever, because the YYYYMMDD metadata gate skips the full refresh as soon
+    /// as *any* provider has cached models.
     public func refreshIfNeeded() async {
         let needsMetadataRefresh = await metadataService.needsRefresh()
-        if !needsMetadataRefresh && !models.isEmpty {
-            // Already loaded and up to date
+
+        if needsMetadataRefresh || models.isEmpty {
+            await performRefresh()
             return
         }
-        await performRefresh()
+
+        // Catalog looks fresh overall; fill in per-provider gaps for providers we
+        // could plausibly refresh (saved key or no-auth local type).
+        let stragglers = providers.filter { provider in
+            models.contains(where: { $0.providerID == provider.id }) == false
+                && providerIsRefreshable(provider)
+        }
+        guard !stragglers.isEmpty else { return }
+
+        isRefreshing = true
+        defer { isRefreshing = false }
+
+        // Ensure metadata is at least loaded before enrichment. `forceRefresh` goes
+        // through an ETag-gated fetch, so this is cheap when already current.
+        await metadataService.forceRefresh()
+
+        for provider in stragglers {
+            await refreshProviderSliceLocked(provider)
+        }
+        saveModelCatalog()
+        validateConfigurations()
     }
 
     /// Always performs a full refresh of every provider's models.
@@ -350,22 +378,49 @@ public final class LLMKitManager {
         // Refresh metadata first so enrichment uses the latest LiteLLM data.
         await metadataService.forceRefresh()
 
+        await refreshProviderSliceLocked(provider)
+        saveModelCatalog()
+        validateConfigurations()
+    }
+
+    /// Fetches one provider's models and replaces just that provider's slice in the
+    /// cached `models` array, updating `refreshErrors[provider.name]` accordingly.
+    ///
+    /// Does NOT touch `isRefreshing`, refresh LiteLLM metadata, persist the catalog to
+    /// disk, or re-validate configurations — callers are expected to bracket a sequence
+    /// of these with those operations so that batched refreshes only pay those costs
+    /// once.
+    private func refreshProviderSliceLocked(_ provider: ModelProvider) async {
         let result = await fetchAndEnrich(provider: provider)
 
-        // Replace just this provider's slice of the catalog.
         var combined = models.filter { $0.providerID != provider.id }
         combined.append(contentsOf: result.models)
         models = combined
-        saveModelCatalog()
 
-        // Update refreshErrors only for this provider so other providers' errors persist.
         if let error = result.error {
             refreshErrors[provider.name] = error
         } else {
             refreshErrors.removeValue(forKey: provider.name)
         }
+    }
 
-        validateConfigurations()
+    /// Whether it's worth automatically attempting a refresh for this provider:
+    /// either a non-empty API key is in the Keychain, or the provider's API type is
+    /// one that works without authentication (local servers).
+    ///
+    /// Used by `refreshIfNeeded` to avoid hammering cloud providers with guaranteed
+    /// 401s every launch when the user hasn't configured a key yet.
+    private func providerIsRefreshable(_ provider: ModelProvider) -> Bool {
+        if let key = keychain.apiKey(forProviderID: provider.id), !key.isEmpty {
+            return true
+        }
+        switch provider.apiType {
+        case .ollama, .lmStudio:
+            return true
+        case .anthropic, .openAICompatible, .mistral, .gemini, .huggingFace,
+             .xAI, .zAI, .metaLlama, .alibabaCloud, .openRouter:
+            return false
+        }
     }
 
     private func performRefresh() async {
