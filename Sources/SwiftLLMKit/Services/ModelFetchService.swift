@@ -28,14 +28,13 @@ public struct ModelFetchService: Sendable {
         case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaLlama, .alibabaCloud, .openRouter:
             modelsURL = provider.endpoint.appendingPathComponent("models")
         case .gemini:
+            // API key goes in the `x-goog-api-key` header below (not the query
+            // string) so it doesn't appear in verbose request logs.
             let base = provider.endpoint.appendingPathComponent("models")
             if var components = URLComponents(url: base, resolvingAgainstBaseURL: false) {
                 var items = components.queryItems ?? []
                 // Default page size is 50; request max to avoid missing models
                 items.append(URLQueryItem(name: "pageSize", value: "1000"))
-                if let apiKey, !apiKey.isEmpty {
-                    items.append(URLQueryItem(name: "key", value: apiKey))
-                }
                 components.queryItems = items
                 modelsURL = components.url ?? base
             } else {
@@ -65,8 +64,9 @@ public struct ModelFetchService: Sendable {
                 request.setValue("en-US,en", forHTTPHeaderField: "Accept-Language")
             }
         case .gemini:
-            // Gemini uses API key as query parameter, already in the URL
-            break
+            if let apiKey, !apiKey.isEmpty {
+                request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
+            }
         }
 
         logger.debug("Model fetch: GET \(modelsURL.absoluteString, privacy: .public)")

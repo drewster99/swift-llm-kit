@@ -11,7 +11,8 @@ private let logger = Logger(subsystem: "SwiftLLMKit", category: "Gemini")
 /// - System instructions are a separate top-level field
 /// - Tool definitions use `functionDeclarations` instead of OpenAI's `functions` wrapper
 /// - Tool calls are `functionCall` parts; results are `functionResponse` parts
-/// - Auth via `key` query parameter or `Authorization: Bearer` header
+/// - Auth via `x-goog-api-key` header so the key never appears in the URL
+///   (request logs capture URLs but not headers, so this keeps keys out of logs)
 public struct GeminiProvider: LLMProvider {
     private let configuration: ModelConfiguration
     private let provider: ModelProvider
@@ -44,27 +45,13 @@ public struct GeminiProvider: LLMProvider {
         let url = base
             .appendingPathComponent("models/\(configuration.model):generateContent")
 
-        // Append API key as query parameter if provided
-        let apiKey = readAPIKey()
-        let finalURL: URL
-        if !apiKey.isEmpty {
-            guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
-                throw LLMProviderError.invalidResponse
-            }
-            var queryItems = components.queryItems ?? []
-            queryItems.append(URLQueryItem(name: "key", value: apiKey))
-            components.queryItems = queryItems
-            guard let built = components.url else {
-                throw LLMProviderError.invalidResponse
-            }
-            finalURL = built
-        } else {
-            finalURL = url
-        }
-
-        var request = URLRequest(url: finalURL)
+        var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let apiKey = readAPIKey()
+        if !apiKey.isEmpty {
+            request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
+        }
 
         let body = try buildRequestBody(messages: messages, tools: tools)
         let requestData = try JSONSerialization.data(withJSONObject: body)
@@ -72,7 +59,7 @@ public struct GeminiProvider: LLMProvider {
 
         logger.debug("Request: POST \(url.absoluteString, privacy: .public) model=\(configuration.model, privacy: .public)")
         if verboseLogging {
-            LLMRequestLogger.logRequest(label: "Gemini", url: finalURL, model: configuration.model, body: body, rawData: requestData)
+            LLMRequestLogger.logRequest(label: "Gemini", url: url, model: configuration.model, body: body, rawData: requestData)
         }
 
         let (data, response) = try await session.data(for: request)
