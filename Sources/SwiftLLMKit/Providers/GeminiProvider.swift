@@ -277,7 +277,11 @@ public struct GeminiProvider: LLMProvider {
         if let usageMeta = json["usageMetadata"] as? [String: Any] {
             let input = usageMeta["promptTokenCount"] as? Int ?? 0
             let output = usageMeta["candidatesTokenCount"] as? Int ?? 0
-            tokenUsage = TokenUsage(inputTokens: input, outputTokens: output)
+            let cacheRead = usageMeta["cachedContentTokenCount"] as? Int ?? 0
+            tokenUsage = TokenUsage(inputTokens: input, outputTokens: output, cacheReadTokens: cacheRead)
+            if cacheRead > 0 {
+                logger.info("Cache: read=\(cacheRead) uncached=\(input - cacheRead)")
+            }
         }
 
         return LLMResponse(

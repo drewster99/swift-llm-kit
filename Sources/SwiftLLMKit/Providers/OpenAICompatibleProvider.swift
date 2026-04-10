@@ -264,7 +264,14 @@ public struct OpenAICompatibleProvider: LLMProvider {
         if let usage = json["usage"] as? [String: Any] {
             let input = usage["prompt_tokens"] as? Int ?? 0
             let output = usage["completion_tokens"] as? Int ?? 0
-            tokenUsage = TokenUsage(inputTokens: input, outputTokens: output)
+            var cacheRead = 0
+            if let details = usage["prompt_tokens_details"] as? [String: Any] {
+                cacheRead = details["cached_tokens"] as? Int ?? 0
+            }
+            tokenUsage = TokenUsage(inputTokens: input, outputTokens: output, cacheReadTokens: cacheRead)
+            if cacheRead > 0 {
+                logger.info("Cache: read=\(cacheRead) uncached=\(input - cacheRead)")
+            }
         }
 
         return LLMResponse(
