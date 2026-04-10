@@ -25,7 +25,7 @@ public struct ModelFetchService: Sendable {
             modelsURL = provider.endpoint.appendingPathComponent("tags")
         case .anthropic:
             modelsURL = provider.endpoint.strippingAnthropicV1().appendingPathComponent("v1/models")
-        case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaLlama, .alibabaCloud:
+        case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaLlama, .alibabaCloud, .openRouter:
             modelsURL = provider.endpoint.appendingPathComponent("models")
         case .gemini:
             let base = provider.endpoint.appendingPathComponent("models")
@@ -57,7 +57,7 @@ public struct ModelFetchService: Sendable {
                 request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
             }
             request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaLlama, .alibabaCloud:
+        case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaLlama, .alibabaCloud, .openRouter:
             if let apiKey, !apiKey.isEmpty {
                 request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
             }
@@ -96,7 +96,7 @@ public struct ModelFetchService: Sendable {
             decoded = try decodeOllamaModels(from: data, providerID: provider.id)
         case .anthropic:
             decoded = try decodeAnthropicModels(from: data, providerID: provider.id)
-        case .openAICompatible, .lmStudio, .huggingFace, .xAI, .zAI, .metaLlama, .alibabaCloud:
+        case .openAICompatible, .lmStudio, .huggingFace, .xAI, .zAI, .metaLlama, .alibabaCloud, .openRouter:
             decoded = try decodeOpenAIModels(from: data, providerID: provider.id)
         case .mistral:
             decoded = try decodeMistralModels(from: data, providerID: provider.id)

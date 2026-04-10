@@ -13,6 +13,7 @@ public enum ProviderAPIType: String, Codable, Sendable, CaseIterable, Equatable 
     case zAI
     case metaLlama
     case alibabaCloud
+    case openRouter
 
     /// The prefix LiteLLM uses for this provider's models (e.g. "mistral/" for `mistral/mistral-large-2512`).
     /// Returns `nil` for local-only providers that have no LiteLLM pricing data.
@@ -29,6 +30,7 @@ public enum ProviderAPIType: String, Codable, Sendable, CaseIterable, Equatable 
         case .zAI: return nil
         case .metaLlama: return "meta-llama"
         case .alibabaCloud: return nil
+        case .openRouter: return "openrouter"
         }
     }
 
@@ -46,6 +48,7 @@ public enum ProviderAPIType: String, Codable, Sendable, CaseIterable, Equatable 
         case .zAI: return "z.ai"
         case .metaLlama: return "Meta Llama"
         case .alibabaCloud: return "Alibaba Cloud"
+        case .openRouter: return "OpenRouter"
         }
     }
     /// The valid temperature range for this provider's API.
@@ -56,7 +59,7 @@ public enum ProviderAPIType: String, Codable, Sendable, CaseIterable, Equatable 
             return 0...1
         case .gemini:
             return 0...2
-        case .openAICompatible, .xAI, .zAI, .mistral, .huggingFace, .metaLlama, .alibabaCloud:
+        case .openAICompatible, .xAI, .zAI, .mistral, .huggingFace, .metaLlama, .alibabaCloud, .openRouter:
             return 0...2
         case .ollama, .lmStudio:
             // Ollama/LM Studio accept wide ranges; models may clip internally
@@ -106,6 +109,8 @@ public enum ProviderAPIType: String, Codable, Sendable, CaseIterable, Equatable 
                 EndpointPreset("Alibaba Cloud (Singapore)", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"),
                 EndpointPreset("Alibaba Cloud (Beijing)", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
             ]
+        case .openRouter:
+            return [EndpointPreset("OpenRouter", "https://openrouter.ai/api/v1")]
         }
     }
 

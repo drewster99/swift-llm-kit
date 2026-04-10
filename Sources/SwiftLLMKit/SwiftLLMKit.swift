@@ -556,7 +556,7 @@ public final class LLMKitManager {
         switch provider.apiType {
         case .anthropic:
             url = provider.endpoint.ensureAnthropicV1().appendingPathComponent("messages")
-        case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaLlama, .alibabaCloud:
+        case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaLlama, .alibabaCloud, .openRouter:
             url = provider.endpoint.appendingPathComponent("chat/completions")
         case .ollama:
             url = provider.endpoint.appendingPathComponent("chat")
@@ -584,9 +584,17 @@ public final class LLMKitManager {
                 request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
             }
             request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaLlama, .alibabaCloud:
+        case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaLlama, .alibabaCloud, .openRouter:
             if let apiKey, !apiKey.isEmpty {
                 request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            }
+            if provider.apiType == .openRouter {
+                let appName = (Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String)
+                    ?? (Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+                    ?? "SwiftLLMKit"
+                let bundleID = Bundle.main.bundleIdentifier ?? "com.swiftllmkit.app"
+                request.setValue("https://\(bundleID)", forHTTPHeaderField: "HTTP-Referer")
+                request.setValue(appName, forHTTPHeaderField: "X-Title")
             }
         case .ollama:
             if let apiKey, !apiKey.isEmpty {
@@ -618,7 +626,7 @@ public final class LLMKitManager {
             body["cache_control"] = config.extendedCacheTTL
                 ? ["type": "ephemeral", "ttl": "1h"] as [String: Any]
                 : ["type": "ephemeral"] as [String: Any]
-        case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaLlama, .alibabaCloud:
+        case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaLlama, .alibabaCloud, .openRouter:
             body["max_tokens"] = config.maxOutputTokens
         case .ollama:
             body["options"] = ["num_predict": config.maxOutputTokens] as [String: Any]
@@ -674,7 +682,7 @@ public final class LLMKitManager {
                 configuration: config, provider: modelProvider,
                 readAPIKey: readAPIKey, verboseLogging: verbose
             )
-        case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaLlama, .alibabaCloud:
+        case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaLlama, .alibabaCloud, .openRouter:
             // Mistral API supports parallel tool calls but LiteLLM metadata doesn't flag it.
             let supportsParallel = modelInfo(providerID: modelProvider.id, modelID: config.modelID)?
                 .capabilities.parallelToolCalls ?? false

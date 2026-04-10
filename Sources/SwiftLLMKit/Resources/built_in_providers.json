@@ -23,6 +23,13 @@
       "popular": true
     },
     {
+      "id": "builtin.openrouter",
+      "displayName": "OpenRouter",
+      "apiType": "openRouter",
+      "endpoint": "https://openrouter.ai/api/v1",
+      "popular": true
+    },
+    {
       "id": "builtin.xai",
       "displayName": "Grok",
       "apiType": "xAI",

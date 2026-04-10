@@ -49,6 +49,17 @@ public struct OpenAICompatibleProvider: LLMProvider {
         if provider.apiType == .zAI {
             request.setValue("en-US,en", forHTTPHeaderField: "Accept-Language")
         }
+        if provider.apiType == .openRouter {
+            // OpenRouter uses these optional headers for app attribution on
+            // its public leaderboards and per-app analytics dashboards.
+            // https://openrouter.ai/docs/api-reference/overview#headers
+            let appName = (Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String)
+                ?? (Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+                ?? "SwiftLLMKit"
+            let bundleID = Bundle.main.bundleIdentifier ?? "com.swiftllmkit.app"
+            request.setValue("https://\(bundleID)", forHTTPHeaderField: "HTTP-Referer")
+            request.setValue(appName, forHTTPHeaderField: "X-Title")
+        }
 
         let body = buildRequestBody(messages: messages, tools: tools)
         let requestData = try JSONSerialization.data(withJSONObject: body)
