@@ -268,7 +268,13 @@ public struct OpenAICompatibleProvider: LLMProvider {
             if let details = usage["prompt_tokens_details"] as? [String: Any] {
                 cacheRead = details["cached_tokens"] as? Int ?? 0
             }
-            tokenUsage = TokenUsage(inputTokens: input, outputTokens: output, cacheReadTokens: cacheRead)
+            let rawUsage = TokenUsage.serializeRawUsage(usage)
+            tokenUsage = TokenUsage(
+                inputTokens: input,
+                outputTokens: output,
+                cacheReadTokens: cacheRead,
+                rawUsage: rawUsage
+            )
             if cacheRead > 0 {
                 logger.info("Cache: read=\(cacheRead) uncached=\(input - cacheRead)")
             }

@@ -292,12 +292,22 @@ public struct OllamaProvider: LLMProvider {
             throw LLMProviderError.malformedResponse(detail: "missing message, keys: [\(keys)], body: \(preview)")
         }
 
-        // Parse token usage.
+        // Parse token usage. Ollama returns counts as top-level fields rather than
+        // a nested usage object, so synthesize one for the rawUsage snapshot.
         var tokenUsage: TokenUsage?
         let promptEval = json["prompt_eval_count"] as? Int ?? 0
         let eval = json["eval_count"] as? Int ?? 0
         if promptEval > 0 || eval > 0 {
-            tokenUsage = TokenUsage(inputTokens: promptEval, outputTokens: eval)
+            let synthesized: [String: Any] = [
+                "prompt_eval_count": promptEval,
+                "eval_count": eval
+            ]
+            let rawUsage = TokenUsage.serializeRawUsage(synthesized)
+            tokenUsage = TokenUsage(
+                inputTokens: promptEval,
+                outputTokens: eval,
+                rawUsage: rawUsage
+            )
         }
 
         let text = message["content"] as? String

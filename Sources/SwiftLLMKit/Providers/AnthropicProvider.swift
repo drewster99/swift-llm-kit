@@ -278,7 +278,14 @@ public struct AnthropicProvider: LLMProvider {
             let output = usage["output_tokens"] as? Int ?? 0
             let cacheRead = usage["cache_read_input_tokens"] as? Int ?? 0
             let cacheCreation = usage["cache_creation_input_tokens"] as? Int ?? 0
-            tokenUsage = TokenUsage(inputTokens: input, outputTokens: output, cacheReadTokens: cacheRead, cacheWriteTokens: cacheCreation)
+            let rawUsage = TokenUsage.serializeRawUsage(usage)
+            tokenUsage = TokenUsage(
+                inputTokens: input,
+                outputTokens: output,
+                cacheReadTokens: cacheRead,
+                cacheWriteTokens: cacheCreation,
+                rawUsage: rawUsage
+            )
             if cacheRead > 0 || cacheCreation > 0 {
                 logger.info("Cache: read=\(cacheRead) created=\(cacheCreation) uncached=\(input)")
             }
