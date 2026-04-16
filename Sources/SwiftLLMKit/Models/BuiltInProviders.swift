@@ -29,6 +29,24 @@ public struct BuiltInProviderPreset: Codable, Sendable, Equatable {
 /// access. Use `BuiltInProviders.all` to enumerate every preset, `BuiltInProviders.popular`
 /// for the default-shown subset, or `BuiltInProviders.preset(id:)` to look one up by ID.
 public enum BuiltInProviders {
+    /// Stable IDs for each built-in provider preset. These must match the `id` field
+    /// for the corresponding entry in `Resources/built_in_providers.json`.
+    public enum ID {
+        public static let anthropic = "builtin.anthropic"
+        public static let gemini = "builtin.gemini"
+        public static let openai = "builtin.openai"
+        public static let openRouter = "builtin.openrouter"
+        public static let xAI = "builtin.xai"
+        public static let alibabaCloud = "builtin.alibabacloud"
+        public static let huggingFace = "builtin.huggingface"
+        public static let lmStudio = "builtin.lmstudio"
+        public static let metaLlama = "builtin.metallama"
+        public static let mistral = "builtin.mistral"
+        public static let ollama = "builtin.ollama"
+        public static let ollamaCloud = "builtin.ollama-cloud"
+        public static let zAI = "builtin.zai"
+    }
+
     /// All bundled built-in provider presets, in the order declared in the JSON file.
     public static let all: [BuiltInProviderPreset] = loadFromBundle()
 
