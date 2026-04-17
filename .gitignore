@@ -1,2 +1,6 @@
-.build
-.swiftpm
+.DS_Store
+.build/
+.swiftpm/
+*.xcodeproj/xcuserdata
+xcuserdata/
+Package.resolved
