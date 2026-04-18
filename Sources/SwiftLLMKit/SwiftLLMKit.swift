@@ -682,7 +682,12 @@ public final class LLMKitManager {
                 ? ["type": "ephemeral", "ttl": "1h"] as [String: Any]
                 : ["type": "ephemeral"] as [String: Any]
         case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaLlama, .alibabaCloud, .openRouter:
-            body["max_tokens"] = config.maxOutputTokens
+            // GPT-5.x and o-series reject `max_tokens` and require
+            // `max_completion_tokens`. Other OpenAI-compatible backends
+            // (DeepSeek, etc.) still only accept `max_tokens`, so gate on
+            // the built-in OpenAI provider ID rather than the shared apiType.
+            let tokenLimitKey = provider.id == BuiltInProviders.ID.openai ? "max_completion_tokens" : "max_tokens"
+            body[tokenLimitKey] = config.maxOutputTokens
         case .ollama:
             body["options"] = ["num_predict": config.maxOutputTokens] as [String: Any]
         case .gemini:

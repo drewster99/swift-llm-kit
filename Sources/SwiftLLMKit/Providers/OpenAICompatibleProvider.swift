@@ -111,9 +111,14 @@ public struct OpenAICompatibleProvider: LLMProvider {
         }
         orderedMessages.append(contentsOf: nonSystemMessages)
 
+        // OpenAI deprecated `max_tokens` on Chat Completions; GPT-5.x and o-series
+        // reject it outright and require `max_completion_tokens`. DeepSeek and the
+        // other OpenAI-compatible backends still only accept `max_tokens`, so we
+        // gate on the built-in OpenAI provider ID rather than the shared apiType.
+        let tokenLimitKey = provider.id == BuiltInProviders.ID.openai ? "max_completion_tokens" : "max_tokens"
         var body: [String: Any] = [
             "model": configuration.model,
-            "max_tokens": configuration.maxTokens,
+            tokenLimitKey: configuration.maxTokens,
             "messages": orderedMessages
         ]
         if !configuration.useDefaultTemperature {
