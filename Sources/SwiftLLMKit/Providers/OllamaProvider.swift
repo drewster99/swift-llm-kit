@@ -68,7 +68,8 @@ public struct OllamaProvider: LLMProvider {
 
     public func send(
         messages: [LLMMessage],
-        tools: [LLMToolDefinition]
+        tools: [LLMToolDefinition],
+        maxOutputTokensOverride: Int? = nil
     ) async throws -> LLMResponse {
         let url = provider.endpoint.appendingPathComponent("chat")
         var request = URLRequest(url: url)
@@ -83,7 +84,7 @@ public struct OllamaProvider: LLMProvider {
         // to user messages for backends that don't understand the "tool" role, but breaks
         // the tool_call/tool_result pairing that Ollama requires when tools ARE defined.
         let finalMessages = tools.isEmpty ? Self.normalizeMessages(messages) : messages
-        let body = buildRequestBody(messages: Self.extractSystemMessages(finalMessages), tools: tools)
+        let body = buildRequestBody(messages: Self.extractSystemMessages(finalMessages), tools: tools, maxOutputTokensOverride: maxOutputTokensOverride)
         let requestData = try JSONSerialization.data(withJSONObject: body)
         request.httpBody = requestData
 
@@ -112,15 +113,17 @@ public struct OllamaProvider: LLMProvider {
 
     private func buildRequestBody(
         messages: [LLMMessage],
-        tools: [LLMToolDefinition]
+        tools: [LLMToolDefinition],
+        maxOutputTokensOverride: Int? = nil
     ) -> [String: Any] {
+        let effectiveMaxTokens = maxOutputTokensOverride ?? configuration.maxTokens
         var body: [String: Any] = [
             "model": configuration.model,
             "stream": false,
             "messages": messages.map(encodeMessage),
             "options": configuration.useDefaultTemperature
-                ? ["num_predict": configuration.maxTokens] as [String: Any]
-                : ["temperature": configuration.temperature, "num_predict": configuration.maxTokens] as [String: Any]
+                ? ["num_predict": effectiveMaxTokens] as [String: Any]
+                : ["temperature": configuration.temperature, "num_predict": effectiveMaxTokens] as [String: Any]
         ]
 
         if !tools.isEmpty {

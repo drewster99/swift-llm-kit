@@ -27,7 +27,8 @@ public struct AnthropicProvider: LLMProvider {
 
     public func send(
         messages: [LLMMessage],
-        tools: [LLMToolDefinition]
+        tools: [LLMToolDefinition],
+        maxOutputTokensOverride: Int? = nil
     ) async throws -> LLMResponse {
         let base = provider.endpoint.ensureAnthropicV1()
         let url = base.appendingPathComponent("messages")
@@ -37,7 +38,7 @@ public struct AnthropicProvider: LLMProvider {
         request.setValue(readAPIKey(), forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
 
-        let body = try buildRequestBody(messages: messages, tools: tools)
+        let body = try buildRequestBody(messages: messages, tools: tools, maxOutputTokensOverride: maxOutputTokensOverride)
         let requestData = try JSONSerialization.data(withJSONObject: body)
         request.httpBody = requestData
 
@@ -66,7 +67,8 @@ public struct AnthropicProvider: LLMProvider {
 
     private func buildRequestBody(
         messages: [LLMMessage],
-        tools: [LLMToolDefinition]
+        tools: [LLMToolDefinition],
+        maxOutputTokensOverride: Int? = nil
     ) throws -> [String: Any] {
         // Anthropic requires system prompt separate from messages.
         // Concatenate all system messages so per-turn context doesn't overwrite the base prompt.
@@ -90,9 +92,20 @@ public struct AnthropicProvider: LLMProvider {
 
         let thinkingEnabled = (configuration.thinkingBudget ?? 0) > 0
 
+        // When extended thinking is enabled, max_tokens must exceed budget_tokens
+        // (which is itself floored at 1024 by Anthropic). Clamp the override so a
+        // tight per-call cap doesn't produce an API error in thinking-enabled paths.
+        let effectiveMaxTokens: Int = {
+            guard let override = maxOutputTokensOverride else { return configuration.maxTokens }
+            if thinkingEnabled, let budget = configuration.thinkingBudget {
+                return max(override, max(budget, 1024) + 1)
+            }
+            return override
+        }()
+
         var body: [String: Any] = [
             "model": configuration.model,
-            "max_tokens": configuration.maxTokens,
+            "max_tokens": effectiveMaxTokens,
             "messages": encodedMessages,
             "cache_control": configuration.extendedCacheTTL
                 ? ["type": "ephemeral", "ttl": "1h"] as [String: Any]

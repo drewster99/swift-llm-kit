@@ -36,7 +36,8 @@ public struct GeminiProvider: LLMProvider {
 
     public func send(
         messages: [LLMMessage],
-        tools: [LLMToolDefinition]
+        tools: [LLMToolDefinition],
+        maxOutputTokensOverride: Int? = nil
     ) async throws -> LLMResponse {
         // Build URL: {endpoint}/models/{model}:generateContent
         let base = provider.endpoint.path.hasSuffix("/")
@@ -53,7 +54,7 @@ public struct GeminiProvider: LLMProvider {
             request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
         }
 
-        let body = try buildRequestBody(messages: messages, tools: tools)
+        let body = try buildRequestBody(messages: messages, tools: tools, maxOutputTokensOverride: maxOutputTokensOverride)
         let requestData = try JSONSerialization.data(withJSONObject: body)
         request.httpBody = requestData
 
@@ -84,7 +85,8 @@ public struct GeminiProvider: LLMProvider {
 
     private func buildRequestBody(
         messages: [LLMMessage],
-        tools: [LLMToolDefinition]
+        tools: [LLMToolDefinition],
+        maxOutputTokensOverride: Int? = nil
     ) throws -> [String: Any] {
         var systemParts: [String] = []
         var conversationMessages: [LLMMessage] = []
@@ -102,11 +104,12 @@ public struct GeminiProvider: LLMProvider {
         let rawContents = try conversationMessages.map(encodeContent)
         let mergedContents = Self.mergeConsecutiveSameRole(rawContents)
 
+        let effectiveMaxTokens = maxOutputTokensOverride ?? configuration.maxTokens
         var body: [String: Any] = [
             "contents": mergedContents,
             "generationConfig": configuration.useDefaultTemperature
-                ? ["maxOutputTokens": configuration.maxTokens] as [String: Any]
-                : ["temperature": configuration.temperature, "maxOutputTokens": configuration.maxTokens] as [String: Any]
+                ? ["maxOutputTokens": effectiveMaxTokens] as [String: Any]
+                : ["temperature": configuration.temperature, "maxOutputTokens": effectiveMaxTokens] as [String: Any]
         ]
 
         if !systemParts.isEmpty {

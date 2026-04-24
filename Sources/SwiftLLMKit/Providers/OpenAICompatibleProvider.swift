@@ -33,7 +33,8 @@ public struct OpenAICompatibleProvider: LLMProvider {
 
     public func send(
         messages: [LLMMessage],
-        tools: [LLMToolDefinition]
+        tools: [LLMToolDefinition],
+        maxOutputTokensOverride: Int? = nil
     ) async throws -> LLMResponse {
         let url = provider.endpoint.appendingPathComponent("chat/completions")
         var request = URLRequest(url: url)
@@ -61,7 +62,7 @@ public struct OpenAICompatibleProvider: LLMProvider {
             request.setValue(appName, forHTTPHeaderField: "X-Title")
         }
 
-        let body = buildRequestBody(messages: messages, tools: tools)
+        let body = buildRequestBody(messages: messages, tools: tools, maxOutputTokensOverride: maxOutputTokensOverride)
         let requestData = try JSONSerialization.data(withJSONObject: body)
         request.httpBody = requestData
 
@@ -90,7 +91,8 @@ public struct OpenAICompatibleProvider: LLMProvider {
 
     private func buildRequestBody(
         messages: [LLMMessage],
-        tools: [LLMToolDefinition]
+        tools: [LLMToolDefinition],
+        maxOutputTokensOverride: Int? = nil
     ) -> [String: Any] {
         // OpenAI API requires system messages at the start of the conversation.
         // Extract any system messages from arbitrary positions (e.g. per-turn task
@@ -118,7 +120,7 @@ public struct OpenAICompatibleProvider: LLMProvider {
         let tokenLimitKey = provider.id == BuiltInProviders.ID.openai ? "max_completion_tokens" : "max_tokens"
         var body: [String: Any] = [
             "model": configuration.model,
-            tokenLimitKey: configuration.maxTokens,
+            tokenLimitKey: maxOutputTokensOverride ?? configuration.maxTokens,
             "messages": orderedMessages
         ]
         if !configuration.useDefaultTemperature {
