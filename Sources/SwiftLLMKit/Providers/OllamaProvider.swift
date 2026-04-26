@@ -147,7 +147,7 @@ public struct OllamaProvider: LLMProvider {
 
         switch message.content {
         case .text(let text):
-            result["content"] = sanitizeOutgoingText(text)
+            result["content"] = sanitizeAssistantText(text, role: message.role)
             if let images = message.images, !images.isEmpty {
                 // Ollama multimodal: base64 image array alongside text content
                 result["images"] = images.map { $0.data.base64EncodedString() }
@@ -155,23 +155,27 @@ public struct OllamaProvider: LLMProvider {
         case .toolCalls(let calls):
             result["tool_calls"] = calls.map(encodeToolCall)
         case .mixed(let text, let calls):
-            result["content"] = sanitizeOutgoingText(text)
+            result["content"] = sanitizeAssistantText(text, role: message.role)
             result["tool_calls"] = calls.map(encodeToolCall)
         case .toolResult(_, let content):
-            // Ollama tool results don't use tool_call_id
+            // Ollama tool results don't use tool_call_id. Tool results are our output,
+            // not the model's, so they can't carry poison and may legitimately contain
+            // text that overlaps with chat-template syntax. Pass through unchanged.
             result["role"] = "tool"
-            result["content"] = sanitizeOutgoingText(content)
+            result["content"] = content
         }
 
         return result
     }
 
-    /// Pre-flight cleanup of any text we send back to Ollama. Strips GLM chat-template
-    /// control tokens if any are present, so conversations that already carry poisoned
-    /// history (from a runaway template-echo response or a prior client version) get
-    /// cleaned at request time rather than re-poisoning the model on every request.
-    /// Idempotent on text without any markers — non-GLM history passes through unchanged.
-    private func sanitizeOutgoingText(_ text: String) -> String {
+    /// Pre-flight cleanup of assistant text we send back to Ollama. Strips GLM
+    /// chat-template control tokens if any are present, scoped to assistant-authored
+    /// content because that's the only direction poison flows: the model's previous
+    /// turn left tokens in its `content` and replaying them in the next request would
+    /// re-poison the conversation. User and tool-result content are passed through.
+    /// Idempotent on clean text.
+    private func sanitizeAssistantText(_ text: String, role: LLMMessage.Role) -> String {
+        guard role == .assistant else { return text }
         guard GLMTemplateSalvage.contentLooksGLMTemplated(text) else { return text }
         return GLMTemplateSalvage.strip(text)
     }

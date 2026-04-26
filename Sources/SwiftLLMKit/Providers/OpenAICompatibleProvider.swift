@@ -162,7 +162,7 @@ public struct OpenAICompatibleProvider: LLMProvider {
 
         switch message.content {
         case .text(let text):
-            let outgoing = sanitizeOutgoingText(text)
+            let outgoing = sanitizeAssistantText(text, role: message.role)
             // If there are images, encode as content parts array (multimodal)
             if let images = message.images, !images.isEmpty {
                 var parts: [[String: Any]] = images.map { image in
@@ -190,7 +190,7 @@ public struct OpenAICompatibleProvider: LLMProvider {
                 ] as [String: Any]
             }
         case .mixed(let text, let calls):
-            result["content"] = sanitizeOutgoingText(text)
+            result["content"] = sanitizeAssistantText(text, role: message.role)
             result["tool_calls"] = calls.map { call in
                 [
                     "id": call.id,
@@ -204,19 +204,24 @@ public struct OpenAICompatibleProvider: LLMProvider {
         case .toolResult(let toolCallID, let content):
             result["role"] = "tool"
             result["tool_call_id"] = toolCallID
-            result["content"] = sanitizeOutgoingText(content)
+            // Tool results are our output, not the model's — they can't be a poison
+            // vector and they may legitimately contain text that overlaps with GLM
+            // chat-template syntax (e.g. a file_read of a chat-template file or a
+            // grep through model-prompt files). Pass through unchanged.
+            result["content"] = content
         }
 
         return result
     }
 
-    /// Pre-flight cleanup of any text we send back to the provider. Strips GLM
-    /// chat-template control tokens if any are present in the text, regardless of
-    /// which provider is currently routing the request — a user can run GLM models
-    /// through several providers (z.ai direct, OpenRouter, OpenAI-compatible
-    /// adapters) and the leakage is at the model layer. Idempotent on text without
-    /// any markers, so non-GLM history passes through unchanged.
-    private func sanitizeOutgoingText(_ text: String) -> String {
+    /// Pre-flight cleanup of assistant text we send back to the provider. Strips GLM
+    /// chat-template control tokens if any are present, scoped to assistant-authored
+    /// content because that's the only direction the poison flows: the model's
+    /// previous turn left tokens in its `content` and replaying them in the next
+    /// request would re-poison the conversation. User and tool-result content are
+    /// passed through verbatim. Idempotent on clean text.
+    private func sanitizeAssistantText(_ text: String, role: LLMMessage.Role) -> String {
+        guard role == .assistant else { return text }
         guard GLMTemplateSalvage.contentLooksGLMTemplated(text) else { return text }
         return GLMTemplateSalvage.strip(text)
     }
