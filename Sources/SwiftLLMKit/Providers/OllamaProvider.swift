@@ -147,7 +147,7 @@ public struct OllamaProvider: LLMProvider {
 
         switch message.content {
         case .text(let text):
-            result["content"] = text
+            result["content"] = sanitizeOutgoingText(text)
             if let images = message.images, !images.isEmpty {
                 // Ollama multimodal: base64 image array alongside text content
                 result["images"] = images.map { $0.data.base64EncodedString() }
@@ -155,15 +155,25 @@ public struct OllamaProvider: LLMProvider {
         case .toolCalls(let calls):
             result["tool_calls"] = calls.map(encodeToolCall)
         case .mixed(let text, let calls):
-            result["content"] = text
+            result["content"] = sanitizeOutgoingText(text)
             result["tool_calls"] = calls.map(encodeToolCall)
         case .toolResult(_, let content):
             // Ollama tool results don't use tool_call_id
             result["role"] = "tool"
-            result["content"] = content
+            result["content"] = sanitizeOutgoingText(content)
         }
 
         return result
+    }
+
+    /// Pre-flight cleanup of any text we send back to Ollama. Strips GLM chat-template
+    /// control tokens if any are present, so conversations that already carry poisoned
+    /// history (from a runaway template-echo response or a prior client version) get
+    /// cleaned at request time rather than re-poisoning the model on every request.
+    /// Idempotent on text without any markers — non-GLM history passes through unchanged.
+    private func sanitizeOutgoingText(_ text: String) -> String {
+        guard GLMTemplateSalvage.contentLooksGLMTemplated(text) else { return text }
+        return GLMTemplateSalvage.strip(text)
     }
 
     private func encodeToolCall(_ call: LLMToolCall) -> [String: Any] {
@@ -348,9 +358,14 @@ public struct OllamaProvider: LLMProvider {
 
         // Fallback: if no structured tool_calls, check content for text-formatted tool calls.
         // Some models output tool calls as text instead of using Ollama's native tool_calls
-        // structure. We support two formats:
+        // structure. We support three formats:
         //  1. Anthropic XML: <function_calls><invoke name="...">...</invoke></function_calls>
         //  2. tool_code fences: ```tool_code\nfunction_name(arg: value)\n```
+        //  3. GLM chat-template: <tool_call>name\n<arg_key>k</arg_key><arg_value>v</arg_value>\n</tool_call>
+        //     Specifically observed when GLM-4 / GLM-5 models are routed through Ollama
+        //     (cloud) — Ollama relays the raw model output without translating to its
+        //     native tool_calls schema, so we have to recover both names and args from
+        //     content text.
         if toolCalls.isEmpty, let content = text {
             var parsedCalls: [LLMToolCall] = []
             var strippedContent = content
@@ -361,6 +376,12 @@ public struct OllamaProvider: LLMProvider {
             } else if content.contains("```tool_code") {
                 parsedCalls = Self.parseToolCodeCalls(from: content)
                 strippedContent = Self.stripToolCodeBlocks(from: content)
+            } else if content.contains("<tool_call>") || content.contains("<arg_key>") {
+                let salvaged = GLMTemplateSalvage.extractFullCalls(content: content)
+                parsedCalls = salvaged.map { call in
+                    LLMToolCall(id: UUID().uuidString, name: call.name, arguments: call.arguments)
+                }
+                strippedContent = GLMTemplateSalvage.strip(content)
             }
 
             if !parsedCalls.isEmpty {
@@ -373,9 +394,23 @@ public struct OllamaProvider: LLMProvider {
             }
         }
 
+        // GLM template salvage on the structured-tool_calls path: even when Ollama
+        // populated the names, GLM's args sometimes stay embedded in the content text
+        // as `<arg_key>/<arg_value>` pairs. Patch them onto empty-args calls and strip
+        // any chat-template control tokens before returning. Idempotent on clean text.
+        var finalToolCalls = toolCalls
+        var finalText = text
+        if let raw = text, GLMTemplateSalvage.contentLooksGLMTemplated(raw) {
+            if !finalToolCalls.isEmpty {
+                finalToolCalls = GLMTemplateSalvage.patchEmptyArgs(finalToolCalls, content: raw)
+            }
+            let cleaned = GLMTemplateSalvage.strip(raw)
+            finalText = cleaned.isEmpty ? nil : cleaned
+        }
+
         return LLMResponse(
-            text: text?.isEmpty == true ? nil : text,
-            toolCalls: toolCalls,
+            text: finalText?.isEmpty == true ? nil : finalText,
+            toolCalls: finalToolCalls,
             usage: tokenUsage
         )
     }

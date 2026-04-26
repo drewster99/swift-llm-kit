@@ -210,15 +210,15 @@ public struct OpenAICompatibleProvider: LLMProvider {
         return result
     }
 
-    /// Pre-flight cleanup of any text we send back to the provider. For z.ai/GLM,
-    /// strips chat-template control tokens that may have leaked into earlier
-    /// assistant turns or tool results — without this, conversations that already
-    /// have poisoned history (from a prior version of this client, or from the
-    /// model's own runaway template-echo response) keep re-poisoning the model on
-    /// every subsequent request. No-op for other providers.
+    /// Pre-flight cleanup of any text we send back to the provider. Strips GLM
+    /// chat-template control tokens if any are present in the text, regardless of
+    /// which provider is currently routing the request — a user can run GLM models
+    /// through several providers (z.ai direct, OpenRouter, OpenAI-compatible
+    /// adapters) and the leakage is at the model layer. Idempotent on text without
+    /// any markers, so non-GLM history passes through unchanged.
     private func sanitizeOutgoingText(_ text: String) -> String {
-        guard provider.apiType == .zAI else { return text }
-        return Self.stripGLMControlTokens(text)
+        guard GLMTemplateSalvage.contentLooksGLMTemplated(text) else { return text }
+        return GLMTemplateSalvage.strip(text)
     }
 
     private func parseResponse(data: Data) throws -> LLMResponse {
@@ -278,49 +278,18 @@ public struct OpenAICompatibleProvider: LLMProvider {
             }
         }
 
-        // z.ai's OpenAI-compatible adapter for GLM models partially translates tool
-        // calls: it populates `function.name` in the structured `tool_calls` payload,
-        // but the *arguments* often stay embedded in the assistant's `content` text
-        // as the model's native chat-template form
-        // (`<tool_call>NAME\n<arg_key>K</arg_key><arg_value>V</arg_value>\n</tool_call>`).
-        // The result downstream is "Tool error: Missing required argument" loops where
-        // the model knows what to call but its args never reach us. Salvage the args
-        // out of `content` and patch them onto the empty tool_calls before returning.
-        // Also strip the control tokens (`<|observation|>`, `<|assistant|>`, etc.) and
-        // the consumed `<tool_call>...</tool_call>` blocks so they don't poison the
-        // assistant message we feed back into the next request.
-        if provider.apiType == .zAI {
-            if !toolCalls.isEmpty, let raw = text, !raw.isEmpty,
-               toolCalls.contains(where: { $0.arguments.isEmpty || $0.arguments == "{}" }) {
-                let salvaged = Self.salvageGLMToolArgs(content: raw)
-                if !salvaged.isEmpty {
-                    var slot = 0
-                    var patched = 0
-                    var rebuilt: [LLMToolCall] = []
-                    rebuilt.reserveCapacity(toolCalls.count)
-                    for call in toolCalls {
-                        if call.arguments.isEmpty || call.arguments == "{}" {
-                            if slot < salvaged.count {
-                                rebuilt.append(LLMToolCall(id: call.id, name: call.name, arguments: salvaged[slot]))
-                                slot += 1
-                                patched += 1
-                            } else {
-                                rebuilt.append(call)
-                            }
-                        } else {
-                            rebuilt.append(call)
-                        }
-                    }
-                    if patched > 0 {
-                        logger.info("z.ai GLM salvage: recovered args for \(patched) of \(toolCalls.count) tool call(s) from message content")
-                        toolCalls = rebuilt
-                    }
-                }
+        // GLM-4 / GLM-5 chat-template salvage. The same leakage pattern shows up
+        // regardless of which provider routes the request — z.ai direct, OpenRouter,
+        // any OpenAI-compatible adapter in front of GLM hosting — so we gate on
+        // content shape (presence of `<arg_key>` / `<tool_call>` / `<|...|>`) rather
+        // than `provider.apiType`. Idempotent on responses that don't carry those
+        // markers, so non-GLM traffic is unaffected.
+        if let raw = text, GLMTemplateSalvage.contentLooksGLMTemplated(raw) {
+            if !toolCalls.isEmpty {
+                toolCalls = GLMTemplateSalvage.patchEmptyArgs(toolCalls, content: raw)
             }
-            if let raw = text {
-                let cleaned = Self.stripGLMControlTokens(raw)
-                text = cleaned.isEmpty ? nil : cleaned
-            }
+            let cleaned = GLMTemplateSalvage.strip(raw)
+            text = cleaned.isEmpty ? nil : cleaned
         }
 
         // Parse token usage.
@@ -352,136 +321,4 @@ public struct OpenAICompatibleProvider: LLMProvider {
         )
     }
 
-    // MARK: - z.ai / GLM chat-template salvage
-
-    /// Salvages tool-call arguments from `content` when z.ai's GLM models leave them
-    /// in chat-template form instead of populating `function.arguments`. Returns the
-    /// reconstructed JSON args strings in document order — slot N corresponds to the
-    /// Nth `<tool_call>` block found in `content`. Tool calls whose args couldn't be
-    /// parsed are absent from the result.
-    ///
-    /// Recognized shapes (both seen in the wild on z.ai's OpenAI-compatible endpoint):
-    ///
-    ///   <tool_call>name
-    ///   <arg_key>k</arg_key><arg_value>v</arg_value>
-    ///   </tool_call>
-    ///
-    ///   <arg_key>k</arg_key><arg_value>v</arg_value></tool_call>
-    ///
-    /// arg_value is parsed as JSON first (so `["…"]` becomes a real array); on parse
-    /// failure it falls back to the raw string.
-    static func salvageGLMToolArgs(content: String) -> [String] {
-        let blocks = extractGLMToolCallBlocks(content)
-        guard !blocks.isEmpty else { return [] }
-        var result: [String] = []
-        for block in blocks {
-            let pairs = extractGLMArgPairs(block)
-            guard !pairs.isEmpty else { continue }
-            var args: [String: Any] = [:]
-            for (key, valueText) in pairs {
-                if let valData = valueText.data(using: .utf8),
-                   let parsed = try? JSONSerialization.jsonObject(with: valData, options: [.fragmentsAllowed]) {
-                    args[key] = parsed
-                } else {
-                    args[key] = valueText
-                }
-            }
-            if let argsData = try? JSONSerialization.data(withJSONObject: args),
-               let argsString = String(data: argsData, encoding: .utf8) {
-                result.append(argsString)
-            }
-        }
-        return result
-    }
-
-    /// Splits `content` into the inner bodies of `<tool_call>...</tool_call>` blocks.
-    /// If no opening tag is present but `<arg_key>` is, treats the whole content as a
-    /// single block — older GLM template variants emit only the inner pair list.
-    private static func extractGLMToolCallBlocks(_ content: String) -> [String] {
-        var blocks: [String] = []
-        var cursor = content.startIndex
-        while let openRange = content.range(of: "<tool_call>", range: cursor..<content.endIndex) {
-            let afterOpen = openRange.upperBound
-            let closeRange = content.range(of: "</tool_call>", range: afterOpen..<content.endIndex)
-            let blockEnd = closeRange?.lowerBound ?? content.endIndex
-            blocks.append(String(content[afterOpen..<blockEnd]))
-            cursor = closeRange?.upperBound ?? content.endIndex
-        }
-        if blocks.isEmpty, content.contains("<arg_key>") {
-            blocks.append(content)
-        }
-        return blocks
-    }
-
-    /// Extracts (key, value) pairs of the form `<arg_key>K</arg_key><arg_value>V</arg_value>`
-    /// from a block, in document order. Whitespace around the captured strings is trimmed.
-    private static func extractGLMArgPairs(_ block: String) -> [(String, String)] {
-        var pairs: [(String, String)] = []
-        var cursor = block.startIndex
-        while let keyOpen = block.range(of: "<arg_key>", range: cursor..<block.endIndex),
-              let keyClose = block.range(of: "</arg_key>", range: keyOpen.upperBound..<block.endIndex),
-              let valOpen = block.range(of: "<arg_value>", range: keyClose.upperBound..<block.endIndex),
-              let valClose = block.range(of: "</arg_value>", range: valOpen.upperBound..<block.endIndex) {
-            let key = String(block[keyOpen.upperBound..<keyClose.lowerBound])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let value = String(block[valOpen.upperBound..<valClose.lowerBound])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if !key.isEmpty {
-                pairs.append((key, value))
-            }
-            cursor = valClose.upperBound
-        }
-        return pairs
-    }
-
-    /// Strips GLM chat-template control tokens that leak into the assistant `content`
-    /// when z.ai's adapter doesn't fully translate. Without this, those tokens get
-    /// stored back into conversation history and re-poison the next request — observed
-    /// failure mode is the model emitting a 400+ second response that is just thousands
-    /// of repeated `<|observation|><tool_response>...</tool_response>` blocks. Removes:
-    ///   - `<|...|>` control tokens (e.g. `<|observation|>`, `<|assistant|>`, `<|user|>`)
-    ///   - `<tool_call>...</tool_call>` blocks (already consumed by the salvage step)
-    ///   - `<tool_response>...</tool_response>` blocks (echoes of past tool results)
-    static func stripGLMControlTokens(_ content: String) -> String {
-        var working = content
-        working = removeBlocks(in: working, openTag: "<tool_call>", closeTag: "</tool_call>")
-        working = removeBlocks(in: working, openTag: "<tool_response>", closeTag: "</tool_response>")
-        working = removeControlPipeTokens(working)
-        return working.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    /// Removes every `openTag…closeTag` block in `content`. Unmatched opens (no
-    /// corresponding close) are dropped through end-of-string so a half-formed echo
-    /// loop can't survive past the strip.
-    private static func removeBlocks(in content: String, openTag: String, closeTag: String) -> String {
-        var result = ""
-        var cursor = content.startIndex
-        while let openRange = content.range(of: openTag, range: cursor..<content.endIndex) {
-            result.append(contentsOf: content[cursor..<openRange.lowerBound])
-            if let closeRange = content.range(of: closeTag, range: openRange.upperBound..<content.endIndex) {
-                cursor = closeRange.upperBound
-            } else {
-                cursor = content.endIndex
-            }
-        }
-        result.append(contentsOf: content[cursor..<content.endIndex])
-        return result
-    }
-
-    /// Strips `<|...|>` control tokens (e.g. `<|observation|>`, `<|assistant|>`).
-    /// Greedy on the inner segment so a multi-character token name is consumed in one go.
-    private static func removeControlPipeTokens(_ content: String) -> String {
-        var result = ""
-        var cursor = content.startIndex
-        while let openRange = content.range(of: "<|", range: cursor..<content.endIndex) {
-            result.append(contentsOf: content[cursor..<openRange.lowerBound])
-            if let closeRange = content.range(of: "|>", range: openRange.upperBound..<content.endIndex) {
-                cursor = closeRange.upperBound
-            } else {
-                cursor = content.endIndex
-            }
-        }
-        result.append(contentsOf: content[cursor..<content.endIndex])
-        return result
-    }
 }
