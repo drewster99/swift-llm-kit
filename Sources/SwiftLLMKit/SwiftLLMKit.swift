@@ -467,7 +467,22 @@ public final class LLMKitManager {
             for i in providerModels.indices {
                 let modelID = providerModels[i].modelID
 
-                // Layer 1: App-bundled (gap-fill, higher priority than LiteLLM)
+                // Layer 0a: App-bundled provider-wide defaults (gap-fill).
+                // Applies to every model from this providerID, e.g. all OpenAI
+                // models opting into `useMaxCompletionTokens`. Per-model entries
+                // below override on a flag-by-flag basis.
+                if let providerWide = bundledRegistry.defaults(providerID: provider.id) {
+                    providerWide.apply(to: &providerModels[i], forceReplace: false)
+                }
+
+                // Layer 0b: App-bundled per-(providerID, modelID) (gap-fill).
+                // Pinpoints a single built-in provider's model — used when the
+                // apiType is shared between built-in and user-created providers.
+                if let providerScoped = bundledRegistry.override(providerID: provider.id, modelID: modelID) {
+                    providerScoped.apply(to: &providerModels[i], forceReplace: false)
+                }
+
+                // Layer 1: App-bundled per-(apiType, modelID) (gap-fill, higher priority than LiteLLM)
                 if let bundled = bundledRegistry.override(providerAPIType: provider.apiType.rawValue, modelID: modelID) {
                     bundled.apply(to: &providerModels[i], forceReplace: false)
                 }
@@ -683,10 +698,11 @@ public final class LLMKitManager {
                 : ["type": "ephemeral"] as [String: Any]
         case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaLlama, .alibabaCloud, .openRouter:
             // GPT-5.x and o-series reject `max_tokens` and require
-            // `max_completion_tokens`. Other OpenAI-compatible backends
-            // (DeepSeek, etc.) still only accept `max_tokens`, so gate on
-            // the built-in OpenAI provider ID rather than the shared apiType.
-            let tokenLimitKey = provider.id == BuiltInProviders.ID.openai ? "max_completion_tokens" : "max_tokens"
+            // `max_completion_tokens`. Bundled-defaults JSON flags affected models
+            // with `useMaxCompletionTokens: true`; users override per-model. Used to
+            // be a hardcoded `provider.id == BuiltInProviders.ID.openai` check.
+            let prepFlags = behaviorFlags(forProviderID: provider.id, modelID: config.modelID)
+            let tokenLimitKey = prepFlags.useMaxCompletionTokens ? "max_completion_tokens" : "max_tokens"
             body[tokenLimitKey] = config.maxOutputTokens
         case .ollama:
             body["options"] = ["num_predict": config.maxOutputTokens] as [String: Any]
@@ -736,6 +752,12 @@ public final class LLMKitManager {
         }
         let verbose = self.verboseLogging
 
+        // Resolve the merged behavior flags for this (provider, model) so providers
+        // can read knobs without reaching back into the manager. `behaviorFlags`
+        // returns the catalog-resolved flags (bundled + LiteLLM + user overrides
+        // already merged by `fetchProviderModels`).
+        let flags = behaviorFlags(forProviderID: modelProvider.id, modelID: config.modelID)
+
         switch modelProvider.apiType {
         case .anthropic:
             return AnthropicProvider(
@@ -743,19 +765,24 @@ public final class LLMKitManager {
                 readAPIKey: readAPIKey, verboseLogging: verbose
             )
         case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaLlama, .alibabaCloud, .openRouter:
-            // Mistral API supports parallel tool calls but LiteLLM metadata doesn't flag it.
+            // `parallel_tool_calls` is enabled when the model's catalog capability says so
+            // OR when behavior flags force it on (used to be a hardcoded `apiType == .mistral`
+            // branch — now the bundled defaults JSON flags Mistral models with
+            // `forceParallelToolCalls: true` and the hardcode is gone).
             let supportsParallel = modelInfo(providerID: modelProvider.id, modelID: config.modelID)?
                 .capabilities.parallelToolCalls ?? false
-            let enableParallel = supportsParallel || modelProvider.apiType == .mistral
+            let enableParallel = supportsParallel || flags.forceParallelToolCalls
             return OpenAICompatibleProvider(
                 configuration: config, provider: modelProvider,
                 readAPIKey: readAPIKey, verboseLogging: verbose,
-                parallelToolCalls: enableParallel
+                parallelToolCalls: enableParallel,
+                behaviorFlags: flags
             )
         case .ollama:
             return OllamaProvider(
                 configuration: config, provider: modelProvider,
-                readAPIKey: readAPIKey, verboseLogging: verbose
+                readAPIKey: readAPIKey, verboseLogging: verbose,
+                behaviorFlags: flags
             )
         case .gemini:
             return GeminiProvider(
@@ -763,6 +790,43 @@ public final class LLMKitManager {
                 readAPIKey: readAPIKey, verboseLogging: verbose
             )
         }
+    }
+
+    /// Returns the merged `BehaviorFlags` for a given `(providerID, modelID)`. If the
+    /// catalog already has a `ModelInfo` for this pair, returns its flags (which already
+    /// reflect the layered enrichment pass). Otherwise computes a fresh resolution from
+    /// bundled + user overrides — useful for callsites that need flags before the catalog
+    /// has been fetched (or for models the catalog doesn't list).
+    public func behaviorFlags(forProviderID providerID: String, modelID: String) -> BehaviorFlags {
+        if let info = modelInfo(providerID: providerID, modelID: modelID) {
+            return info.behaviorFlags
+        }
+        // No catalog entry yet — synthesize from overrides directly, mirroring the
+        // layering rules in `fetchProviderModels`.
+        var flags = BehaviorFlags()
+        // Layer 0a: provider-wide defaults
+        if let providerWide = bundledRegistry.defaults(providerID: providerID),
+           let wideFlags = providerWide.behaviorFlags {
+            wideFlags.apply(to: &flags, forceReplace: false)
+        }
+        // Layer 0b: per-(providerID, modelID) bundled
+        if let providerScoped = bundledRegistry.override(providerID: providerID, modelID: modelID),
+           let scopedFlags = providerScoped.behaviorFlags {
+            scopedFlags.apply(to: &flags, forceReplace: false)
+        }
+        // Layer 1: per-(apiType, modelID) bundled
+        let providerAPIType = providers.first(where: { $0.id == providerID })?.apiType.rawValue
+        if let apiType = providerAPIType,
+           let bundled = bundledRegistry.override(providerAPIType: apiType, modelID: modelID),
+           let bundledFlags = bundled.behaviorFlags {
+            bundledFlags.apply(to: &flags, forceReplace: false)
+        }
+        // Layer 4: user overrides force-replace
+        let userKey = "\(providerID)/\(modelID)"
+        if let user = userOverrides[userKey], let userFlags = user.behaviorFlags {
+            userFlags.apply(to: &flags, forceReplace: true)
+        }
+        return flags
     }
 
     // MARK: - Built-in Provider Seeding

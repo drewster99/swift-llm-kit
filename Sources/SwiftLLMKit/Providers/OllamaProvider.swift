@@ -18,6 +18,7 @@ public struct OllamaProvider: LLMProvider {
     private let provider: ModelProvider
     private let readAPIKey: @Sendable () -> String
     private let verboseLogging: Bool
+    private let behaviorFlags: BehaviorFlags
     private let session: URLSession
 
     // MARK: - Static regex patterns (compiled once)
@@ -57,12 +58,14 @@ public struct OllamaProvider: LLMProvider {
         provider: ModelProvider,
         readAPIKey: @Sendable @escaping () -> String,
         verboseLogging: Bool = false,
+        behaviorFlags: BehaviorFlags = BehaviorFlags(),
         session: URLSession = llmURLSession
     ) {
         self.configuration = configuration
         self.provider = provider
         self.readAPIKey = readAPIKey
         self.verboseLogging = verboseLogging
+        self.behaviorFlags = behaviorFlags
         self.session = session
     }
 
@@ -173,8 +176,10 @@ public struct OllamaProvider: LLMProvider {
     /// content because that's the only direction poison flows: the model's previous
     /// turn left tokens in its `content` and replaying them in the next request would
     /// re-poison the conversation. User and tool-result content are passed through.
-    /// Idempotent on clean text.
+    /// Gated on the per-model `glmTemplateSalvage` flag — non-GLM models always pass
+    /// text through unchanged.
     private func sanitizeAssistantText(_ text: String, role: LLMMessage.Role) -> String {
+        guard behaviorFlags.glmTemplateSalvage else { return text }
         guard role == .assistant else { return text }
         guard GLMTemplateSalvage.contentLooksGLMTemplated(text) else { return text }
         return GLMTemplateSalvage.strip(text)
@@ -380,7 +385,8 @@ public struct OllamaProvider: LLMProvider {
             } else if content.contains("```tool_code") {
                 parsedCalls = Self.parseToolCodeCalls(from: content)
                 strippedContent = Self.stripToolCodeBlocks(from: content)
-            } else if content.contains("<tool_call>") || content.contains("<arg_key>") {
+            } else if behaviorFlags.glmTemplateSalvage,
+                      content.contains("<tool_call>") || content.contains("<arg_key>") {
                 let salvaged = GLMTemplateSalvage.extractFullCalls(content: content)
                 parsedCalls = salvaged.map { call in
                     LLMToolCall(id: UUID().uuidString, name: call.name, arguments: call.arguments)
@@ -400,11 +406,12 @@ public struct OllamaProvider: LLMProvider {
 
         // GLM template salvage on the structured-tool_calls path: even when Ollama
         // populated the names, GLM's args sometimes stay embedded in the content text
-        // as `<arg_key>/<arg_value>` pairs. Patch them onto empty-args calls and strip
-        // any chat-template control tokens before returning. Idempotent on clean text.
+        // as `<arg_key>/<arg_value>` pairs. Gated on `glmTemplateSalvage` so non-GLM
+        // models running through Ollama never have their content touched.
         var finalToolCalls = toolCalls
         var finalText = text
-        if let raw = text, GLMTemplateSalvage.contentLooksGLMTemplated(raw) {
+        if behaviorFlags.glmTemplateSalvage,
+           let raw = text, GLMTemplateSalvage.contentLooksGLMTemplated(raw) {
             if !finalToolCalls.isEmpty {
                 finalToolCalls = GLMTemplateSalvage.patchEmptyArgs(finalToolCalls, content: raw)
             }

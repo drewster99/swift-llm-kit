@@ -28,6 +28,10 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
     public var pricing: ModelPricing?
     /// Whether this model supports `/v1/chat/completions`. Defaults to `true` unless LiteLLM says otherwise.
     public var supportsChatCompletions: Bool
+    /// Per-(provider+model) runtime behavior knobs. Defaults to all-off — a
+    /// model with no flags set behaves like a model from before this field
+    /// existed. See `BehaviorFlags` for available knobs and the layering rules.
+    public var behaviorFlags: BehaviorFlags
 
     // MARK: - Backward-compatible pricing accessors
 
@@ -62,7 +66,8 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
         sizeLabel: String? = nil,
         quantizationLabel: String? = nil,
         pricing: ModelPricing? = nil,
-        supportsChatCompletions: Bool = true
+        supportsChatCompletions: Bool = true,
+        behaviorFlags: BehaviorFlags = BehaviorFlags()
     ) {
         self.providerID = providerID
         self.modelID = modelID
@@ -75,6 +80,7 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
         self.quantizationLabel = quantizationLabel
         self.pricing = pricing
         self.supportsChatCompletions = supportsChatCompletions
+        self.behaviorFlags = behaviorFlags
     }
 
     /// Whether the model was created/modified within the last 90 days.
@@ -92,6 +98,7 @@ extension ModelInfo: Codable {
         case providerID, modelID, displayName, createdAt
         case maxInputTokens, maxOutputTokens, capabilities
         case sizeLabel, quantizationLabel, pricing, supportsChatCompletions
+        case behaviorFlags
         // Legacy keys for reading old persisted data
         case inputCostPerMillionTokens, outputCostPerMillionTokens
     }
@@ -109,6 +116,7 @@ extension ModelInfo: Codable {
         sizeLabel = try container.decodeIfPresent(String.self, forKey: .sizeLabel)
         quantizationLabel = try container.decodeIfPresent(String.self, forKey: .quantizationLabel)
         supportsChatCompletions = try container.decodeIfPresent(Bool.self, forKey: .supportsChatCompletions) ?? true
+        behaviorFlags = try container.decodeIfPresent(BehaviorFlags.self, forKey: .behaviorFlags) ?? BehaviorFlags()
 
         // Read new pricing field, or fall back to legacy flat cost fields.
         if let p = try container.decodeIfPresent(ModelPricing.self, forKey: .pricing) {
@@ -140,6 +148,12 @@ extension ModelInfo: Codable {
         try container.encodeIfPresent(quantizationLabel, forKey: .quantizationLabel)
         try container.encodeIfPresent(pricing, forKey: .pricing)
         try container.encode(supportsChatCompletions, forKey: .supportsChatCompletions)
+        // Skip encoding behavior flags when they're at defaults to keep on-disk
+        // payloads compact and round-trippable through clients that don't know
+        // the field. The all-default case loads as the same value either way.
+        if !behaviorFlags.isAllDefault {
+            try container.encode(behaviorFlags, forKey: .behaviorFlags)
+        }
         // Legacy fields intentionally not written — new format only.
     }
 }

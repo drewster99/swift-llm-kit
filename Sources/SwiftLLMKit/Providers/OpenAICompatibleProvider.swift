@@ -10,6 +10,7 @@ public struct OpenAICompatibleProvider: LLMProvider {
     private let readAPIKey: @Sendable () -> String
     private let verboseLogging: Bool
     private let parallelToolCalls: Bool
+    private let behaviorFlags: BehaviorFlags
     private let session: URLSession
     /// Stable conversation ID for xAI prompt caching. Generated once per provider instance.
     private let conversationID: String
@@ -20,6 +21,7 @@ public struct OpenAICompatibleProvider: LLMProvider {
         readAPIKey: @Sendable @escaping () -> String,
         verboseLogging: Bool = false,
         parallelToolCalls: Bool = false,
+        behaviorFlags: BehaviorFlags = BehaviorFlags(),
         session: URLSession = llmURLSession
     ) {
         self.configuration = configuration
@@ -27,6 +29,7 @@ public struct OpenAICompatibleProvider: LLMProvider {
         self.readAPIKey = readAPIKey
         self.verboseLogging = verboseLogging
         self.parallelToolCalls = parallelToolCalls
+        self.behaviorFlags = behaviorFlags
         self.session = session
         self.conversationID = UUID().uuidString
     }
@@ -115,9 +118,10 @@ public struct OpenAICompatibleProvider: LLMProvider {
 
         // OpenAI deprecated `max_tokens` on Chat Completions; GPT-5.x and o-series
         // reject it outright and require `max_completion_tokens`. DeepSeek and the
-        // other OpenAI-compatible backends still only accept `max_tokens`, so we
-        // gate on the built-in OpenAI provider ID rather than the shared apiType.
-        let tokenLimitKey = provider.id == BuiltInProviders.ID.openai ? "max_completion_tokens" : "max_tokens"
+        // other OpenAI-compatible backends still only accept `max_tokens`. The
+        // bundled-defaults JSON marks affected OpenAI models with
+        // `useMaxCompletionTokens: true`; users can override per-model.
+        let tokenLimitKey = behaviorFlags.useMaxCompletionTokens ? "max_completion_tokens" : "max_tokens"
         var body: [String: Any] = [
             "model": configuration.model,
             tokenLimitKey: maxOutputTokensOverride ?? configuration.maxTokens,
@@ -219,8 +223,10 @@ public struct OpenAICompatibleProvider: LLMProvider {
     /// content because that's the only direction the poison flows: the model's
     /// previous turn left tokens in its `content` and replaying them in the next
     /// request would re-poison the conversation. User and tool-result content are
-    /// passed through verbatim. Idempotent on clean text.
+    /// passed through verbatim. Gated on the per-model `glmTemplateSalvage` flag —
+    /// non-GLM models always pass text through unchanged.
     private func sanitizeAssistantText(_ text: String, role: LLMMessage.Role) -> String {
+        guard behaviorFlags.glmTemplateSalvage else { return text }
         guard role == .assistant else { return text }
         guard GLMTemplateSalvage.contentLooksGLMTemplated(text) else { return text }
         return GLMTemplateSalvage.strip(text)
@@ -283,13 +289,13 @@ public struct OpenAICompatibleProvider: LLMProvider {
             }
         }
 
-        // GLM-4 / GLM-5 chat-template salvage. The same leakage pattern shows up
-        // regardless of which provider routes the request — z.ai direct, OpenRouter,
-        // any OpenAI-compatible adapter in front of GLM hosting — so we gate on
-        // content shape (presence of `<arg_key>` / `<tool_call>` / `<|...|>`) rather
-        // than `provider.apiType`. Idempotent on responses that don't carry those
-        // markers, so non-GLM traffic is unaffected.
-        if let raw = text, GLMTemplateSalvage.contentLooksGLMTemplated(raw) {
+        // GLM-4 / GLM-5 chat-template salvage. Gated on the per-model
+        // `glmTemplateSalvage` behavior flag so non-GLM traffic is *never* touched
+        // — even if a response somehow contains the markers. Bundled defaults JSON
+        // pre-flags known GLM hosts on every routing path (z.ai, OpenRouter, etc.).
+        // For an unknown GLM host the user opts in via per-model override.
+        if behaviorFlags.glmTemplateSalvage,
+           let raw = text, GLMTemplateSalvage.contentLooksGLMTemplated(raw) {
             if !toolCalls.isEmpty {
                 toolCalls = GLMTemplateSalvage.patchEmptyArgs(toolCalls, content: raw)
             }

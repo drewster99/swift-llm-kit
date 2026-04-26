@@ -106,6 +106,8 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
     public var pricing: ModelPricing?
     /// Override chat completions support.
     public var supportsChatCompletions: Bool?
+    /// Override per-(provider+model) runtime behavior flags. Per-flag, not all-or-nothing.
+    public var behaviorFlags: BehaviorFlagsOverride?
 
     public init(
         displayName: String? = nil,
@@ -113,7 +115,8 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
         maxOutputTokens: Int? = nil,
         capabilities: ModelCapabilitiesOverride? = nil,
         pricing: ModelPricing? = nil,
-        supportsChatCompletions: Bool? = nil
+        supportsChatCompletions: Bool? = nil,
+        behaviorFlags: BehaviorFlagsOverride? = nil
     ) {
         self.displayName = displayName
         self.maxInputTokens = maxInputTokens
@@ -121,6 +124,7 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
         self.capabilities = capabilities
         self.pricing = pricing
         self.supportsChatCompletions = supportsChatCompletions
+        self.behaviorFlags = behaviorFlags
     }
 
     /// Applies this override to a ``ModelInfo`` value.
@@ -153,6 +157,9 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
         }
         if let capOverride = capabilities {
             capOverride.apply(to: &model.capabilities, forceReplace: forceReplace)
+        }
+        if let flagsOverride = behaviorFlags {
+            flagsOverride.apply(to: &model.behaviorFlags, forceReplace: forceReplace)
         }
     }
 }

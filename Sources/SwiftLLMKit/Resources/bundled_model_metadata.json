@@ -1,5 +1,82 @@
 {
-    "version": 1,
-    "description": "App-bundled model metadata overrides. These fill gaps where provider APIs and LiteLLM data may be stale or incomplete. Keyed by providerAPIType/modelID.",
-    "entries": {}
+    "version": 2,
+    "description": "App-bundled model metadata overrides. Three lookup axes: `entries` (apiType/modelID), `providerEntries` (providerID/modelID), `providerDefaults` (providerID-wide). All gap-fill semantics — non-nil values fill nil/false slots, never downgrade.",
+
+    "entries": {
+        "zAI/glm-4-plus": {
+            "behaviorFlags": { "glmTemplateSalvage": true }
+        },
+        "zAI/glm-4-air": {
+            "behaviorFlags": { "glmTemplateSalvage": true }
+        },
+        "zAI/glm-4-airx": {
+            "behaviorFlags": { "glmTemplateSalvage": true }
+        },
+        "zAI/glm-4-flashx": {
+            "behaviorFlags": { "glmTemplateSalvage": true }
+        },
+        "zAI/glm-4-flash": {
+            "behaviorFlags": { "glmTemplateSalvage": true }
+        },
+        "zAI/glm-4.5": {
+            "behaviorFlags": { "glmTemplateSalvage": true }
+        },
+        "zAI/glm-4.5-air": {
+            "behaviorFlags": { "glmTemplateSalvage": true }
+        },
+        "zAI/glm-4.5v": {
+            "behaviorFlags": { "glmTemplateSalvage": true }
+        },
+        "zAI/glm-4.6": {
+            "behaviorFlags": { "glmTemplateSalvage": true }
+        },
+        "zAI/glm-5": {
+            "behaviorFlags": { "glmTemplateSalvage": true }
+        },
+        "zAI/glm-5-turbo": {
+            "behaviorFlags": { "glmTemplateSalvage": true }
+        },
+        "zAI/glm-5.1": {
+            "behaviorFlags": { "glmTemplateSalvage": true }
+        }
+    },
+
+    "providerEntries": {
+        "builtin.openrouter/zhipu/glm-4-plus": {
+            "behaviorFlags": { "glmTemplateSalvage": true }
+        },
+        "builtin.openrouter/zhipu/glm-4.5": {
+            "behaviorFlags": { "glmTemplateSalvage": true }
+        },
+        "builtin.openrouter/zhipu/glm-4.5-air": {
+            "behaviorFlags": { "glmTemplateSalvage": true }
+        },
+        "builtin.openrouter/zhipu/glm-4.6": {
+            "behaviorFlags": { "glmTemplateSalvage": true }
+        },
+        "builtin.openrouter/zhipu/glm-5": {
+            "behaviorFlags": { "glmTemplateSalvage": true }
+        },
+        "builtin.ollama-cloud/glm-4-plus": {
+            "behaviorFlags": { "glmTemplateSalvage": true }
+        },
+        "builtin.ollama-cloud/glm-4.5": {
+            "behaviorFlags": { "glmTemplateSalvage": true }
+        },
+        "builtin.ollama-cloud/glm-4.6": {
+            "behaviorFlags": { "glmTemplateSalvage": true }
+        },
+        "builtin.ollama-cloud/glm-5": {
+            "behaviorFlags": { "glmTemplateSalvage": true }
+        }
+    },
+
+    "providerDefaults": {
+        "builtin.openai": {
+            "behaviorFlags": { "useMaxCompletionTokens": true }
+        },
+        "builtin.mistral": {
+            "behaviorFlags": { "forceParallelToolCalls": true }
+        }
+    }
 }
