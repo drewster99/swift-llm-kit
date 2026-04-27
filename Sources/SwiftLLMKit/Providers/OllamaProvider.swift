@@ -83,10 +83,17 @@ public struct OllamaProvider: LLMProvider {
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         }
 
-        // Only normalize when no tools are in use — normalization converts tool results
-        // to user messages for backends that don't understand the "tool" role, but breaks
-        // the tool_call/tool_result pairing that Ollama requires when tools ARE defined.
-        let finalMessages = tools.isEmpty ? Self.normalizeMessages(messages) : messages
+        // Always normalize. `normalizeMessages` rewrites tool-role messages into
+        // user text and merges consecutive same-role messages. Earlier this was
+        // gated on `tools.isEmpty` out of fear it would break tool_call/tool_result
+        // pairing — but Ollama's `encodeMessage` doesn't put `tool_call_id` on the
+        // wire in the first place, so there's no pairing to break. Without the
+        // rewrite, gemma3:27b (whose chat template only knows user/assistant)
+        // returns HTTP 400 "Conversation roles must alternate user/assistant/..."
+        // every time a tool result lands in Smith's history. Models that DO
+        // natively support a tool role still receive the result content, just
+        // wrapped as user text with a "[Tool result for <id>]: ..." prefix.
+        let finalMessages = Self.normalizeMessages(messages)
         let body = buildRequestBody(messages: Self.extractSystemMessages(finalMessages), tools: tools, maxOutputTokensOverride: maxOutputTokensOverride)
         let requestData = try JSONSerialization.data(withJSONObject: body)
         request.httpBody = requestData
@@ -143,6 +150,20 @@ public struct OllamaProvider: LLMProvider {
         }
 
         return body
+    }
+
+    /// Test-only helper: returns the exact `messages` array OllamaProvider will
+    /// place in the /chat request body for a given conversation + tool list. Runs
+    /// the same normalization → encode pipeline as `send`, but without going
+    /// through URLSession. Lets role-alternation tests assert on the bytes the
+    /// gemma3 chat template ends up parsing.
+    func buildEncodedMessagesForTesting(
+        messages: [LLMMessage],
+        tools: [LLMToolDefinition]
+    ) -> [[String: Any]] {
+        let normalized = Self.normalizeMessages(messages)
+        let withSystemFront = Self.extractSystemMessages(normalized)
+        return withSystemFront.map(encodeMessage)
     }
 
     private func encodeMessage(_ message: LLMMessage) -> [String: Any] {
