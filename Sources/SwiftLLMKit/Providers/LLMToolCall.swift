@@ -1,7 +1,7 @@
 import Foundation
 
 /// Represents a tool invocation requested by the LLM.
-public struct LLMToolCall: Codable, Sendable {
+public struct LLMToolCall: Codable, Sendable, Equatable {
     public var id: String
     public var name: String
     /// Raw JSON string of the arguments.

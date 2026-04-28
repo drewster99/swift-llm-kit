@@ -1,7 +1,7 @@
 import Foundation
 
 /// Image data for multimodal LLM messages.
-public struct LLMImageContent: Sendable {
+public struct LLMImageContent: Sendable, Equatable {
     public var data: Data
     public var mimeType: String
 
@@ -12,7 +12,7 @@ public struct LLMImageContent: Sendable {
 }
 
 /// A single message in an LLM conversation.
-public struct LLMMessage: Codable, Sendable {
+public struct LLMMessage: Codable, Sendable, Equatable {
     public enum Role: String, Codable, Sendable {
         case system
         case user
@@ -20,7 +20,7 @@ public struct LLMMessage: Codable, Sendable {
         case tool
     }
 
-    public enum Content: Codable, Sendable {
+    public enum Content: Codable, Sendable, Equatable {
         case text(String)
         case toolCalls([LLMToolCall])
         /// Assistant returned both reasoning text and tool calls in one response.

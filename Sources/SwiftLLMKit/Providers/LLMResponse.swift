@@ -1,7 +1,7 @@
 import Foundation
 
 /// Token usage statistics returned by the provider after an LLM call.
-public struct TokenUsage: Sendable, Codable {
+public struct TokenUsage: Sendable, Codable, Equatable {
     /// Number of tokens in the input (prompt + context).
     public let inputTokens: Int
     /// Number of tokens generated in the output.
@@ -56,7 +56,7 @@ public struct TokenUsage: Sendable, Codable {
 }
 
 /// The response from an LLM call.
-public struct LLMResponse: Sendable {
+public struct LLMResponse: Sendable, Equatable {
     /// The text content of the response, if any.
     public let text: String?
     /// Tool calls requested by the model, if any.
