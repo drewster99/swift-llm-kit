@@ -158,6 +158,19 @@ public struct OpenAICompatibleProvider: LLMProvider {
             }
         }
 
+        // OpenRouter passes top-level `cache_control` through to Anthropic upstreams,
+        // matching the Anthropic Messages API's automatic-caching shape (covers system
+        // + tools + messages prefix). Detect by model lineage — OpenRouter's catalog
+        // prefixes Anthropic models with "anthropic/" (e.g. "anthropic/claude-haiku-4.5").
+        // Other upstreams ignore unknown top-level keys, but we gate it tightly anyway
+        // so we don't send fields a non-Anthropic provider might reject.
+        if provider.apiType == .openRouter,
+           configuration.model.lowercased().hasPrefix("anthropic/") {
+            body["cache_control"] = configuration.extendedCacheTTL
+                ? ["type": "ephemeral", "ttl": "1h"] as [String: Any]
+                : ["type": "ephemeral"] as [String: Any]
+        }
+
         return body
     }
 

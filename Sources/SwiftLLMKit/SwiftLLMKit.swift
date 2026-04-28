@@ -704,6 +704,15 @@ public final class LLMKitManager {
             let prepFlags = behaviorFlags(forProviderID: provider.id, modelID: config.modelID)
             let tokenLimitKey = prepFlags.useMaxCompletionTokens ? "max_completion_tokens" : "max_tokens"
             body[tokenLimitKey] = config.maxOutputTokens
+            // OpenRouter passes top-level cache_control through to Anthropic upstreams.
+            // Mirrors AnthropicProvider's automatic-caching shape; gated to OpenRouter +
+            // Anthropic-prefixed model IDs so other upstreams don't see unfamiliar fields.
+            if provider.apiType == .openRouter,
+               config.modelID.lowercased().hasPrefix("anthropic/") {
+                body["cache_control"] = config.extendedCacheTTL
+                    ? ["type": "ephemeral", "ttl": "1h"] as [String: Any]
+                    : ["type": "ephemeral"] as [String: Any]
+            }
         case .ollama:
             body["options"] = ["num_predict": config.maxOutputTokens] as [String: Any]
         case .gemini:
