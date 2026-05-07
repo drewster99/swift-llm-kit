@@ -18,7 +18,7 @@ public enum LLMRequestLogger {
     /// Lazily-created log directory. Uses `logDirectoryName` at first access.
     /// `static let` guarantees thread-safe one-time initialization.
     /// Set `logDirectoryName` before any provider sends a request.
-    static let logDirectory: URL = {
+    private static let logDirectory: URL = {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(logDirectoryName)
         do {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

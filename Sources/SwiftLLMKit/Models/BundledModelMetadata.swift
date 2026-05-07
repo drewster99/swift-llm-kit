@@ -26,13 +26,13 @@ private let logger = Logger(subsystem: "SwiftLLMKit", category: "BundledMetadata
 ///      model from a given built-in provider. Used when a provider-wide trait
 ///      holds (e.g. all `builtin.openai` models accept `max_completion_tokens`).
 ///      Per-model entries can override.
-public struct BundledModelMetadataRegistry: Sendable {
+struct BundledModelMetadataRegistry: Sendable {
     /// Per-(apiType, modelID) overrides.
-    public let entries: [String: ModelMetadataOverride]
+    let entries: [String: ModelMetadataOverride]
     /// Per-(providerID, modelID) overrides — pinpoints a single built-in provider.
-    public let providerEntries: [String: ModelMetadataOverride]
+    let providerEntries: [String: ModelMetadataOverride]
     /// Per-providerID defaults — applies to every model from that provider.
-    public let providerDefaults: [String: ModelMetadataOverride]
+    let providerDefaults: [String: ModelMetadataOverride]
 
     /// Loads the bundled metadata from the package's resource bundle.
     /// Returns an empty registry if the resource is missing or malformed.

@@ -325,10 +325,10 @@ public func formatCostPerMillion(_ cost: Double) -> String {
 // MARK: - Errors
 
 /// Errors from model list fetching.
-public enum ModelFetchError: Error, LocalizedError {
+private enum ModelFetchError: Error, LocalizedError {
     case httpError(statusCode: Int)
 
-    public var errorDescription: String? {
+    var errorDescription: String? {
         switch self {
         case .httpError(let code):
             return "Server returned HTTP \(code). Check the endpoint URL and API key."

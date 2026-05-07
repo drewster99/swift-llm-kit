@@ -466,11 +466,11 @@ public struct LiteLLMEntry: Sendable {
 }
 
 /// Errors from the metadata service.
-public enum ModelMetadataError: Error, LocalizedError {
+private enum ModelMetadataError: Error, LocalizedError {
     case invalidResponse
     case httpError(statusCode: Int)
 
-    public var errorDescription: String? {
+    var errorDescription: String? {
         switch self {
         case .invalidResponse:
             return "Invalid HTTP response from LiteLLM metadata server"

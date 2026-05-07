@@ -13,7 +13,7 @@ private let logger = Logger(subsystem: "SwiftLLMKit", category: "Keychain")
 /// Keys are cached in RAM after the first successful Keychain read to avoid
 /// transient Keychain access failures (contention, lock-screen delays) that
 /// would otherwise produce empty API keys and downstream 401 errors.
-public struct KeychainService: Sendable {
+struct KeychainService: Sendable {
     private let service: String
 
     /// In-memory cache of API keys, keyed by provider ID. Protected by a lock
@@ -208,7 +208,7 @@ public struct KeychainService: Sendable {
 ///
 /// Uses `NSLock` for synchronization since accesses are brief and non-blocking.
 /// Shared by reference across `KeychainService` value copies.
-final class APIKeyCache: Sendable {
+private final class APIKeyCache: Sendable {
     private let lock = NSLock()
     private nonisolated(unsafe) var store: [String: String] = [:]
 
@@ -238,12 +238,12 @@ final class APIKeyCache: Sendable {
 }
 
 /// Errors from Keychain operations.
-public enum KeychainError: Error, LocalizedError {
+private enum KeychainError: Error, LocalizedError {
     case encodingFailed
     case saveFailed(status: OSStatus)
     case deleteFailed(status: OSStatus)
 
-    public var errorDescription: String? {
+    var errorDescription: String? {
         switch self {
         case .encodingFailed:
             return "Failed to encode API key as UTF-8"

@@ -4,7 +4,7 @@ import os
 private let logger = Logger(subsystem: "SwiftLLMKit", category: "Anthropic")
 
 /// LLM provider for the Anthropic Messages API.
-public struct AnthropicProvider: LLMProvider {
+struct AnthropicProvider: LLMProvider {
     private let configuration: ModelConfiguration
     private let provider: ModelProvider
     private let readAPIKey: @Sendable () -> String

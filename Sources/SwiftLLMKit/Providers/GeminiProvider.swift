@@ -13,7 +13,7 @@ private let logger = Logger(subsystem: "SwiftLLMKit", category: "Gemini")
 /// - Tool calls are `functionCall` parts; results are `functionResponse` parts
 /// - Auth via `x-goog-api-key` header so the key never appears in the URL
 ///   (request logs capture URLs but not headers, so this keeps keys out of logs)
-public struct GeminiProvider: LLMProvider {
+struct GeminiProvider: LLMProvider {
     private let configuration: ModelConfiguration
     private let provider: ModelProvider
     private let readAPIKey: @Sendable () -> String

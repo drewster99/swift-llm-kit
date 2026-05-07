@@ -13,7 +13,7 @@ private let logger = Logger(subsystem: "SwiftLLMKit", category: "Ollama")
 /// - Tool calls have no `id` — synthetic UUIDs are generated
 /// - Tool results omit `tool_call_id`
 /// - Images are passed as a base64 array rather than content parts
-public struct OllamaProvider: LLMProvider {
+struct OllamaProvider: LLMProvider {
     private let configuration: ModelConfiguration
     private let provider: ModelProvider
     private let readAPIKey: @Sendable () -> String

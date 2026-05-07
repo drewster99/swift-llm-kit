@@ -4,7 +4,7 @@ import os
 private let logger = Logger(subsystem: "SwiftLLMKit", category: "OpenAI")
 
 /// LLM provider for OpenAI-compatible APIs (OpenAI, Ollama, LM Studio, vLLM).
-public struct OpenAICompatibleProvider: LLMProvider {
+struct OpenAICompatibleProvider: LLMProvider {
     private let configuration: ModelConfiguration
     private let provider: ModelProvider
     private let readAPIKey: @Sendable () -> String

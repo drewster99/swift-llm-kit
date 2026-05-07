@@ -968,14 +968,14 @@ public final class LLMKitManager {
 }
 
 /// Errors thrown by SwiftLLMKit operations.
-public enum SwiftLLMKitError: Error, LocalizedError {
+private enum SwiftLLMKitError: Error, LocalizedError {
     case providerInUse(providerID: String, configNames: String)
     case configurationNotFound(id: UUID)
     case providerNotFound(id: String)
     case providerIsBuiltIn(id: String)
     case notABuiltInProvider(id: String)
 
-    public var errorDescription: String? {
+    var errorDescription: String? {
         switch self {
         case .providerInUse(_, let names):
             return "Cannot delete provider — it is referenced by configurations: \(names)"
