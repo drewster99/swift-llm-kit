@@ -107,6 +107,11 @@ struct AnthropicProvider: LLMProvider {
             "model": configuration.model,
             "max_tokens": effectiveMaxTokens,
             "messages": encodedMessages,
+            // Top-level cache_control is non-standard for the direct Anthropic API
+            // (the documented placement is on individual content blocks), but kept
+            // here for the OpenRouter pass-through path that mirrors this body.
+            // Direct Anthropic calls actually cache via the per-block breakpoints
+            // applied to `system` and the last tool definition below.
             "cache_control": configuration.extendedCacheTTL
                 ? ["type": "ephemeral", "ttl": "1h"] as [String: Any]
                 : ["type": "ephemeral"] as [String: Any]
@@ -117,8 +122,26 @@ struct AnthropicProvider: LLMProvider {
             body["temperature"] = thinkingEnabled ? 1.0 : configuration.temperature
         }
 
+        // Per-block cache_control breakpoint payload, reused for the system block
+        // and the last tool definition. Anthropic looks for the longest matching
+        // cached prefix on each request, so marking the stable system prompt and
+        // the tool schema turns Brown's ~10–15K-token prefix into a cache hit on
+        // every turn after the first.
+        let cacheControl: [String: Any] = configuration.extendedCacheTTL
+            ? ["type": "ephemeral", "ttl": "1h"]
+            : ["type": "ephemeral"]
+
         if let systemPrompt {
-            body["system"] = systemPrompt
+            // Encode `system` as a single text content block with cache_control,
+            // not the legacy plain-string form. Both are accepted by the Messages
+            // API; the array form is what carries the breakpoint.
+            body["system"] = [
+                [
+                    "type": "text",
+                    "text": systemPrompt,
+                    "cache_control": cacheControl
+                ] as [String: Any]
+            ]
         }
 
         if thinkingEnabled, let budget = configuration.thinkingBudget {
@@ -129,13 +152,20 @@ struct AnthropicProvider: LLMProvider {
         }
 
         if !tools.isEmpty {
-            body["tools"] = tools.map { tool in
+            // Emit each tool, then attach cache_control to the LAST tool only.
+            // Anthropic caches the full tools-array prefix at that breakpoint,
+            // so a single mark covers every tool definition above it.
+            var toolsArray: [[String: Any]] = tools.map { tool in
                 [
                     "name": tool.name,
                     "description": tool.description,
                     "input_schema": tool.parameters.mapValues(\.rawValue)
                 ] as [String: Any]
             }
+            if !toolsArray.isEmpty {
+                toolsArray[toolsArray.count - 1]["cache_control"] = cacheControl
+            }
+            body["tools"] = toolsArray
         }
 
         return body
