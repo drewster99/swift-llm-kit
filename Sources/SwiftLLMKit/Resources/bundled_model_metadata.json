@@ -38,6 +38,10 @@
         },
         "zAI/glm-5.1": {
             "behaviorFlags": { "glmTemplateSalvage": true }
+        },
+
+        "openAICompatible/deepseek-v4-pro": {
+            "behaviorFlags": { "replayReasoningContent": true }
         }
     },
 

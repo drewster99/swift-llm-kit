@@ -174,7 +174,7 @@ struct OpenAICompatibleProvider: LLMProvider {
         return body
     }
 
-    private func encodeMessage(_ message: LLMMessage) -> [String: Any] {
+    func encodeMessage(_ message: LLMMessage) -> [String: Any] {
         var result: [String: Any] = ["role": message.role.rawValue]
 
         switch message.content {
@@ -226,6 +226,18 @@ struct OpenAICompatibleProvider: LLMProvider {
             // chat-template syntax (e.g. a file_read of a chat-template file or a
             // grep through model-prompt files). Pass through unchanged.
             result["content"] = content
+        }
+
+        // Replay reasoning_content for thinking models that require it (DeepSeek
+        // V4 Pro). Gated on the per-model `replayReasoningContent` flag because
+        // other reasoning models reject this field on replay (e.g. deepseek-reasoner).
+        // Only meaningful on assistant turns — `tool` (the rewritten toolResult role)
+        // and `user`/`system` never carry reasoning.
+        if behaviorFlags.replayReasoningContent,
+           message.role == .assistant,
+           let reasoning = message.reasoning,
+           !reasoning.isEmpty {
+            result["reasoning_content"] = reasoning
         }
 
         return result

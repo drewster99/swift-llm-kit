@@ -46,6 +46,22 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
     /// affected models so the hardcoded apiType check can retire.
     public var forceParallelToolCalls: Bool = false
 
+    /// Replay each assistant message's `reasoning_content` on subsequent
+    /// chat-completions requests.
+    ///
+    /// Required by some "thinking" / reasoning models that fail with HTTP 400
+    /// "The `reasoning_content` in the thinking mode must be passed back to the
+    /// API." (observed on DeepSeek V4 Pro). The provider captures
+    /// `reasoning_content` from the response and stores it on the assistant
+    /// `LLMMessage`; when this flag is true, the encoder emits it back as a
+    /// `reasoning_content` field on the outgoing message.
+    ///
+    /// Opt-in per model because the same field is *rejected* by other thinking
+    /// models (e.g. `deepseek-reasoner`'s docs explicitly say to discard
+    /// `reasoning_content` before the next round). When false, reasoning is
+    /// captured but never sent — safe default.
+    public var replayReasoningContent: Bool = false
+
     /// Free-form key/value bag for one-off provider tweaks that haven't earned
     /// a typed field yet. Promoted fields must always have a Codable default
     /// so older persisted state still decodes cleanly.
@@ -58,11 +74,13 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         glmTemplateSalvage: Bool = false,
         useMaxCompletionTokens: Bool = false,
         forceParallelToolCalls: Bool = false,
+        replayReasoningContent: Bool = false,
         extras: [String: String] = [:]
     ) {
         self.glmTemplateSalvage = glmTemplateSalvage
         self.useMaxCompletionTokens = useMaxCompletionTokens
         self.forceParallelToolCalls = forceParallelToolCalls
+        self.replayReasoningContent = replayReasoningContent
         self.extras = extras
     }
 
@@ -72,6 +90,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         !glmTemplateSalvage
             && !useMaxCompletionTokens
             && !forceParallelToolCalls
+            && !replayReasoningContent
             && extras.isEmpty
     }
 
@@ -83,6 +102,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         if glmTemplateSalvage { out.append("GLM salvage") }
         if useMaxCompletionTokens { out.append("max_completion_tokens") }
         if forceParallelToolCalls { out.append("parallel tools") }
+        if replayReasoningContent { out.append("replay reasoning") }
         for key in extras.keys.sorted() {
             out.append("*\(key)")
         }
@@ -92,7 +112,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
     // MARK: - Codable (backward-compatible)
 
     private enum CodingKeys: String, CodingKey {
-        case glmTemplateSalvage, useMaxCompletionTokens, forceParallelToolCalls, extras
+        case glmTemplateSalvage, useMaxCompletionTokens, forceParallelToolCalls, replayReasoningContent, extras
     }
 
     public init(from decoder: Decoder) throws {
@@ -100,6 +120,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         glmTemplateSalvage = try c.decodeIfPresent(Bool.self, forKey: .glmTemplateSalvage) ?? false
         useMaxCompletionTokens = try c.decodeIfPresent(Bool.self, forKey: .useMaxCompletionTokens) ?? false
         forceParallelToolCalls = try c.decodeIfPresent(Bool.self, forKey: .forceParallelToolCalls) ?? false
+        replayReasoningContent = try c.decodeIfPresent(Bool.self, forKey: .replayReasoningContent) ?? false
         extras = try c.decodeIfPresent([String: String].self, forKey: .extras) ?? [:]
     }
 
@@ -110,6 +131,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         if glmTemplateSalvage { try c.encode(glmTemplateSalvage, forKey: .glmTemplateSalvage) }
         if useMaxCompletionTokens { try c.encode(useMaxCompletionTokens, forKey: .useMaxCompletionTokens) }
         if forceParallelToolCalls { try c.encode(forceParallelToolCalls, forKey: .forceParallelToolCalls) }
+        if replayReasoningContent { try c.encode(replayReasoningContent, forKey: .replayReasoningContent) }
         if !extras.isEmpty { try c.encode(extras, forKey: .extras) }
     }
 }
@@ -126,17 +148,20 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
     public var glmTemplateSalvage: Bool?
     public var useMaxCompletionTokens: Bool?
     public var forceParallelToolCalls: Bool?
+    public var replayReasoningContent: Bool?
     public var extras: [String: String]?
 
     public init(
         glmTemplateSalvage: Bool? = nil,
         useMaxCompletionTokens: Bool? = nil,
         forceParallelToolCalls: Bool? = nil,
+        replayReasoningContent: Bool? = nil,
         extras: [String: String]? = nil
     ) {
         self.glmTemplateSalvage = glmTemplateSalvage
         self.useMaxCompletionTokens = useMaxCompletionTokens
         self.forceParallelToolCalls = forceParallelToolCalls
+        self.replayReasoningContent = replayReasoningContent
         self.extras = extras
     }
 
@@ -144,6 +169,7 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
         if let v = glmTemplateSalvage, (forceReplace || v) { flags.glmTemplateSalvage = v }
         if let v = useMaxCompletionTokens, (forceReplace || v) { flags.useMaxCompletionTokens = v }
         if let v = forceParallelToolCalls, (forceReplace || v) { flags.forceParallelToolCalls = v }
+        if let v = replayReasoningContent, (forceReplace || v) { flags.replayReasoningContent = v }
         if let extrasPatch = extras {
             if forceReplace {
                 flags.extras = extrasPatch
@@ -161,6 +187,7 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
         glmTemplateSalvage == nil
             && useMaxCompletionTokens == nil
             && forceParallelToolCalls == nil
+            && replayReasoningContent == nil
             && (extras?.isEmpty ?? true)
     }
 }

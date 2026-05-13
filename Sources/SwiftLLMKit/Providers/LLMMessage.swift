@@ -92,28 +92,40 @@ public struct LLMMessage: Codable, Sendable, Equatable {
     public var content: Content
     /// Image/media data for multimodal messages. Not included in Codable.
     public var images: [LLMImageContent]?
+    /// Reasoning / thinking content the model produced for this turn, if any.
+    /// Captured from `reasoning_content` (OpenAI-compatible) or `thinking`
+    /// blocks (Anthropic). Whether it's emitted back on the next request is
+    /// per-provider: gated on `BehaviorFlags.replayReasoningContent` for
+    /// OpenAI-compatible providers; not yet round-tripped by Anthropic
+    /// (would also require carrying the thinking-block signature).
+    public var reasoning: String?
 
     private enum CodingKeys: String, CodingKey {
-        case role, content
+        case role, content, reasoning
     }
 
-    public init(role: Role, content: Content, images: [LLMImageContent]? = nil) {
+    public init(role: Role, content: Content, images: [LLMImageContent]? = nil, reasoning: String? = nil) {
         self.role = role
         self.content = content
         self.images = images
+        self.reasoning = reasoning
     }
 
     /// Convenience initializer for simple text messages.
-    public init(role: Role, text: String, images: [LLMImageContent]? = nil) {
+    public init(role: Role, text: String, images: [LLMImageContent]? = nil, reasoning: String? = nil) {
         self.role = role
         self.content = .text(text)
         self.images = images
+        self.reasoning = reasoning
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(role, forKey: .role)
         try container.encode(content, forKey: .content)
+        if let reasoning {
+            try container.encode(reasoning, forKey: .reasoning)
+        }
     }
 
     public init(from decoder: Decoder) throws {
@@ -121,21 +133,28 @@ public struct LLMMessage: Codable, Sendable, Equatable {
         role = try container.decode(Role.self, forKey: .role)
         content = try container.decode(Content.self, forKey: .content)
         images = nil
+        reasoning = try container.decodeIfPresent(String.self, forKey: .reasoning)
     }
 
     /// Rough character count for context window estimation (~3 chars per token).
     public var estimatedCharacterCount: Int {
         // Each image is roughly 1000 tokens worth
         let imageChars = (images?.count ?? 0) * 3000
+        // Reasoning is sent over the wire when `BehaviorFlags.replayReasoningContent`
+        // is set, so it counts against the model's input budget. Always include it
+        // in the estimate — the cost of overshooting on an unflagged model (no
+        // reasoning emitted, slight over-estimate) is much less than the cost of
+        // under-estimating on a flagged one (silent prune underfire).
+        let reasoningChars = reasoning?.count ?? 0
         switch content {
         case .text(let s):
-            return s.count + imageChars
+            return s.count + imageChars + reasoningChars
         case .toolCalls(let calls):
-            return calls.reduce(0) { $0 + $1.name.count + $1.arguments.count + 20 } + imageChars
+            return calls.reduce(0) { $0 + $1.name.count + $1.arguments.count + 20 } + imageChars + reasoningChars
         case .mixed(let text, let calls):
-            return text.count + calls.reduce(0) { $0 + $1.name.count + $1.arguments.count + 20 } + imageChars
+            return text.count + calls.reduce(0) { $0 + $1.name.count + $1.arguments.count + 20 } + imageChars + reasoningChars
         case .toolResult(let toolCallID, let content):
-            return toolCallID.count + content.count + 20 + imageChars
+            return toolCallID.count + content.count + 20 + imageChars + reasoningChars
         }
     }
 }
