@@ -55,7 +55,9 @@ struct GeminiProvider: LLMProvider {
         }
 
         let body = try buildRequestBody(messages: messages, tools: tools, maxOutputTokensOverride: maxOutputTokensOverride)
-        let requestData = try JSONSerialization.data(withJSONObject: body)
+        // .sortedKeys keeps wire bytes stable across requests for any
+        // downstream prefix-caching the provider applies.
+        let requestData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         request.httpBody = requestData
 
         logger.debug("Request: POST \(url.absoluteString, privacy: .public) model=\(configuration.model, privacy: .public)")

@@ -39,7 +39,9 @@ struct AnthropicProvider: LLMProvider {
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
 
         let body = try buildRequestBody(messages: messages, tools: tools, maxOutputTokensOverride: maxOutputTokensOverride)
-        let requestData = try JSONSerialization.data(withJSONObject: body)
+        // .sortedKeys keeps wire bytes stable across requests so Anthropic's
+        // prompt cache (which is byte-prefix matched) keeps hitting.
+        let requestData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         request.httpBody = requestData
 
         logger.debug("Request: POST \(url.absoluteString, privacy: .public) model=\(configuration.model, privacy: .public)")

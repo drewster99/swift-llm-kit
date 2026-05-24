@@ -95,7 +95,9 @@ struct OllamaProvider: LLMProvider {
         // wrapped as user text with a "[Tool result for <id>]: ..." prefix.
         let finalMessages = Self.normalizeMessages(messages)
         let body = buildRequestBody(messages: Self.extractSystemMessages(finalMessages), tools: tools, maxOutputTokensOverride: maxOutputTokensOverride)
-        let requestData = try JSONSerialization.data(withJSONObject: body)
+        // .sortedKeys keeps wire bytes stable across requests for any
+        // downstream prefix-caching the model applies.
+        let requestData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         request.httpBody = requestData
 
         logger.debug("Request: POST \(url.absoluteString, privacy: .public) model=\(configuration.model, privacy: .public)")

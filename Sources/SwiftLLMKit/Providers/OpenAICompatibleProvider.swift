@@ -66,7 +66,9 @@ struct OpenAICompatibleProvider: LLMProvider {
         }
 
         let body = buildRequestBody(messages: messages, tools: tools, maxOutputTokensOverride: maxOutputTokensOverride)
-        let requestData = try JSONSerialization.data(withJSONObject: body)
+        // .sortedKeys keeps wire bytes stable across requests so OpenAI's
+        // automatic prefix cache (>=1024-token prefix match) keeps hitting.
+        let requestData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         request.httpBody = requestData
 
         logger.debug("Request: POST \(url.absoluteString, privacy: .public) model=\(configuration.model, privacy: .public)")
