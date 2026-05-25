@@ -85,7 +85,7 @@ struct GeminiProvider: LLMProvider {
 
     // MARK: - Request building
 
-    private func buildRequestBody(
+    func buildRequestBody(
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
         maxOutputTokensOverride: Int? = nil
@@ -137,6 +137,14 @@ struct GeminiProvider: LLMProvider {
                     "mode": "AUTO"
                 ]
             ] as [String: Any]
+        }
+
+        // Apply caller-provided top-level overrides last so they win over any
+        // defaults this method set.
+        if let overrides = configuration.extraJSONOverrides {
+            for (key, value) in overrides {
+                body[key] = value.rawValue
+            }
         }
 
         return body

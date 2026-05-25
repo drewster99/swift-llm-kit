@@ -67,7 +67,7 @@ struct AnthropicProvider: LLMProvider {
         return try parseResponse(data: data)
     }
 
-    private func buildRequestBody(
+    func buildRequestBody(
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
         maxOutputTokensOverride: Int? = nil
@@ -168,6 +168,14 @@ struct AnthropicProvider: LLMProvider {
                 toolsArray[toolsArray.count - 1]["cache_control"] = cacheControl
             }
             body["tools"] = toolsArray
+        }
+
+        // Apply caller-provided top-level overrides last so they win over any
+        // defaults this method set (e.g. temperature, cache_control, thinking).
+        if let overrides = configuration.extraJSONOverrides {
+            for (key, value) in overrides {
+                body[key] = value.rawValue
+            }
         }
 
         return body

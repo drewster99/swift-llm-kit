@@ -32,6 +32,12 @@ public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
     public var isValid: Bool
     /// Human-readable reason the configuration is invalid, if any.
     public var validationError: String?
+    /// Free-form key/value pairs merged into the outbound provider request body
+    /// at top level (overriding defaults built by the provider). Useful for
+    /// reaching provider-specific knobs the typed API doesn't model yet
+    /// (e.g. Anthropic `thinking`, OpenAI `reasoning_effort`, Gemini
+    /// `safetySettings`, structured-output schemas).
+    public var extraJSONOverrides: [String: AnyCodable]?
 
     public init(
         id: UUID = UUID(),
@@ -46,7 +52,8 @@ public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
         useDefaultTemperature: Bool = false,
         streaming: Bool = true,
         isValid: Bool = true,
-        validationError: String? = nil
+        validationError: String? = nil,
+        extraJSONOverrides: [String: AnyCodable]? = nil
     ) {
         self.id = id
         self.name = name
@@ -61,9 +68,11 @@ public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
         self.streaming = streaming
         self.isValid = isValid
         self.validationError = validationError
+        self.extraJSONOverrides = extraJSONOverrides
     }
 
-    /// Backward-compatible decoder: old JSON without `extendedCacheTTL` defaults to `false`.
+    /// Backward-compatible decoder: old JSON without `extendedCacheTTL` or
+    /// `extraJSONOverrides` keys still loads cleanly.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
@@ -79,6 +88,7 @@ public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
         streaming = try container.decode(Bool.self, forKey: .streaming)
         isValid = try container.decode(Bool.self, forKey: .isValid)
         validationError = try container.decodeIfPresent(String.self, forKey: .validationError)
+        extraJSONOverrides = try container.decodeIfPresent([String: AnyCodable].self, forKey: .extraJSONOverrides)
     }
 }
 

@@ -94,7 +94,7 @@ struct OpenAICompatibleProvider: LLMProvider {
         return try parseResponse(data: data)
     }
 
-    private func buildRequestBody(
+    func buildRequestBody(
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
         maxOutputTokensOverride: Int? = nil
@@ -171,6 +171,14 @@ struct OpenAICompatibleProvider: LLMProvider {
             body["cache_control"] = configuration.extendedCacheTTL
                 ? ["type": "ephemeral", "ttl": "1h"] as [String: Any]
                 : ["type": "ephemeral"] as [String: Any]
+        }
+
+        // Apply caller-provided top-level overrides last so they win over any
+        // defaults this method set.
+        if let overrides = configuration.extraJSONOverrides {
+            for (key, value) in overrides {
+                body[key] = value.rawValue
+            }
         }
 
         return body

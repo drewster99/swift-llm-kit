@@ -123,7 +123,7 @@ struct OllamaProvider: LLMProvider {
         return try parseResponse(data: data)
     }
 
-    private func buildRequestBody(
+    func buildRequestBody(
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
         maxOutputTokensOverride: Int? = nil
@@ -148,6 +148,14 @@ struct OllamaProvider: LLMProvider {
                         "parameters": tool.parameters.mapValues(\.rawValue)
                     ] as [String: Any]
                 ] as [String: Any]
+            }
+        }
+
+        // Apply caller-provided top-level overrides last so they win over any
+        // defaults this method set.
+        if let overrides = configuration.extraJSONOverrides {
+            for (key, value) in overrides {
+                body[key] = value.rawValue
             }
         }
 
