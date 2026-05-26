@@ -34,20 +34,42 @@ struct KeychainService: Sendable {
     ///
     /// Invalidates the in-memory cache for this provider so subsequent reads
     /// pick up the new key.
+    ///
+    /// **Keychain fallback:** the Data Protection Keychain (DPK) requires the
+    /// process to be code-signed with a `keychain-access-groups` entitlement.
+    /// GUI apps built via Xcode get this for free; unsigned/ad-hoc-signed CLI
+    /// binaries built via Swift Package Manager don't. When DPK returns
+    /// `errSecMissingEntitlement` we transparently fall back to the legacy
+    /// (login) keychain so CLI tools work out of the box. Read path
+    /// (`apiKey(forProviderID:)`) already prefers DPK and falls back to legacy.
     /// - Throws: `KeychainError` if the operation fails.
     public func save(apiKey: String, forProviderID providerID: String) throws {
         guard let data = apiKey.data(using: .utf8) else {
             throw KeychainError.encodingFailed
         }
 
+        do {
+            try saveImpl(data: data, providerID: providerID, useDataProtection: true)
+        } catch KeychainError.saveFailed(let status) where status == errSecMissingEntitlement {
+            logger.info("DPK save rejected with missing-entitlement; falling back to legacy keychain for provider \(providerID, privacy: .public)")
+            try saveImpl(data: data, providerID: providerID, useDataProtection: false)
+        }
+
+        // Update the cache with the new key so subsequent reads are immediate.
+        cache.set(apiKey, forProviderID: providerID)
+    }
+
+    /// Inner save that targets either DPK or legacy based on `useDataProtection`.
+    /// Splits the update-first-then-add logic so the outer `save` can retry on
+    /// fallback without duplicating it.
+    private func saveImpl(data: Data, providerID: String, useDataProtection: Bool) throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: providerID,
-            kSecUseDataProtectionKeychain as String: true
+            kSecUseDataProtectionKeychain as String: useDataProtection
         ]
 
-        // Try to update first — also set accessibility so existing items are migrated.
         let updateAttributes: [String: Any] = [
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
@@ -56,7 +78,6 @@ struct KeychainService: Sendable {
         let updateStatus = SecItemUpdate(query as CFDictionary, updateAttributes as CFDictionary)
 
         if updateStatus == errSecItemNotFound {
-            // Item doesn't exist yet — add it
             var addQuery = query
             addQuery[kSecValueData as String] = data
             addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
@@ -67,9 +88,6 @@ struct KeychainService: Sendable {
         } else if updateStatus != errSecSuccess {
             throw KeychainError.saveFailed(status: updateStatus)
         }
-
-        // Update the cache with the new key so subsequent reads are immediate.
-        cache.set(apiKey, forProviderID: providerID)
     }
 
     /// Retrieves the API key for the given provider, or `nil` if not stored.
@@ -181,21 +199,34 @@ struct KeychainService: Sendable {
     }
 
     /// Deletes the API key for the given provider.
-    /// - Throws: `KeychainError` if deletion fails (not found is not an error).
+    ///
+    /// Deletes from BOTH the Data Protection Keychain and the legacy keychain
+    /// so a key that was saved via the fallback path doesn't linger after a
+    /// later deletion attempt. Missing items are not an error in either store.
+    /// - Throws: `KeychainError` if a non-fallback delete fails.
     public func delete(forProviderID providerID: String) throws {
+        try deleteImpl(providerID: providerID, useDataProtection: true)
+        try deleteImpl(providerID: providerID, useDataProtection: false)
+        cache.remove(forProviderID: providerID)
+    }
+
+    private func deleteImpl(providerID: String, useDataProtection: Bool) throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: providerID,
-            kSecUseDataProtectionKeychain as String: true
+            kSecUseDataProtectionKeychain as String: useDataProtection
         ]
-
         let status = SecItemDelete(query as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else {
+        // errSecItemNotFound: nothing to delete in this store — fine.
+        // errSecMissingEntitlement: this binary can't access this store — fine,
+        //   the entry can't be there anyway and the matching `save` would have
+        //   fallen back to the other store.
+        guard status == errSecSuccess
+                || status == errSecItemNotFound
+                || status == errSecMissingEntitlement else {
             throw KeychainError.deleteFailed(status: status)
         }
-
-        cache.remove(forProviderID: providerID)
     }
 
     /// Drops all cached API keys, forcing the next read to go to Keychain.
