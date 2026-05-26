@@ -4,9 +4,23 @@ import Foundation
 public struct TokenUsage: Sendable, Codable, Equatable {
     /// Number of tokens in the input (prompt + context).
     public let inputTokens: Int
-    /// Number of tokens generated in the output.
+    /// Number of tokens generated in the user-visible output.
+    ///
+    /// **Anthropic note:** Anthropic does not report thinking tokens separately —
+    /// they're folded into this count when extended thinking is enabled. For
+    /// Anthropic, `outputTokens` already includes any reasoning, and
+    /// `reasoningTokens` stays 0.
     public let outputTokens: Int
-    /// Anthropic: tokens served from prompt cache (cheaper than uncached input). 0 for other providers.
+    /// Internal "thinking" / reasoning tokens consumed by the model. These are
+    /// billed but not part of the user-visible output text.
+    ///   - OpenAI (o-series, GPT-5 reasoning): `completion_tokens_details.reasoning_tokens`
+    ///   - Gemini 2.5+ with thinking: `usageMetadata.thoughtsTokenCount`
+    ///   - Anthropic: folded into `outputTokens` (stays 0 here)
+    ///   - Other providers: 0
+    public let reasoningTokens: Int
+    /// Anthropic: tokens served from prompt cache (cheaper than uncached input).
+    /// OpenAI: `prompt_tokens_details.cached_tokens`.
+    /// Gemini: `usageMetadata.cachedContentTokenCount`.
     public let cacheReadTokens: Int
     /// Anthropic: tokens written to prompt cache this request. 0 for other providers.
     public let cacheWriteTokens: Int
@@ -24,15 +38,33 @@ public struct TokenUsage: Sendable, Codable, Equatable {
     public init(
         inputTokens: Int,
         outputTokens: Int,
+        reasoningTokens: Int = 0,
         cacheReadTokens: Int = 0,
         cacheWriteTokens: Int = 0,
         rawUsage: String? = nil
     ) {
         self.inputTokens = inputTokens
         self.outputTokens = outputTokens
+        self.reasoningTokens = reasoningTokens
         self.cacheReadTokens = cacheReadTokens
         self.cacheWriteTokens = cacheWriteTokens
         self.rawUsage = rawUsage
+    }
+
+    /// Backward-compatible decoder: legacy JSON without `reasoningTokens`
+    /// defaults to 0.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.inputTokens = try c.decode(Int.self, forKey: .inputTokens)
+        self.outputTokens = try c.decode(Int.self, forKey: .outputTokens)
+        self.reasoningTokens = try c.decodeIfPresent(Int.self, forKey: .reasoningTokens) ?? 0
+        self.cacheReadTokens = try c.decode(Int.self, forKey: .cacheReadTokens)
+        self.cacheWriteTokens = try c.decode(Int.self, forKey: .cacheWriteTokens)
+        self.rawUsage = try c.decodeIfPresent(String.self, forKey: .rawUsage)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case inputTokens, outputTokens, reasoningTokens, cacheReadTokens, cacheWriteTokens, rawUsage
     }
 
     /// Serializes a provider's raw usage dictionary to a compact JSON string

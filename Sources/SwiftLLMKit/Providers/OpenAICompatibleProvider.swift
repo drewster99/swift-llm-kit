@@ -347,15 +347,23 @@ struct OpenAICompatibleProvider: LLMProvider {
             if let details = usage["prompt_tokens_details"] as? [String: Any] {
                 cacheRead = details["cached_tokens"] as? Int ?? 0
             }
+            var reasoning = 0
+            if let details = usage["completion_tokens_details"] as? [String: Any] {
+                reasoning = details["reasoning_tokens"] as? Int ?? 0
+            }
             let rawUsage = TokenUsage.serializeRawUsage(usage)
             tokenUsage = TokenUsage(
                 inputTokens: input,
                 outputTokens: output,
+                reasoningTokens: reasoning,
                 cacheReadTokens: cacheRead,
                 rawUsage: rawUsage
             )
             if cacheRead > 0 {
                 logger.info("Cache: read=\(cacheRead) uncached=\(input - cacheRead)")
+            }
+            if reasoning > 0 {
+                logger.info("Reasoning tokens: \(reasoning)")
             }
         }
 

@@ -291,15 +291,20 @@ struct GeminiProvider: LLMProvider {
             let input = usageMeta["promptTokenCount"] as? Int ?? 0
             let output = usageMeta["candidatesTokenCount"] as? Int ?? 0
             let cacheRead = usageMeta["cachedContentTokenCount"] as? Int ?? 0
+            let reasoning = usageMeta["thoughtsTokenCount"] as? Int ?? 0
             let rawUsage = TokenUsage.serializeRawUsage(usageMeta)
             tokenUsage = TokenUsage(
                 inputTokens: input,
                 outputTokens: output,
+                reasoningTokens: reasoning,
                 cacheReadTokens: cacheRead,
                 rawUsage: rawUsage
             )
             if cacheRead > 0 {
                 logger.info("Cache: read=\(cacheRead) uncached=\(input - cacheRead)")
+            }
+            if reasoning > 0 {
+                logger.info("Reasoning tokens: \(reasoning)")
             }
         }
 
