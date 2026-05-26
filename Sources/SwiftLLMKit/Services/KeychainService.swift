@@ -144,14 +144,27 @@ struct KeychainService: Sendable {
             return nil
         }
 
-        // Migrate to data protection keychain
-        logger.info("Migrating API key for \(providerID, privacy: .public) to data protection keychain")
+        // Try to migrate to the data protection keychain ONLY if DPK is actually
+        // usable for this process (entitled). We use saveImpl directly with
+        // useDataProtection: true so it bypasses the legacy fallback path —
+        // if DPK rejects with errSecMissingEntitlement (the typical case for
+        // unsigned/ad-hoc-signed CLI binaries), the throw is caught here and
+        // we leave the legacy entry in place. WITHOUT this guard, the
+        // fallback-save in our public save(...) would write back to legacy and
+        // we'd then delete the legacy entry below, losing the only copy.
+        guard let data = key.data(using: .utf8) else {
+            cache.set(key, forProviderID: providerID)
+            return key
+        }
         do {
-            try save(apiKey: key, forProviderID: providerID)
-            // Remove legacy entry after successful migration
+            try saveImpl(data: data, providerID: providerID, useDataProtection: true)
+            logger.info("Migrated API key for \(providerID, privacy: .public) to data protection keychain")
+            // Only safe to delete legacy after the DPK-only save actually succeeded.
             SecItemDelete(legacyQuery as CFDictionary)
         } catch {
-            logger.warning("Migration to data protection keychain failed for \(providerID, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            // Expected when this process lacks the keychain-access-groups
+            // entitlement; the key stays in legacy and we keep reading from there.
+            logger.debug("Leaving API key for \(providerID, privacy: .public) in legacy keychain (DPK unavailable: \(error.localizedDescription, privacy: .public))")
         }
 
         cache.set(key, forProviderID: providerID)
