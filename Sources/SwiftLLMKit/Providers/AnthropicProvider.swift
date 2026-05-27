@@ -109,11 +109,15 @@ struct AnthropicProvider: LLMProvider {
             "model": configuration.model,
             "max_tokens": effectiveMaxTokens,
             "messages": encodedMessages,
-            // Top-level cache_control is non-standard for the direct Anthropic API
-            // (the documented placement is on individual content blocks), but kept
-            // here for the OpenRouter pass-through path that mirrors this body.
-            // Direct Anthropic calls actually cache via the per-block breakpoints
-            // applied to `system` and the last tool definition below.
+            // Top-level `cache_control` is Anthropic's "automatic caching" feature:
+            // the system applies the cache breakpoint to the last cacheable block
+            // and moves it forward as the conversation grows. Supported as a
+            // stable feature on the direct Anthropic Messages API (verified against
+            // platform.claude.com docs); also passed through by OpenRouter for the
+            // Anthropic-upstream path. Used in addition to the explicit per-block
+            // breakpoints on `system` and the last tool below — the auto-roll
+            // covers conversation history, while the explicit breakpoints lock the
+            // stable system + tools prefixes.
             "cache_control": configuration.extendedCacheTTL
                 ? ["type": "ephemeral", "ttl": "1h"] as [String: Any]
                 : ["type": "ephemeral"] as [String: Any]
@@ -325,22 +329,32 @@ struct AnthropicProvider: LLMProvider {
         }
 
         // Parse token usage.
+        //
+        // Normalization note: Anthropic's wire `input_tokens` reports ONLY the
+        // uncached portion of the prompt (cache_read and cache_creation are
+        // additive). OpenAI and Gemini, by contrast, report `prompt_tokens` /
+        // `promptTokenCount` as the FULL prompt with cache fields as subsets.
+        // To keep `TokenUsage.inputTokens` semantically consistent across
+        // providers ("total prompt input tokens"), we add the cache portions
+        // into `inputTokens` here. Consumers can compute cache savings as
+        // `cacheReadTokens / inputTokens` uniformly.
         var tokenUsage: TokenUsage?
         if let usage = json["usage"] as? [String: Any] {
-            let input = usage["input_tokens"] as? Int ?? 0
+            let uncached = usage["input_tokens"] as? Int ?? 0
             let output = usage["output_tokens"] as? Int ?? 0
             let cacheRead = usage["cache_read_input_tokens"] as? Int ?? 0
             let cacheCreation = usage["cache_creation_input_tokens"] as? Int ?? 0
+            let totalInput = uncached + cacheRead + cacheCreation
             let rawUsage = TokenUsage.serializeRawUsage(usage)
             tokenUsage = TokenUsage(
-                inputTokens: input,
+                inputTokens: totalInput,
                 outputTokens: output,
                 cacheReadTokens: cacheRead,
                 cacheWriteTokens: cacheCreation,
                 rawUsage: rawUsage
             )
             if cacheRead > 0 || cacheCreation > 0 {
-                logger.info("Cache: read=\(cacheRead) created=\(cacheCreation) uncached=\(input)")
+                logger.info("Cache: read=\(cacheRead) created=\(cacheCreation) uncached=\(uncached) total=\(totalInput)")
             }
         }
 

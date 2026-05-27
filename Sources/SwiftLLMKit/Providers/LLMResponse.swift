@@ -1,8 +1,16 @@
 import Foundation
 
 /// Token usage statistics returned by the provider after an LLM call.
+///
+/// **Field semantics are normalized across providers**: `inputTokens` always
+/// represents the FULL prompt input (uncached portion + cache_read + cache_write),
+/// and `cacheReadTokens` / `cacheWriteTokens` are SUBSETS of `inputTokens`.
+/// Anthropic's wire `input_tokens` reports the uncached portion only — providers
+/// fold the cache deltas back into `inputTokens` so consumers can compute
+/// `cacheReadTokens / inputTokens` uniformly as the cache hit rate.
 public struct TokenUsage: Sendable, Codable, Equatable {
-    /// Number of tokens in the input (prompt + context).
+    /// Total prompt input tokens (includes any portion served from cache or
+    /// newly written to cache). This is the count you'd bill against.
     public let inputTokens: Int
     /// Number of tokens generated in the user-visible output.
     ///
@@ -18,11 +26,15 @@ public struct TokenUsage: Sendable, Codable, Equatable {
     ///   - Anthropic: folded into `outputTokens` (stays 0 here)
     ///   - Other providers: 0
     public let reasoningTokens: Int
-    /// Anthropic: tokens served from prompt cache (cheaper than uncached input).
-    /// OpenAI: `prompt_tokens_details.cached_tokens`.
-    /// Gemini: `usageMetadata.cachedContentTokenCount`.
+    /// Tokens served from prompt cache (a subset of `inputTokens`).
+    ///   - Anthropic: `cache_read_input_tokens`
+    ///   - OpenAI: `prompt_tokens_details.cached_tokens`
+    ///   - Gemini: `usageMetadata.cachedContentTokenCount`
+    ///   - Other providers: 0
     public let cacheReadTokens: Int
-    /// Anthropic: tokens written to prompt cache this request. 0 for other providers.
+    /// Tokens being written to the prompt cache this request (a subset of
+    /// `inputTokens`). Currently only Anthropic reports this distinctly via
+    /// `cache_creation_input_tokens`; other providers report 0.
     public let cacheWriteTokens: Int
     /// Raw JSON of the provider's full usage object, preserved verbatim so callers
     /// can recover fields not yet parsed (reasoning tokens, vendor-specific cache
