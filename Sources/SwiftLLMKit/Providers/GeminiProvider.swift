@@ -107,11 +107,13 @@ struct GeminiProvider: LLMProvider {
         let mergedContents = Self.mergeConsecutiveSameRole(rawContents)
 
         let effectiveMaxTokens = maxOutputTokensOverride ?? configuration.maxTokens
+        var generationConfig: [String: Any] = ["maxOutputTokens": effectiveMaxTokens]
+        if let temperature = configuration.temperature {
+            generationConfig["temperature"] = temperature
+        }
         var body: [String: Any] = [
             "contents": mergedContents,
-            "generationConfig": configuration.useDefaultTemperature
-                ? ["maxOutputTokens": effectiveMaxTokens] as [String: Any]
-                : ["temperature": configuration.temperature, "maxOutputTokens": effectiveMaxTokens] as [String: Any]
+            "generationConfig": generationConfig
         ]
 
         if !systemParts.isEmpty {

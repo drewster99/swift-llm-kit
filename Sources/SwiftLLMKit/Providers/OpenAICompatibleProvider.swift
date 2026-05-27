@@ -129,8 +129,8 @@ struct OpenAICompatibleProvider: LLMProvider {
             tokenLimitKey: maxOutputTokensOverride ?? configuration.maxTokens,
             "messages": orderedMessages
         ]
-        if !configuration.useDefaultTemperature {
-            body["temperature"] = configuration.temperature
+        if let temperature = configuration.temperature {
+            body["temperature"] = temperature
         }
 
         // Alibaba Cloud thinking support (uses different keys than Anthropic).

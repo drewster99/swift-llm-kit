@@ -12,8 +12,13 @@ public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
     public var providerID: String
     /// Raw model ID from the provider (used in API calls).
     public var modelID: String
-    /// Sampling temperature.
-    public var temperature: Double
+    /// Sampling temperature. **`nil` means "omit the field entirely"** so the
+    /// provider falls back to the model's default. Required for some models
+    /// (e.g. Claude Opus 4.7, GPT-5) that reject explicit `temperature`.
+    /// Previously a non-optional `Double` paired with `useDefaultTemperature`
+    /// — that two-flag design is gone; setting `temperature = nil` is the
+    /// single source of truth for "use default".
+    public var temperature: Double?
     /// Maximum tokens to generate per response.
     public var maxOutputTokens: Int
     /// Total context window budget in tokens (for conversation pruning).
@@ -23,9 +28,6 @@ public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
     /// Use 1-hour prompt cache TTL instead of the default 5-minute ephemeral cache.
     /// Only relevant for `.anthropic` providers. Cached tokens cost 2x the base input price.
     public var extendedCacheTTL: Bool
-    /// When true, temperature is omitted from the API request, letting the model use its default.
-    /// Useful for models (e.g. Alibaba QVQ) that require their default temperature.
-    public var useDefaultTemperature: Bool
     /// Whether to request streaming responses.
     public var streaming: Bool
     /// Set during validation — `false` if the config references a missing provider/model.
@@ -44,12 +46,11 @@ public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
         name: String,
         providerID: String,
         modelID: String,
-        temperature: Double = 0.7,
+        temperature: Double? = 0.7,
         maxOutputTokens: Int = 4096,
         maxContextTokens: Int = 128_000,
         thinkingBudget: Int? = nil,
         extendedCacheTTL: Bool = false,
-        useDefaultTemperature: Bool = false,
         streaming: Bool = true,
         isValid: Bool = true,
         validationError: String? = nil,
@@ -64,31 +65,72 @@ public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
         self.maxContextTokens = maxContextTokens
         self.thinkingBudget = thinkingBudget
         self.extendedCacheTTL = extendedCacheTTL
-        self.useDefaultTemperature = useDefaultTemperature
         self.streaming = streaming
         self.isValid = isValid
         self.validationError = validationError
         self.extraJSONOverrides = extraJSONOverrides
     }
 
-    /// Backward-compatible decoder: old JSON without `extendedCacheTTL` or
-    /// `extraJSONOverrides` keys still loads cleanly.
+    /// Backward-compatible decoder. Migration rules:
+    /// - Legacy JSON with `"useDefaultTemperature": true` collapses to
+    ///   `temperature = nil` regardless of the stored temperature value.
+    /// - Legacy JSON with `"useDefaultTemperature": false` (or absent) keeps
+    ///   the decoded temperature value.
+    /// - `temperature` is now optional on the wire; legacy JSON has it present
+    ///   (was non-optional), so decoding either form works.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
         providerID = try container.decode(String.self, forKey: .providerID)
         modelID = try container.decode(String.self, forKey: .modelID)
-        temperature = try container.decode(Double.self, forKey: .temperature)
+        let rawTemperature = try container.decodeIfPresent(Double.self, forKey: .temperature)
+        // Legacy migration: decode the now-removed useDefaultTemperature field
+        // via a parallel keyset so it doesn't pollute the synthesized encoder.
+        let legacyContainer = try decoder.container(keyedBy: LegacyCodingKeys.self)
+        let legacyUseDefault = try legacyContainer.decodeIfPresent(Bool.self, forKey: .useDefaultTemperature) ?? false
+        temperature = legacyUseDefault ? nil : rawTemperature
         maxOutputTokens = try container.decode(Int.self, forKey: .maxOutputTokens)
         maxContextTokens = try container.decode(Int.self, forKey: .maxContextTokens)
         thinkingBudget = try container.decodeIfPresent(Int.self, forKey: .thinkingBudget)
         extendedCacheTTL = try container.decodeIfPresent(Bool.self, forKey: .extendedCacheTTL) ?? false
-        useDefaultTemperature = try container.decodeIfPresent(Bool.self, forKey: .useDefaultTemperature) ?? false
         streaming = try container.decode(Bool.self, forKey: .streaming)
         isValid = try container.decode(Bool.self, forKey: .isValid)
         validationError = try container.decodeIfPresent(String.self, forKey: .validationError)
         extraJSONOverrides = try container.decodeIfPresent([String: AnyCodable].self, forKey: .extraJSONOverrides)
+    }
+
+    /// Keys for synthesized Codable. `useDefaultTemperature` was removed in
+    /// 0.0.21; its legacy decode lives in `LegacyCodingKeys` below.
+    private enum CodingKeys: String, CodingKey {
+        case id, name, providerID, modelID, temperature
+        case maxOutputTokens, maxContextTokens, thinkingBudget, extendedCacheTTL
+        case streaming, isValid, validationError, extraJSONOverrides
+    }
+
+    /// Side-channel keyset used by `init(from:)` to migrate the removed
+    /// `useDefaultTemperature` field. Not used by the synthesized encoder.
+    private enum LegacyCodingKeys: String, CodingKey {
+        case useDefaultTemperature
+    }
+}
+
+// MARK: - Backward-compat bridge
+
+extension ModelConfiguration {
+    /// **Deprecated.** Set `temperature = nil` directly to omit it from the request.
+    ///
+    /// Bridge for GUI consumers that pre-date the 0.0.21 change. Maps to
+    /// `temperature == nil` on read; on write `true` clears temperature to nil,
+    /// `false` is a no-op (set `temperature` to a value to assert a specific one).
+    @available(*, deprecated, message: "Set `temperature = nil` to omit it from the request")
+    public var useDefaultTemperature: Bool {
+        get { temperature == nil }
+        set {
+            if newValue { temperature = nil }
+            // Setting false intentionally does nothing — caller should assign
+            // `temperature` directly. No previous value to restore.
+        }
     }
 }
 

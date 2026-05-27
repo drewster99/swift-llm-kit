@@ -99,6 +99,27 @@ let response = try await provider.send(messages: [.init(role: .user, content: .t
 
 ## Changelog
 
+### 0.0.21 — **BREAKING for `useDefaultTemperature` consumers**
+
+- `ModelConfiguration.temperature` is now `Double?` (was `Double`). **`nil`
+  means "omit the field entirely"** — providers send no `temperature` key
+  on the wire, letting the model use its default. Required for models that
+  reject explicit `temperature` (Claude Opus 4.7, GPT-5).
+- `ModelConfiguration.useDefaultTemperature` (the previous flag-based opt-out)
+  is **removed as a stored property**. A deprecated computed bridge maps
+  reads to `temperature == nil`; on write, `true` clears temperature to nil
+  and `false` is a no-op (set `temperature` to a value to assert a specific one).
+- **Migration:** GUI consumers that previously did
+  `config.useDefaultTemperature = true` should switch to
+  `config.temperature = nil`. Legacy persisted JSON with
+  `useDefaultTemperature: true` migrates correctly — the decoder sets
+  `temperature = nil` regardless of any stored temperature value.
+- Removes the silent-leak risk: previously, ConfiguredHydra (project-hydra
+  CLI) passed `temperature: 1.0` as a placeholder when nil was meant. The
+  flag-based gate hid it, but a tightened per-provider temperature range
+  in a future swift-llm-kit could have rejected the placeholder. No more
+  placeholder.
+
 ### 0.0.20
 - **Deep-merge for `ModelConfiguration.extraJSONOverrides`.** Previously a flat
   top-level merge: setting `extraJSONOverrides["generationConfig"]` on Gemini

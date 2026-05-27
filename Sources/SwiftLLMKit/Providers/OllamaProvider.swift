@@ -129,13 +129,15 @@ struct OllamaProvider: LLMProvider {
         maxOutputTokensOverride: Int? = nil
     ) -> [String: Any] {
         let effectiveMaxTokens = maxOutputTokensOverride ?? configuration.maxTokens
+        var options: [String: Any] = ["num_predict": effectiveMaxTokens]
+        if let temperature = configuration.temperature {
+            options["temperature"] = temperature
+        }
         var body: [String: Any] = [
             "model": configuration.model,
             "stream": false,
             "messages": messages.map(encodeMessage),
-            "options": configuration.useDefaultTemperature
-                ? ["num_predict": effectiveMaxTokens] as [String: Any]
-                : ["temperature": configuration.temperature, "num_predict": effectiveMaxTokens] as [String: Any]
+            "options": options
         ]
 
         if !tools.isEmpty {

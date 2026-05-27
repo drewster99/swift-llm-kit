@@ -123,9 +123,13 @@ struct AnthropicProvider: LLMProvider {
                 : ["type": "ephemeral"] as [String: Any]
         ]
 
-        // Anthropic requires temperature = 1 when extended thinking is enabled.
-        if !configuration.useDefaultTemperature || thinkingEnabled {
-            body["temperature"] = thinkingEnabled ? 1.0 : configuration.temperature
+        // Anthropic requires temperature = 1 when extended thinking is enabled
+        // (overrides any explicit value or "omit" preference). Otherwise, only
+        // send temperature if the caller specified one — nil means omit.
+        if thinkingEnabled {
+            body["temperature"] = 1.0
+        } else if let temperature = configuration.temperature {
+            body["temperature"] = temperature
         }
 
         // Per-block cache_control breakpoint payload, reused for the system block

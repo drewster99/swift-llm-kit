@@ -555,12 +555,15 @@ public final class LLMKitManager {
             return
         }
 
-        // Temperature bounds (per-provider)
-        let tempRange = provider.apiType.temperatureRange
-        guard tempRange.contains(config.temperature) else {
-            configurations[index].isValid = false
-            configurations[index].validationError = "Temperature must be between \(tempRange.lowerBound) and \(tempRange.upperBound) for \(provider.apiType.displayName)"
-            return
+        // Temperature bounds (per-provider). Skip when temperature is nil
+        // ("use model's default" — nothing for us to validate).
+        if let temperature = config.temperature {
+            let tempRange = provider.apiType.temperatureRange
+            guard tempRange.contains(temperature) else {
+                configurations[index].isValid = false
+                configurations[index].validationError = "Temperature must be between \(tempRange.lowerBound) and \(tempRange.upperBound) for \(provider.apiType.displayName)"
+                return
+            }
         }
 
         // Thinking budget is only supported for Anthropic and Alibaba Cloud
@@ -680,8 +683,8 @@ public final class LLMKitManager {
             "model": config.modelID,
             "stream": config.streaming
         ]
-        if !config.useDefaultTemperature {
-            body["temperature"] = config.temperature
+        if let temperature = config.temperature {
+            body["temperature"] = temperature
         }
 
         switch provider.apiType {
@@ -717,8 +720,8 @@ public final class LLMKitManager {
             body["options"] = ["num_predict": config.maxOutputTokens] as [String: Any]
         case .gemini:
             var genConfig: [String: Any] = ["maxOutputTokens": config.maxOutputTokens]
-            if !config.useDefaultTemperature {
-                genConfig["temperature"] = config.temperature
+            if let temperature = config.temperature {
+                genConfig["temperature"] = temperature
             }
             body["generationConfig"] = genConfig
         }
