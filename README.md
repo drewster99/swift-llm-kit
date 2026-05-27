@@ -99,6 +99,24 @@ let response = try await provider.send(messages: [.init(role: .user, content: .t
 
 ## Changelog
 
+### 0.0.22 — Gemini functionResponse.name correctness fix
+
+- `GeminiProvider` was previously setting `functionResponse.name` to the
+  `toolCallID` when encoding `.toolResult` content. Gemini's API expects
+  the actual **function name** (matching the prior `functionCall.name`)
+  for parallel-call pairing — toolCallIDs aren't on Gemini's wire schema.
+- Effect of the old bug: **serial** tool calls worked because Gemini
+  falls back to positional pairing. **Parallel** tool calls (multiple
+  `functionCall` parts in one model turn) silently failed because name
+  was the only signal — and every response had the wrong name.
+- Fix: walk the conversation once at request-build time to construct
+  `[toolCallID → functionName]` from prior `.toolCalls` / `.mixed`
+  assistant turns. Resolve each `.toolResult`'s name at encode time.
+  Orphan tool results (no matching prior call — malformed conversation)
+  fall back to the toolCallID + a logged warning to preserve back-compat.
+- No public API change. Existing consumers' working code keeps working;
+  parallel-tool-call setups that were silently broken now work correctly.
+
 ### 0.0.21 — **BREAKING for `useDefaultTemperature` consumers**
 
 - `ModelConfiguration.temperature` is now `Double?` (was `Double`). **`nil`
