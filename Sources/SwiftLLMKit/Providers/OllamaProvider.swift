@@ -151,12 +151,10 @@ struct OllamaProvider: LLMProvider {
             }
         }
 
-        // Apply caller-provided top-level overrides last so they win over any
-        // defaults this method set.
+        // Apply caller-provided overrides last so they win over any defaults
+        // this method set. Deep-merges dict-valued keys (e.g. nested `options`).
         if let overrides = configuration.extraJSONOverrides {
-            for (key, value) in overrides {
-                body[key] = value.rawValue
-            }
+            mergeJSONOverrides(&body, with: overrides)
         }
 
         return body

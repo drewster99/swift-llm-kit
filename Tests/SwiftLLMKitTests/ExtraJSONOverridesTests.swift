@@ -24,13 +24,9 @@ struct ExtraJSONOverridesTests {
         )
     }
 
-    private static func provider(_ id: String, type: ProviderAPIType, endpoint: String) -> ModelProvider {
-        ModelProvider(
-            id: id,
-            name: id,
-            apiType: type,
-            endpoint: URL(string: endpoint)!
-        )
+    private static func provider(_ id: String, type: ProviderAPIType, endpoint: String) throws -> ModelProvider {
+        let url = try #require(URL(string: endpoint))
+        return ModelProvider(id: id, name: id, apiType: type, endpoint: url)
     }
 
     // MARK: - Per-provider merge tests
@@ -47,7 +43,7 @@ struct ExtraJSONOverridesTests {
                     "metadata": .dictionary(["user_id": .string("agent-hydra")])
                 ]
             ),
-            provider: Self.provider("builtin.anthropic", type: .anthropic, endpoint: "https://api.anthropic.com/v1"),
+            provider: try Self.provider("builtin.anthropic", type: .anthropic, endpoint: "https://api.anthropic.com/v1"),
             readAPIKey: Self.dummyKey
         )
         let body = try p.buildRequestBody(messages: [LLMMessage(role: .user, text: "hi")], tools: [])
@@ -58,7 +54,7 @@ struct ExtraJSONOverridesTests {
         #expect(metadata["user_id"] as? String == "agent-hydra")
     }
 
-    @Test func openAICompatibleProvider_mergesExtrasIntoBody() {
+    @Test func openAICompatibleProvider_mergesExtrasIntoBody() throws {
         let p = OpenAICompatibleProvider(
             configuration: Self.configuration(
                 providerID: "builtin.openai",
@@ -68,7 +64,7 @@ struct ExtraJSONOverridesTests {
                     "top_logprobs": .int(5)
                 ]
             ),
-            provider: Self.provider("builtin.openai", type: .openAICompatible, endpoint: "https://api.openai.com/v1"),
+            provider: try Self.provider("builtin.openai", type: .openAICompatible, endpoint: "https://api.openai.com/v1"),
             readAPIKey: Self.dummyKey
         )
         let body = p.buildRequestBody(messages: [LLMMessage(role: .user, text: "hi")], tools: [])
@@ -90,7 +86,7 @@ struct ExtraJSONOverridesTests {
                     ])
                 ]
             ),
-            provider: Self.provider("builtin.gemini", type: .gemini, endpoint: "https://generativelanguage.googleapis.com/v1beta"),
+            provider: try Self.provider("builtin.gemini", type: .gemini, endpoint: "https://generativelanguage.googleapis.com/v1beta"),
             readAPIKey: Self.dummyKey
         )
         let body = try p.buildRequestBody(messages: [LLMMessage(role: .user, text: "hi")], tools: [])
@@ -100,7 +96,7 @@ struct ExtraJSONOverridesTests {
         #expect(safety[0]["threshold"] as? String == "BLOCK_NONE")
     }
 
-    @Test func ollamaProvider_mergesExtrasIntoBody() {
+    @Test func ollamaProvider_mergesExtrasIntoBody() throws {
         let p = OllamaProvider(
             configuration: Self.configuration(
                 providerID: "builtin.ollama",
@@ -109,12 +105,69 @@ struct ExtraJSONOverridesTests {
                     "format": .string("json")
                 ]
             ),
-            provider: Self.provider("builtin.ollama", type: .ollama, endpoint: "http://localhost:11434/api"),
+            provider: try Self.provider("builtin.ollama", type: .ollama, endpoint: "http://localhost:11434/api"),
             readAPIKey: Self.dummyKey
         )
         let body = p.buildRequestBody(messages: [LLMMessage(role: .user, text: "hi")], tools: [])
         #expect(body["keep_alive"] as? String == "5m")
         #expect(body["format"] as? String == "json")
+    }
+
+    // MARK: - Deep-merge regression tests
+    //
+    // Locks the fix for a bug where the previous flat-merge would let a user
+    // overriding ONE nested key wipe sibling structured fields the provider
+    // had built (e.g. Anthropic's system-block cache_control, or Gemini's
+    // generationConfig defaults).
+
+    @Test func anthropic_extraOverrideOnUnrelatedKey_preservesSystemCacheControl() throws {
+        // User sets `metadata` extras — Anthropic's `system` block must still
+        // arrive with our cache_control attached, or prompt caching breaks.
+        let p = try AnthropicProvider(
+            configuration: Self.configuration(
+                providerID: "builtin.anthropic",
+                extras: ["metadata": .dictionary(["user_id": .string("u-1")])]
+            ),
+            provider: Self.provider("builtin.anthropic", type: .anthropic, endpoint: "https://api.anthropic.com/v1"),
+            readAPIKey: Self.dummyKey
+        )
+        let body = try p.buildRequestBody(
+            messages: [
+                LLMMessage(role: .system, text: "You are helpful."),
+                LLMMessage(role: .user, text: "hi")
+            ],
+            tools: []
+        )
+        let systemBlocks = try #require(body["system"] as? [[String: Any]])
+        let first = try #require(systemBlocks.first)
+        #expect(first["type"] as? String == "text")
+        #expect(first["cache_control"] != nil, "cache_control on system block must survive extras merge")
+    }
+
+    @Test func gemini_extraGenerationConfigSubkey_preservesProviderDefaults() throws {
+        // The motivating Gemini case: user sets generationConfig.thinkingConfig.
+        // Our temperature + maxOutputTokens defaults under generationConfig
+        // must survive (NOT be wiped by a flat replace).
+        let p = try GeminiProvider(
+            configuration: Self.configuration(
+                providerID: "builtin.gemini",
+                extras: [
+                    "generationConfig": .dictionary([
+                        "thinkingConfig": .dictionary([
+                            "thinkingBudget": .int(4096)
+                        ])
+                    ])
+                ]
+            ),
+            provider: Self.provider("builtin.gemini", type: .gemini, endpoint: "https://generativelanguage.googleapis.com/v1beta"),
+            readAPIKey: Self.dummyKey
+        )
+        let body = try p.buildRequestBody(messages: [LLMMessage(role: .user, text: "hi")], tools: [])
+        let gc = try #require(body["generationConfig"] as? [String: Any])
+        #expect(gc["temperature"] != nil, "Gemini's default temperature must survive a generationConfig sub-key override")
+        #expect(gc["maxOutputTokens"] != nil)
+        let tc = try #require(gc["thinkingConfig"] as? [String: Any])
+        #expect(tc["thinkingBudget"] as? Int == 4096)
     }
 
     // MARK: - Override semantics
@@ -127,7 +180,7 @@ struct ExtraJSONOverridesTests {
                 providerID: "builtin.anthropic",
                 extras: ["model": .string("claude-override")]
             ),
-            provider: Self.provider("builtin.anthropic", type: .anthropic, endpoint: "https://api.anthropic.com/v1"),
+            provider: try Self.provider("builtin.anthropic", type: .anthropic, endpoint: "https://api.anthropic.com/v1"),
             readAPIKey: Self.dummyKey
         )
         let body = try p.buildRequestBody(messages: [LLMMessage(role: .user, text: "hi")], tools: [])
@@ -137,14 +190,14 @@ struct ExtraJSONOverridesTests {
     @Test func extras_nilOrEmpty_leaveBodyUnchanged() throws {
         let p = AnthropicProvider(
             configuration: Self.configuration(providerID: "builtin.anthropic", extras: nil),
-            provider: Self.provider("builtin.anthropic", type: .anthropic, endpoint: "https://api.anthropic.com/v1"),
+            provider: try Self.provider("builtin.anthropic", type: .anthropic, endpoint: "https://api.anthropic.com/v1"),
             readAPIKey: Self.dummyKey
         )
         let bodyNil = try p.buildRequestBody(messages: [LLMMessage(role: .user, text: "hi")], tools: [])
 
         let p2 = AnthropicProvider(
             configuration: Self.configuration(providerID: "builtin.anthropic", extras: [:]),
-            provider: Self.provider("builtin.anthropic", type: .anthropic, endpoint: "https://api.anthropic.com/v1"),
+            provider: try Self.provider("builtin.anthropic", type: .anthropic, endpoint: "https://api.anthropic.com/v1"),
             readAPIKey: Self.dummyKey
         )
         let bodyEmpty = try p2.buildRequestBody(messages: [LLMMessage(role: .user, text: "hi")], tools: [])

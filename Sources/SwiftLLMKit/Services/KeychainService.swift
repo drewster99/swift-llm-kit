@@ -152,10 +152,9 @@ struct KeychainService: Sendable {
         // we leave the legacy entry in place. WITHOUT this guard, the
         // fallback-save in our public save(...) would write back to legacy and
         // we'd then delete the legacy entry below, losing the only copy.
-        guard let data = key.data(using: .utf8) else {
-            cache.set(key, forProviderID: providerID)
-            return key
-        }
+        // `key` came from `legacyData` decoded as UTF-8 just above, so re-encoding
+        // to UTF-8 cannot fail — Data(key.utf8) avoids the dead optional path.
+        let data = Data(key.utf8)
         do {
             try saveImpl(data: data, providerID: providerID, useDataProtection: true)
             logger.info("Migrated API key for \(providerID, privacy: .public) to data protection keychain")

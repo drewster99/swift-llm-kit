@@ -173,12 +173,10 @@ struct OpenAICompatibleProvider: LLMProvider {
                 : ["type": "ephemeral"] as [String: Any]
         }
 
-        // Apply caller-provided top-level overrides last so they win over any
-        // defaults this method set.
+        // Apply caller-provided overrides last so they win over any defaults
+        // this method set. Deep-merges dict-valued keys (see mergeJSONOverrides).
         if let overrides = configuration.extraJSONOverrides {
-            for (key, value) in overrides {
-                body[key] = value.rawValue
-            }
+            mergeJSONOverrides(&body, with: overrides)
         }
 
         return body
@@ -267,7 +265,7 @@ struct OpenAICompatibleProvider: LLMProvider {
         return GLMTemplateSalvage.strip(text)
     }
 
-    private func parseResponse(data: Data) throws -> LLMResponse {
+    func parseResponse(data: Data) throws -> LLMResponse {
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             let preview = String(data: data.prefix(500), encoding: .utf8) ?? "(non-utf8, \(data.count) bytes)"
             logger.error("Response is not a JSON object: \(preview, privacy: .public)")

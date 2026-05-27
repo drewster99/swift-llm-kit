@@ -174,12 +174,13 @@ struct AnthropicProvider: LLMProvider {
             body["tools"] = toolsArray
         }
 
-        // Apply caller-provided top-level overrides last so they win over any
-        // defaults this method set (e.g. temperature, cache_control, thinking).
+        // Apply caller-provided overrides last so they win over any defaults
+        // this method set (e.g. temperature, cache_control, thinking).
+        // Deep-merges dict-valued keys so a user overriding one sub-key
+        // doesn't wipe sibling structured fields (e.g. the system block's
+        // cache_control). Arrays / scalars / strings replace outright.
         if let overrides = configuration.extraJSONOverrides {
-            for (key, value) in overrides {
-                body[key] = value.rawValue
-            }
+            mergeJSONOverrides(&body, with: overrides)
         }
 
         return body
@@ -315,7 +316,7 @@ struct AnthropicProvider: LLMProvider {
         }
     }
 
-    private func parseResponse(data: Data) throws -> LLMResponse {
+    func parseResponse(data: Data) throws -> LLMResponse {
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             let preview = String(data: data.prefix(500), encoding: .utf8) ?? "(non-utf8, \(data.count) bytes)"
             logger.error("Response is not a JSON object: \(preview, privacy: .public)")

@@ -97,6 +97,61 @@ let provider = try kit.makeProvider(for: configID)
 let response = try await provider.send(messages: [.init(role: .user, content: .text("Hi"))], tools: [])
 ```
 
+## Changelog
+
+### 0.0.20
+- **Deep-merge for `ModelConfiguration.extraJSONOverrides`.** Previously a flat
+  top-level merge: setting `extraJSONOverrides["generationConfig"]` on Gemini
+  (or `["system"]` / `["tools"]` on Anthropic) wiped sibling sub-keys the
+  provider had built (defaults under `generationConfig`, the `cache_control`
+  breakpoint on the system block, etc.). Now dict-valued overrides recurse so
+  only the keys you specify replace; siblings survive. Arrays and scalars still
+  replace outright. See `mergeJSONOverrides` in `Providers/JSONMerge.swift`.
+
+### 0.0.19 — **BREAKING for Anthropic consumers**
+- `TokenUsage.inputTokens` is now normalized across providers to represent the
+  **full prompt input** (uncached + cache_read + cache_write). Previously
+  Anthropic surfaced the wire `input_tokens` field, which is only the
+  uncached portion. After 0.0.19 you can compute `cacheReadTokens / inputTokens`
+  as a uniform hit-rate across all providers.
+- **Migration:** if you display `inputTokens` for Anthropic responses, the
+  value will be larger when caching is active. That's the correct total.
+  If you summed `inputTokens + cacheReadTokens` to estimate billable input,
+  you now double-count for Anthropic — switch to `inputTokens` alone.
+- The full raw provider usage object is still preserved as a JSON string on
+  `TokenUsage.rawUsage` if you need the old per-field semantics.
+- Also clarified the stale comment about top-level `cache_control` —
+  Anthropic supports it as a stable "automatic caching" feature.
+
+### 0.0.18
+- Fix Keychain regression introduced in 0.0.16: `apiKey(...)` migration
+  path called the public `save()` which under the new fallback could write
+  back to the legacy keychain, then the migration code deleted the legacy
+  entry — losing the only copy. Migration now bypasses the fallback when
+  trying DPK, so unentitled CLI binaries keep their keys persistent.
+
+### 0.0.17
+- `TokenUsage.reasoningTokens: Int` for OpenAI
+  (`completion_tokens_details.reasoning_tokens`) and Gemini
+  (`usageMetadata.thoughtsTokenCount`). Anthropic folds thinking into
+  `output_tokens` and stays at 0. Codable backward-compat preserved.
+
+### 0.0.16
+- `KeychainService.save` falls back to the legacy (login) keychain when the
+  Data Protection Keychain returns `errSecMissingEntitlement`. Lets unsigned
+  CLI binaries store API keys without per-build codesigning. GUI consumers
+  with proper entitlements are unaffected.
+
+### 0.0.15
+- `ModelConfiguration.extraJSONOverrides: [String: AnyCodable]?` for
+  per-LLM provider-specific knobs (Anthropic `thinking`, OpenAI
+  `reasoning_effort`, Gemini `safetySettings`, etc.).
+
+### 0.0.14
+- All providers serialize outbound request bodies with `[.sortedKeys]` so
+  dictionary key order doesn't perturb the wire bytes — required for
+  upstream prompt caches (Anthropic, OpenAI auto-prefix) to keep hitting.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
