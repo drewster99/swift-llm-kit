@@ -101,19 +101,9 @@ struct GeminiProvider: LLMProvider {
             }
         }
 
-        // Gemini's `functionResponse.name` field must match the original
-        // `functionCall.name` — Gemini uses name (NOT ID — IDs aren't part of
-        // its wire schema at all) for parallel-call pairing. Walk the
-        // conversation once to build [toolCallID → functionName] so the
-        // .toolResult encoder below can look up the right name.
-        // Serial single-call conversations also work without this (Gemini
-        // falls back to positional pairing), but parallel calls fail without
-        // correct names.
-        let toolNameByCallID = Self.buildToolNameLookup(conversationMessages)
-
         // Gemini requires strict user/model alternation. Merge consecutive same-role
         // messages (e.g. a tool result followed by a user message) into one content entry.
-        let rawContents = try conversationMessages.map { try encodeContent($0, toolNameByCallID: toolNameByCallID) }
+        let rawContents = try conversationMessages.map(encodeContent)
         let mergedContents = Self.mergeConsecutiveSameRole(rawContents)
 
         let effectiveMaxTokens = maxOutputTokensOverride ?? configuration.maxTokens
@@ -162,27 +152,7 @@ struct GeminiProvider: LLMProvider {
         return body
     }
 
-    /// Builds `[toolCallID → functionName]` from prior assistant turns in the
-    /// conversation. Walks `.toolCalls` and `.mixed` content; ignores everything
-    /// else. Used by `encodeContent` to populate `functionResponse.name`
-    /// correctly. Duplicates (shouldn't happen — IDs should be unique per
-    /// conversation) are overwritten by the later occurrence.
-    static func buildToolNameLookup(_ messages: [LLMMessage]) -> [String: String] {
-        var map: [String: String] = [:]
-        for message in messages {
-            switch message.content {
-            case .toolCalls(let calls):
-                for call in calls { map[call.id] = call.name }
-            case .mixed(_, let calls):
-                for call in calls { map[call.id] = call.name }
-            case .text, .toolResult:
-                break
-            }
-        }
-        return map
-    }
-
-    private func encodeContent(_ message: LLMMessage, toolNameByCallID: [String: String]) throws -> [String: Any] {
+    private func encodeContent(_ message: LLMMessage) throws -> [String: Any] {
         let role = geminiRole(for: message)
 
         switch message.content {
@@ -225,26 +195,14 @@ struct GeminiProvider: LLMProvider {
             return ["role": "model", "parts": parts]
 
         case .toolResult(let toolCallID, let content):
-            // Gemini uses `functionResponse.name` (NOT toolCallID — IDs
-            // aren't on the wire) to pair with the matching `functionCall`.
-            // Look up the actual function name from prior assistant turns;
-            // on a miss (orphan tool result — malformed conversation), fall
-            // back to the toolCallID to preserve historical behavior while
-            // logging a warning. Serial calls still pair positionally; only
-            // parallel calls actually need this to be correct.
-            let functionName: String
-            if let resolved = toolNameByCallID[toolCallID] {
-                functionName = resolved
-            } else {
-                logger.warning("Tool result for ID \(toolCallID, privacy: .public) has no matching prior tool call; using ID as function name (Gemini may reject for parallel-call conversations)")
-                functionName = toolCallID
-            }
+            // Gemini uses functionResponse parts for tool results.
+            // The toolCallID is used as the function name reference.
             return [
                 "role": "user",
                 "parts": [
                     [
                         "functionResponse": [
-                            "name": functionName,
+                            "name": toolCallID,
                             "response": [
                                 "content": content
                             ]

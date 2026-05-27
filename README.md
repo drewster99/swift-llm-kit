@@ -99,23 +99,26 @@ let response = try await provider.send(messages: [.init(role: .user, content: .t
 
 ## Changelog
 
-### 0.0.22 — Gemini functionResponse.name correctness fix
+### 0.0.23 — Revert 0.0.22 (Gemini functionResponse.name fix)
 
-- `GeminiProvider` was previously setting `functionResponse.name` to the
-  `toolCallID` when encoding `.toolResult` content. Gemini's API expects
-  the actual **function name** (matching the prior `functionCall.name`)
-  for parallel-call pairing — toolCallIDs aren't on Gemini's wire schema.
-- Effect of the old bug: **serial** tool calls worked because Gemini
-  falls back to positional pairing. **Parallel** tool calls (multiple
-  `functionCall` parts in one model turn) silently failed because name
-  was the only signal — and every response had the wrong name.
-- Fix: walk the conversation once at request-build time to construct
-  `[toolCallID → functionName]` from prior `.toolCalls` / `.mixed`
-  assistant turns. Resolve each `.toolResult`'s name at encode time.
-  Orphan tool results (no matching prior call — malformed conversation)
-  fall back to the toolCallID + a logged warning to preserve back-compat.
-- No public API change. Existing consumers' working code keeps working;
-  parallel-tool-call setups that were silently broken now work correctly.
+- 0.0.22 changed `GeminiProvider`'s `functionResponse.name` to use the
+  actual function name (correct per Gemini's spec) instead of the
+  toolCallID. Empirical testing showed this **regressed Gemini 2.5 Pro
+  tool-using conversations** — Gemini ignored tool results entirely.
+- Root cause: Gemini 2.5 Pro has thinking enabled by default and returns
+  `thoughtSignature` blobs that must be echoed back on subsequent turns
+  for thinking-continuity. We don't preserve them. Pre-0.0.22, the
+  wrong-name behavior triggered Gemini's positional-pairing fallback,
+  which bypassed thinking-continuity validation. The "correct" name in
+  0.0.22 triggered stricter validation that depends on the missing
+  signature — Gemini treated tool results as unconnected to its prior
+  thought and ignored them.
+- The proper fix is to plumb `thoughtSignature` through `LLMResponse` /
+  `LLMMessage` and echo it back on subsequent assistant turns. Once that
+  lands, the name fix can be re-applied safely.
+- Until then, the pre-0.0.22 behavior (toolCallID in `functionResponse.name`)
+  stays — Gemini's positional pairing handles serial tool use correctly.
+  Parallel tool calls remain a known latent issue.
 
 ### 0.0.21 — **BREAKING for `useDefaultTemperature` consumers**
 
