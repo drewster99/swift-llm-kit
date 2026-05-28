@@ -101,6 +101,39 @@ struct DeveloperRoleTests {
         #expect(!roles.contains("system"))
     }
 
+    // MARK: - Ollama: developer folds into the leading system message
+
+    @Test("Ollama folds developer messages into the consolidated system message")
+    func ollama_developerFoldsIntoSystem() throws {
+        // Ollama's chat templates know only system/user/assistant/tool. Without
+        // folding, the developer turn would emit `"role": "developer"` on the
+        // wire and gemma3 et al. would 400 ("Conversation roles must
+        // alternate user/assistant/...").
+        let provider = OllamaProvider(
+            configuration: ModelConfiguration(name: "t", providerID: "p", modelID: "gemma3:27b"),
+            provider: ModelProvider(
+                id: "p", name: "p", apiType: .ollama,
+                endpoint: try #require(URL(string: "http://localhost:11434/api"))
+            ),
+            readAPIKey: Self.dummyKey
+        )
+        let messages: [LLMMessage] = [
+            .system("system text"),
+            .developer("developer text"),
+            .user("hi")
+        ]
+        let encoded = provider.buildEncodedMessagesForTesting(messages: messages, tools: [])
+        let roles = encoded.compactMap { $0["role"] as? String }
+        #expect(!roles.contains("developer"),
+                "developer role must be folded; Ollama's chat templates reject it")
+        // The developer content must survive — folded into the leading system message.
+        let systemEntries = encoded.filter { ($0["role"] as? String) == "system" }
+        #expect(systemEntries.count == 1, "expected exactly one consolidated system entry")
+        let systemContent = systemEntries.first?["content"] as? String ?? ""
+        #expect(systemContent.contains("system text"))
+        #expect(systemContent.contains("developer text"))
+    }
+
     // MARK: - Gemini: developer folds into systemInstruction
 
     @Test("Gemini folds developer messages into systemInstruction")

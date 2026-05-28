@@ -99,6 +99,36 @@ let response = try await provider.send(messages: [.init(role: .user, content: .t
 
 ## Changelog
 
+### 0.0.25 — Ollama developer-role fold
+
+Fixes a 0.0.24 regression: `OllamaProvider` was passing
+`LLMMessage.Role.developer` straight through to the wire as
+`"role": "developer"`, which Ollama's chat templates (e.g. gemma3) reject
+with HTTP 400. Now developer turns are folded into the consolidated system
+message at `extractSystemMessages`, matching the documented contract that
+non-OpenAI backends translate `.developer` to `system`. AnthropicProvider,
+GeminiProvider, and OpenAICompatibleProvider already did the right thing
+in 0.0.24 — only the Ollama path was missed. New regression test
+`ollama_developerFoldsIntoSystem` locks the behavior.
+
+Known limitations (not fixed; flagged for a future release):
+
+- **Gemini per-part thoughtSignature index keying is shape-fragile.**
+  Signatures are keyed by the response's part-array index. When
+  `LLMMessage.assistant(from: response)` collapses a parsed response into
+  `.text` / `.toolCalls` / `.mixed`, the replay's part-array indices may
+  not align 1:1 with the original (e.g. a response with `[thinkingText,
+  fc0, fc1]` collapses to `.toolCalls([fc0, fc1])` and the sig at original
+  index 0 attaches to fc0). The minimum-disruption use case (single-shape
+  response replay) works; pathological multi-thinking-part shapes need a
+  redesign keyed by content type rather than position.
+- **`LLMMessage.assistant(from: response)` with `text=nil` and empty
+  `toolCalls` produces `.text("")`.** AnthropicProvider then emits
+  `{"role":"assistant","content":""}` which the API rejects. Callers
+  should special-case "empty model response" before constructing the
+  message; no caller in the current ecosystem hits this path, but the
+  factory's behavior is unsafe for blind use.
+
 ### 0.0.24 — Thinking continuity + role-tagged factories + developer role
 
 This release plumbs the provider-specific "thinking continuation" data that

@@ -242,11 +242,18 @@ struct OllamaProvider: LLMProvider {
 
     /// Moves all system messages to the front as a single consolidated system message.
     /// Prevents invalid message ordering (e.g. system after tool) that some backends reject.
+    ///
+    /// `.developer` is folded into system here — Ollama's chat templates know only
+    /// system/user/assistant/tool, and `LLMMessage.Role.developer` documents that
+    /// non-OpenAI backends translate it to system. Without this, the developer
+    /// turn would survive into `encodeMessage` and emit `"role": "developer"` on
+    /// the wire, which Ollama's templates reject or misinterpret.
     private static func extractSystemMessages(_ messages: [LLMMessage]) -> [LLMMessage] {
         var systemParts: [String] = []
         var nonSystem: [LLMMessage] = []
         for message in messages {
-            if message.role == .system, case .text(let text) = message.content {
+            if (message.role == .system || message.role == .developer),
+               case .text(let text) = message.content {
                 systemParts.append(text)
             } else {
                 nonSystem.append(message)
