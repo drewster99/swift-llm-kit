@@ -99,6 +99,109 @@ let response = try await provider.send(messages: [.init(role: .user, content: .t
 
 ## Changelog
 
+### 0.0.24 — Thinking continuity + role-tagged factories + developer role
+
+This release plumbs the provider-specific "thinking continuation" data that
+Anthropic and Gemini 2.5 require for multi-turn / tool-use conversations, adds
+misuse-resistant message factories, introduces the `developer` role, and
+re-applies the 0.0.22 `functionResponse.name` fix on top of the new
+signature-replay path so it no longer regresses Gemini tool use.
+
+#### New
+
+- **`ProviderContinuation`** — new value type carrying provider-specific
+  thinking-continuity blobs. Captured automatically on `LLMResponse` and
+  replayed automatically when you build the next assistant turn via the new
+  `.assistant(from:)` factory. Fields:
+  - `anthropicThinkingBlocks: [AnthropicThinkingBlock]?` — captured from
+    Anthropic `thinking` content blocks (text + opaque signature). Replayed
+    verbatim at the start of the assistant turn — required for thinking
+    continuity with `thinkingBudget` > 0.
+  - `geminiThoughtSignatures: [String: String]?` — captured per response part
+    (keyed by stringified part index). Re-attached to the matching outgoing
+    parts. Required for Gemini 2.5 (thinking on by default in Pro) — without
+    these the model silently drops tool results in multi-turn flows.
+- **`LLMMessage.continuation: ProviderContinuation?`** — new field, optional,
+  backward-compatible Codable.
+- **`LLMResponse.continuation: ProviderContinuation?`** — new field carrying
+  per-provider continuation data the model returned.
+- **`LLMMessage.Role.developer`** — new role case for OpenAI's `developer`
+  role (o-series / GPT-5). Providers without native support fold it into
+  their system field; OpenAI-compatible providers emit it on the wire only
+  when `BehaviorFlags.supportsDeveloperRole = true`.
+- **`BehaviorFlags.supportsDeveloperRole: Bool`** — new flag. Default false
+  (downgrade developer→system). Set true for OpenAI o-series / GPT-5 models.
+- **Static factories on `LLMMessage`** — the new misuse-resistant API:
+  - `.user(_:)` / `.user(_:images:)`
+  - `.system(_:)`
+  - `.developer(_:)`
+  - `.assistant(from: LLMResponse)` ← **the load-bearing one** —
+    automatically carries `reasoning` AND `continuation`. Use this whenever
+    you record an actual model response in conversation history.
+  - `.toolResult(_:callID:)`
+  - `.assistant(text:reasoning:)` and `.assistant(toolCalls:text:reasoning:)`
+    — synthetic, for tests / saved-conversation reload only. Marked
+    deprecated to nudge callers toward `.assistant(from:)`.
+
+#### Fixed
+
+- **Anthropic thinking continuity in multi-turn / tool-use flows.** Prior
+  releases parsed thinking blocks into `LLMResponse.reasoning` (display only)
+  but discarded the signatures. With `thinkingBudget` > 0, Anthropic requires
+  the signed blocks to be replayed unchanged or the model loses thinking
+  state across turns. `AnthropicProvider` now extracts them into
+  `ProviderContinuation` on parse and prepends them to assistant content
+  blocks on encode.
+- **Gemini 2.5 thinking continuity in multi-turn / tool-use flows.** Gemini
+  returns `thoughtSignature` on every response part when thinking is enabled
+  (default on Pro). `GeminiProvider` now captures them per part index and
+  re-attaches them to the matching outgoing parts.
+- **Gemini `functionResponse.name` correctness (re-do of 0.0.22).** With
+  thoughtSignature replay now in place, Gemini's strict validation path no
+  longer drops tool results when the function name is correct.
+  `GeminiProvider` builds a `[toolCallID → functionName]` lookup from prior
+  assistant turns and uses it to populate `functionResponse.name`. Parallel
+  tool calls now pair correctly (previously they relied on positional
+  fallback, which silently mismatched under parallelism).
+
+#### Deprecated (not removed)
+
+- `LLMMessage.init(role:content:images:reasoning:continuation:)` — generic
+  init. Prefer the role-specific factories above. The generic init is still
+  callable but emits a deprecation warning whose message points at the
+  misuse: manual construction from an `LLMResponse` silently drops
+  `reasoning` and `continuation`, breaking multi-turn thinking and tool-use.
+- `LLMMessage.init(role:text:images:reasoning:)` — text convenience init.
+  Same reason.
+- `LLMMessage.assistant(text:reasoning:)` and
+  `LLMMessage.assistant(toolCalls:text:reasoning:)` — synthetic factories.
+  Useful for tests and saved-conversation reload; **never** for real
+  responses (they don't carry continuation).
+
+#### Migration guide
+
+The deprecations are advisory — existing code keeps working. To get the
+benefits (thinking continuity, no more silent multi-turn breakage), migrate
+the **load-bearing site** in your agent loop:
+
+```swift
+// BEFORE — drops continuation; multi-turn thinking breaks
+let response = try await provider.send(messages: history, tools: tools)
+history.append(LLMMessage(
+    role: .assistant,
+    content: .text(response.text ?? "")
+))
+
+// AFTER — preserves reasoning + continuation automatically
+let response = try await provider.send(messages: history, tools: tools)
+history.append(.assistant(from: response))
+```
+
+If you persist conversations, your storage type's Codable shape now
+automatically round-trips `continuation` (new key, optional, backward
+compatible — legacy stored conversations decode cleanly with continuation
+= nil).
+
 ### 0.0.23 — Revert 0.0.22 (Gemini functionResponse.name fix)
 
 - 0.0.22 changed `GeminiProvider`'s `functionResponse.name` to use the

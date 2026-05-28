@@ -110,11 +110,23 @@ public struct LLMResponse: Sendable, Equatable {
     public let reasoning: String?
     /// Token usage statistics from the provider, if available.
     public let usage: TokenUsage?
+    /// Provider-specific continuation blobs (Anthropic thinking signatures,
+    /// Gemini thoughtSignatures, etc.) that must be carried into the next turn
+    /// for multi-turn thinking / tool-use continuity. Most easily preserved via
+    /// `LLMMessage.assistant(from: response)` when appending to history.
+    public let continuation: ProviderContinuation?
 
-    public init(text: String? = nil, toolCalls: [LLMToolCall] = [], reasoning: String? = nil, usage: TokenUsage? = nil) {
+    public init(
+        text: String? = nil,
+        toolCalls: [LLMToolCall] = [],
+        reasoning: String? = nil,
+        usage: TokenUsage? = nil,
+        continuation: ProviderContinuation? = nil
+    ) {
         self.text = text
         self.toolCalls = toolCalls
         self.reasoning = reasoning
         self.usage = usage
+        self.continuation = continuation
     }
 }

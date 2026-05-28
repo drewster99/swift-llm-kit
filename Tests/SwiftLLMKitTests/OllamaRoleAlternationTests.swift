@@ -39,12 +39,12 @@ struct OllamaRoleAlternationTests {
     @Test("text+tool_call assistant collapses with prior assistant text")
     func consecutiveAssistantMessagesMerge() {
         let messages: [LLMMessage] = [
-            LLMMessage(role: .system, text: "sys"),
-            LLMMessage(role: .user, text: "hi"),
-            LLMMessage(role: .assistant, text: "thinking aloud"),
-            LLMMessage(role: .assistant, content: .toolCalls([
+            .system("sys"),
+            .user("hi"),
+            syntheticAssistantText("thinking aloud"),
+            syntheticAssistantToolCalls([
                 LLMToolCall(id: "abc", name: "noop", arguments: "{}")
-            ]))
+            ])
         ]
         let encoded = encode(messages: messages, tools: standardTools())
         let assistantCount = encoded.filter { ($0["role"] as? String) == "assistant" }.count
@@ -58,14 +58,14 @@ struct OllamaRoleAlternationTests {
         // next LLM turn. The encoded request must end up with strict
         // user/assistant alternation, no surviving `tool` role.
         let messages: [LLMMessage] = [
-            LLMMessage(role: .system, text: "sys"),
-            LLMMessage(role: .user, text: "yes"),
-            LLMMessage(role: .assistant, content: .mixed(
+            .system("sys"),
+            .user("yes"),
+            syntheticAssistantMixed(
                 text: "Calling run_task.",
                 toolCalls: [LLMToolCall(id: "tc1", name: "run_task", arguments: "{}")]
-            )),
-            LLMMessage(role: .tool, content: .toolResult(toolCallID: "tc1", content: "Tool error: missing task_id")),
-            LLMMessage(role: .user, text: "actually use task abc-123")
+            ),
+            .toolResult("Tool error: missing task_id", callID: "tc1"),
+            .user("actually use task abc-123")
         ]
         let encoded = encode(messages: messages, tools: standardTools())
         let roles = encoded.compactMap { $0["role"] as? String }
@@ -83,17 +83,14 @@ struct OllamaRoleAlternationTests {
 
     private func liveAppSequence() -> [LLMMessage] {
         [
-            LLMMessage(role: .system, text: "You are Smith."),
-            LLMMessage(role: .assistant, text: "Drew, I see we have a pending task."),
-            LLMMessage(role: .user, text: "[USER (Drew)]: yes"),
-            LLMMessage(role: .assistant, content: .mixed(
+            .system("You are Smith."),
+            syntheticAssistantText("Drew, I see we have a pending task."),
+            .user("[USER (Drew)]: yes"),
+            syntheticAssistantMixed(
                 text: "Okay, calling run_task.",
                 toolCalls: [LLMToolCall(id: "tc1", name: "run_task", arguments: "{\"instructions\":\"go\"}")]
-            )),
-            LLMMessage(role: .tool, content: .toolResult(
-                toolCallID: "tc1",
-                content: "Tool error: Missing required argument: task_id"
-            ))
+            ),
+            .toolResult("Tool error: Missing required argument: task_id", callID: "tc1")
         ]
     }
 
@@ -122,4 +119,20 @@ struct OllamaRoleAlternationTests {
         )
         return provider.buildEncodedMessagesForTesting(messages: messages, tools: tools)
     }
+}
+
+// MARK: - Synthetic message helpers (use the internal init to avoid the deprecation
+// warnings on the public synthetic .assistant(...) factories — these tests are
+// specifically validating role-handling behavior on hand-built messages).
+
+private func syntheticAssistantText(_ text: String) -> LLMMessage {
+    LLMMessage(_role: .assistant, _content: .text(text))
+}
+
+private func syntheticAssistantToolCalls(_ calls: [LLMToolCall]) -> LLMMessage {
+    LLMMessage(_role: .assistant, _content: .toolCalls(calls))
+}
+
+private func syntheticAssistantMixed(text: String, toolCalls: [LLMToolCall]) -> LLMMessage {
+    LLMMessage(_role: .assistant, _content: .mixed(text: text, toolCalls: toolCalls))
 }

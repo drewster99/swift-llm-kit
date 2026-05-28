@@ -253,7 +253,7 @@ struct OllamaProvider: LLMProvider {
             }
         }
         guard !systemParts.isEmpty else { return messages }
-        var result: [LLMMessage] = [LLMMessage(role: .system, text: systemParts.joined(separator: "\n\n"))]
+        var result: [LLMMessage] = [.system(systemParts.joined(separator: "\n\n"))]
         result.append(contentsOf: nonSystem)
         return result
     }
@@ -290,7 +290,7 @@ struct OllamaProvider: LLMProvider {
                 } else {
                     text = "[Tool result]"
                 }
-                effectiveMessage = LLMMessage(role: .user, text: text)
+                effectiveMessage = .user(text)
             } else {
                 effectiveMessage = message
             }
@@ -317,10 +317,14 @@ struct OllamaProvider: LLMProvider {
                 let merged = [existingText, newText]
                     .filter { !$0.isEmpty }
                     .joined(separator: "\n\n")
+                // Merge produces a text message with possibly-combined images.
+                // Use the internal init to bypass the deprecated public init —
+                // this is provider-internal normalization, not consumer code.
+                let mergedImages = (result[lastIndex].images ?? []) + (effectiveMessage.images ?? [])
                 result[lastIndex] = LLMMessage(
-                    role: effectiveMessage.role,
-                    text: merged,
-                    images: (result[lastIndex].images ?? []) + (effectiveMessage.images ?? [])
+                    _role: effectiveMessage.role,
+                    _content: .text(merged),
+                    _images: mergedImages.isEmpty ? nil : mergedImages
                 )
             } else {
                 result.append(effectiveMessage)

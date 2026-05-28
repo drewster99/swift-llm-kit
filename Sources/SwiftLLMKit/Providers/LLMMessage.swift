@@ -18,6 +18,12 @@ public struct LLMMessage: Codable, Sendable, Equatable {
         case user
         case assistant
         case tool
+        /// OpenAI's `developer` role (introduced for o-series/GPT-5). Semantically
+        /// like `system` but with different precedence per OpenAI's reasoning-model
+        /// docs. Providers that don't natively support it (Anthropic, Gemini, most
+        /// OpenAI-compatible backends) translate it to `system`. Check
+        /// `BehaviorFlags.supportsDeveloperRole` before sending.
+        case developer
     }
 
     public enum Content: Codable, Sendable, Equatable {
@@ -96,27 +102,64 @@ public struct LLMMessage: Codable, Sendable, Equatable {
     /// Captured from `reasoning_content` (OpenAI-compatible) or `thinking`
     /// blocks (Anthropic). Whether it's emitted back on the next request is
     /// per-provider: gated on `BehaviorFlags.replayReasoningContent` for
-    /// OpenAI-compatible providers; not yet round-tripped by Anthropic
-    /// (would also require carrying the thinking-block signature).
+    /// OpenAI-compatible providers; Anthropic uses `continuation` for the
+    /// signed thinking blocks (this `reasoning` field is the text display
+    /// only — for replay use `continuation`).
     public var reasoning: String?
+    /// Provider-specific continuation data carried across multi-turn
+    /// conversations. Currently used by Anthropic (thinking blocks with
+    /// signatures) and Gemini (thoughtSignatures per part). Build a message
+    /// from a real LLMResponse via `.assistant(from: response)` to preserve
+    /// this automatically. See ``ProviderContinuation`` for details.
+    public var continuation: ProviderContinuation?
 
     private enum CodingKeys: String, CodingKey {
-        case role, content, reasoning
+        case role, content, reasoning, continuation
     }
 
-    public init(role: Role, content: Content, images: [LLMImageContent]? = nil, reasoning: String? = nil) {
+    /// General initializer. **Prefer the static factory methods** for the
+    /// common cases — `.user(_:)`, `.system(_:)`, `.assistant(from:)`,
+    /// `.toolResult(_:callID:)`, etc. This initializer is for advanced cases
+    /// (images, custom content shapes) and tests. Constructing an assistant
+    /// turn from an `LLMResponse` here will silently drop the response's
+    /// `reasoning` and `continuation` unless you remember to pass both —
+    /// multi-turn thinking and tool-use loops may break.
+    @available(*, deprecated, message: "Prefer .user(_:), .system(_:), .assistant(from:), .toolResult(_:callID:), .developer(_:). This init is for tests / advanced cases (images, custom content). When recording an assistant turn from an LLMResponse, manual construction silently drops `reasoning` and `continuation` — multi-turn thinking and tool-use loops may break.")
+    public init(role: Role, content: Content, images: [LLMImageContent]? = nil, reasoning: String? = nil, continuation: ProviderContinuation? = nil) {
         self.role = role
         self.content = content
         self.images = images
         self.reasoning = reasoning
+        self.continuation = continuation
     }
 
     /// Convenience initializer for simple text messages.
+    /// **Deprecated** — prefer the role-specific factories (`.user(_:)`,
+    /// `.system(_:)`, etc.) which document intent and don't risk losing
+    /// reasoning / continuation when used for assistant turns.
+    @available(*, deprecated, message: "Prefer .user(_:), .system(_:), .assistant(from:), .toolResult(_:callID:). For assistant turns built from a real LLMResponse, this convenience init silently loses `continuation` — multi-turn thinking may break.")
     public init(role: Role, text: String, images: [LLMImageContent]? = nil, reasoning: String? = nil) {
         self.role = role
         self.content = .text(text)
         self.images = images
         self.reasoning = reasoning
+        self.continuation = nil
+    }
+
+    /// Internal initializer used by the static factories — bypasses the
+    /// deprecation warnings on the public inits.
+    init(
+        _role: Role,
+        _content: Content,
+        _images: [LLMImageContent]? = nil,
+        _reasoning: String? = nil,
+        _continuation: ProviderContinuation? = nil
+    ) {
+        self.role = _role
+        self.content = _content
+        self.images = _images
+        self.reasoning = _reasoning
+        self.continuation = _continuation
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -126,6 +169,9 @@ public struct LLMMessage: Codable, Sendable, Equatable {
         if let reasoning {
             try container.encode(reasoning, forKey: .reasoning)
         }
+        if let continuation, !continuation.isEmpty {
+            try container.encode(continuation, forKey: .continuation)
+        }
     }
 
     public init(from decoder: Decoder) throws {
@@ -134,6 +180,98 @@ public struct LLMMessage: Codable, Sendable, Equatable {
         content = try container.decode(Content.self, forKey: .content)
         images = nil
         reasoning = try container.decodeIfPresent(String.self, forKey: .reasoning)
+        continuation = try container.decodeIfPresent(ProviderContinuation.self, forKey: .continuation)
+    }
+
+    // MARK: - Static factories
+    //
+    // Role-tagged factories that read better at call sites and make the
+    // assistant-from-response path impossible to misuse. Prefer these to the
+    // deprecated initializers.
+
+    /// User text message. For multimodal (text + images), use the deprecated
+    /// general init with `.text` content + `images:`.
+    public static func user(_ text: String) -> LLMMessage {
+        LLMMessage(_role: .user, _content: .text(text))
+    }
+
+    /// User multimodal message — text plus one or more images.
+    public static func user(_ text: String, images: [LLMImageContent]) -> LLMMessage {
+        LLMMessage(_role: .user, _content: .text(text), _images: images)
+    }
+
+    /// System prompt.
+    public static func system(_ text: String) -> LLMMessage {
+        LLMMessage(_role: .system, _content: .text(text))
+    }
+
+    /// OpenAI's `developer` role (introduced for o-series/GPT-5). Providers
+    /// that don't support it translate to `system` at the wire layer; check
+    /// `BehaviorFlags.supportsDeveloperRole` to know which is which.
+    public static func developer(_ text: String) -> LLMMessage {
+        LLMMessage(_role: .developer, _content: .text(text))
+    }
+
+    /// **Build the assistant turn from a real LLMResponse — preserves
+    /// text, tool calls, reasoning, and provider continuation data in one
+    /// shot.** This is the misuse-resistant path: use it whenever you're
+    /// recording an actual model response in the conversation history.
+    /// Manual construction via the deprecated init or `.assistant(text:)`
+    /// drops continuation, which breaks multi-turn thinking on Anthropic
+    /// (with thinkingBudget set) and Gemini 2.5 (thinking on by default).
+    public static func assistant(from response: LLMResponse) -> LLMMessage {
+        let content: Content
+        if response.toolCalls.isEmpty {
+            content = .text(response.text ?? "")
+        } else if let text = response.text, !text.isEmpty {
+            content = .mixed(text: text, toolCalls: response.toolCalls)
+        } else {
+            content = .toolCalls(response.toolCalls)
+        }
+        return LLMMessage(
+            _role: .assistant,
+            _content: content,
+            _reasoning: response.reasoning,
+            _continuation: response.continuation
+        )
+    }
+
+    /// Synthetic assistant text message — for tests and replay only.
+    ///
+    /// **For real responses, use `.assistant(from: response)`.** This factory
+    /// cannot carry provider continuation data (thinking signatures), and you
+    /// must pass `reasoning:` manually. Multi-turn thinking and tool-use
+    /// loops will lose context if used to record an actual LLM response.
+    @available(*, deprecated, message: "Synthetic — for tests / replay only. For real responses use .assistant(from:) which preserves reasoning + continuation. May lose reasoning context across turns.")
+    public static func assistant(text: String, reasoning: String? = nil) -> LLMMessage {
+        LLMMessage(_role: .assistant, _content: .text(text), _reasoning: reasoning)
+    }
+
+    /// Synthetic assistant message with tool calls (and optional text +
+    /// reasoning) — for tests and saved-conversation reload.
+    ///
+    /// **For real responses, use `.assistant(from: response)`.** This factory
+    /// cannot carry provider continuation data. Multi-turn thinking and
+    /// tool-use loops will lose context if used to record an actual LLM
+    /// response.
+    @available(*, deprecated, message: "Synthetic — for tests / saved-conversation reload only. For real responses use .assistant(from:) which preserves reasoning + continuation. May lose reasoning context across turns.")
+    public static func assistant(
+        toolCalls: [LLMToolCall],
+        text: String? = nil,
+        reasoning: String? = nil
+    ) -> LLMMessage {
+        let content: Content
+        if let text, !text.isEmpty {
+            content = .mixed(text: text, toolCalls: toolCalls)
+        } else {
+            content = .toolCalls(toolCalls)
+        }
+        return LLMMessage(_role: .assistant, _content: content, _reasoning: reasoning)
+    }
+
+    /// Tool-result message linking back to the assistant call by ID.
+    public static func toolResult(_ content: String, callID: String) -> LLMMessage {
+        LLMMessage(_role: .tool, _content: .toolResult(toolCallID: callID, content: content))
     }
 
     /// Rough character count for context window estimation (~3 chars per token).

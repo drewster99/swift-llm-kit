@@ -94,16 +94,31 @@ struct GeminiProvider: LLMProvider {
         var conversationMessages: [LLMMessage] = []
 
         for message in messages {
-            if message.role == .system, let text = message.content.textValue {
+            // .developer is treated as system for Gemini (no native support).
+            // Both collapse into the top-level systemInstruction field.
+            if (message.role == .system || message.role == .developer),
+               let text = message.content.textValue {
                 systemParts.append(text)
             } else {
                 conversationMessages.append(message)
             }
         }
 
+        // Gemini's `functionResponse.name` field must match the original
+        // `functionCall.name` — Gemini uses name (NOT ID — IDs aren't part of
+        // its wire schema at all) for parallel-call pairing. Walk the
+        // conversation once to build [toolCallID → functionName] so the
+        // .toolResult encoder below can look up the right name.
+        // Serial single-call conversations also work without this (Gemini
+        // falls back to positional pairing), but parallel calls fail without
+        // correct names.
+        let toolNameByCallID = Self.buildToolNameLookup(conversationMessages)
+
         // Gemini requires strict user/model alternation. Merge consecutive same-role
         // messages (e.g. a tool result followed by a user message) into one content entry.
-        let rawContents = try conversationMessages.map(encodeContent)
+        let rawContents = try conversationMessages.map {
+            try encodeContent($0, toolNameByCallID: toolNameByCallID)
+        }
         let mergedContents = Self.mergeConsecutiveSameRole(rawContents)
 
         let effectiveMaxTokens = maxOutputTokensOverride ?? configuration.maxTokens
@@ -152,8 +167,50 @@ struct GeminiProvider: LLMProvider {
         return body
     }
 
-    private func encodeContent(_ message: LLMMessage) throws -> [String: Any] {
+    /// Builds `[toolCallID → functionName]` from prior assistant turns in the
+    /// conversation. Walks `.toolCalls` and `.mixed` content; ignores others.
+    /// Used by `encodeContent` to populate `functionResponse.name` correctly
+    /// (Gemini matches functionResponse to functionCall by name, not ID).
+    static func buildToolNameLookup(_ messages: [LLMMessage]) -> [String: String] {
+        var map: [String: String] = [:]
+        for message in messages {
+            switch message.content {
+            case .toolCalls(let calls):
+                for call in calls { map[call.id] = call.name }
+            case .mixed(_, let calls):
+                for call in calls { map[call.id] = call.name }
+            case .text, .toolResult:
+                break
+            }
+        }
+        return map
+    }
+
+    /// Encodes one LLMMessage as a Gemini `contents` entry.
+    ///
+    /// For assistant turns with thoughtSignatures carried in
+    /// `message.continuation`, re-attaches each signature to its
+    /// corresponding part by index. Critical for Gemini 2.5's thinking
+    /// continuity: without the prior turn's thoughtSignature, multi-turn
+    /// tool-use conversations silently drop results.
+    private func encodeContent(
+        _ message: LLMMessage,
+        toolNameByCallID: [String: String]
+    ) throws -> [String: Any] {
         let role = geminiRole(for: message)
+
+        // Gemini thoughtSignatures from a prior response, keyed by part index.
+        // Only meaningful for assistant turns (Gemini calls them "model").
+        let signatures: [String: String] = (message.role == .assistant)
+            ? (message.continuation?.geminiThoughtSignatures ?? [:])
+            : [:]
+
+        func attachSignature(_ part: [String: Any], at index: Int) -> [String: Any] {
+            guard let sig = signatures[String(index)] else { return part }
+            var withSig = part
+            withSig["thoughtSignature"] = sig
+            return withSig
+        }
 
         switch message.content {
         case .text(let text):
@@ -169,10 +226,13 @@ struct GeminiProvider: LLMProvider {
                 }
             }
             parts.append(["text": text])
+            // Attach signatures by emitted-part index (matches the source-side
+            // parsing which also keyed by part index).
+            parts = parts.enumerated().map { attachSignature($1, at: $0) }
             return ["role": role, "parts": parts]
 
         case .toolCalls(let calls):
-            let parts: [[String: Any]] = try calls.map { call in
+            var parts: [[String: Any]] = try calls.map { call in
                 [
                     "functionCall": [
                         "name": call.name,
@@ -180,6 +240,7 @@ struct GeminiProvider: LLMProvider {
                     ] as [String: Any]
                 ]
             }
+            parts = parts.enumerated().map { attachSignature($1, at: $0) }
             return ["role": "model", "parts": parts]
 
         case .mixed(let text, let calls):
@@ -192,17 +253,27 @@ struct GeminiProvider: LLMProvider {
                     ] as [String: Any]
                 ])
             }
+            parts = parts.enumerated().map { attachSignature($1, at: $0) }
             return ["role": "model", "parts": parts]
 
         case .toolResult(let toolCallID, let content):
-            // Gemini uses functionResponse parts for tool results.
-            // The toolCallID is used as the function name reference.
+            // Gemini uses `functionResponse.name` (NOT toolCallID — IDs aren't
+            // on the wire) to pair with the matching `functionCall`. Look up
+            // the actual function name from prior assistant turns; on a miss
+            // (orphan tool result), fall back to the toolCallID and warn.
+            let functionName: String
+            if let resolved = toolNameByCallID[toolCallID] {
+                functionName = resolved
+            } else {
+                logger.warning("Tool result for ID \(toolCallID, privacy: .public) has no matching prior tool call; using ID as function name (Gemini may reject for parallel-call conversations)")
+                functionName = toolCallID
+            }
             return [
                 "role": "user",
                 "parts": [
                     [
                         "functionResponse": [
-                            "name": toolCallID,
+                            "name": functionName,
                             "response": [
                                 "content": content
                             ]
@@ -217,7 +288,9 @@ struct GeminiProvider: LLMProvider {
         switch message.role {
         case .user, .tool: return "user"
         case .assistant: return "model"
-        case .system: return "user" // Should be extracted before reaching here
+        // System AND developer messages should both have been extracted into
+        // `systemInstruction` before reaching here. Defensive fallback to "user".
+        case .system, .developer: return "user"
         }
     }
 
@@ -263,8 +336,17 @@ struct GeminiProvider: LLMProvider {
 
         var text: String?
         var toolCalls: [LLMToolCall] = []
+        // Capture thoughtSignature per original part index. Gemini 2.5 returns
+        // these on EVERY response with thinking enabled (default on Pro). They
+        // must be echoed back on subsequent turns or the model loses thinking-
+        // continuity validation and silently drops tool results. Re-attached
+        // to the corresponding outgoing parts in encodeContent.
+        var thoughtSignatures: [String: String] = [:]
 
-        for part in parts {
+        for (partIndex, part) in parts.enumerated() {
+            if let sig = part["thoughtSignature"] as? String, !sig.isEmpty {
+                thoughtSignatures[String(partIndex)] = sig
+            }
             if let textContent = part["text"] as? String {
                 if let existing = text {
                     text = existing + textContent
@@ -310,10 +392,15 @@ struct GeminiProvider: LLMProvider {
             }
         }
 
+        let continuation: ProviderContinuation? = thoughtSignatures.isEmpty
+            ? nil
+            : ProviderContinuation(geminiThoughtSignatures: thoughtSignatures)
+
         return LLMResponse(
             text: text?.isEmpty == true ? nil : text,
             toolCalls: toolCalls,
-            usage: tokenUsage
+            usage: tokenUsage,
+            continuation: continuation
         )
     }
 

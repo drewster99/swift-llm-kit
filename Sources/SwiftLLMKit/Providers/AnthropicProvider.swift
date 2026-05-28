@@ -78,7 +78,10 @@ struct AnthropicProvider: LLMProvider {
         var conversationMessages: [LLMMessage] = []
 
         for message in messages {
-            if message.role == .system, let text = message.content.textValue {
+            // .developer is treated as system for Anthropic (no native support).
+            // Both collapse into the top-level system field.
+            if (message.role == .system || message.role == .developer),
+               let text = message.content.textValue {
                 systemParts.append(text)
             } else {
                 conversationMessages.append(message)
@@ -195,28 +198,51 @@ struct AnthropicProvider: LLMProvider {
         switch message.role {
         case .user: return "user"
         case .assistant: return "assistant"
-        // System messages should have been extracted in buildRequestBody.
-        // Tool results are encoded as "user" messages per Anthropic API.
-        case .system, .tool: return "user"
+        // System and developer messages should have been extracted into the
+        // top-level system field by buildRequestBody. Tool results are
+        // encoded as "user" messages per Anthropic API.
+        case .system, .developer, .tool: return "user"
         }
     }
 
     private func encodeMessage(_ message: LLMMessage) throws -> [String: Any] {
         let role = anthropicRole(for: message)
 
+        // For assistant turns, prepend any preserved thinking blocks (with
+        // signatures) from `message.continuation`. Anthropic requires these
+        // to be replayed unchanged for thinking-continuity during multi-turn
+        // / tool-use flows. Only applies to .assistant role since thinking
+        // blocks are model output. Other roles ignore the continuation.
+        let thinkingBlocks: [[String: Any]] = {
+            guard message.role == .assistant,
+                  let blocks = message.continuation?.anthropicThinkingBlocks,
+                  !blocks.isEmpty else { return [] }
+            return blocks.map { block in
+                [
+                    "type": "thinking",
+                    "thinking": block.thinking,
+                    "signature": block.signature
+                ] as [String: Any]
+            }
+        }()
+
         switch message.content {
         case .text(let text):
-            // If there are images, encode as content blocks array (multimodal)
-            if let images = message.images, !images.isEmpty {
-                var blocks: [[String: Any]] = images.map { image in
-                    [
-                        "type": "image",
-                        "source": [
-                            "type": "base64",
-                            "media_type": image.mimeType,
-                            "data": image.data.base64EncodedString()
-                        ]
-                    ] as [String: Any]
+            // If there are images OR thinking blocks to prepend, encode as
+            // a content-blocks array.
+            if !thinkingBlocks.isEmpty || !(message.images ?? []).isEmpty {
+                var blocks: [[String: Any]] = thinkingBlocks
+                if let images = message.images, !images.isEmpty {
+                    blocks.append(contentsOf: images.map { image in
+                        [
+                            "type": "image",
+                            "source": [
+                                "type": "base64",
+                                "media_type": image.mimeType,
+                                "data": image.data.base64EncodedString()
+                            ]
+                        ] as [String: Any]
+                    })
                 }
                 blocks.append(["type": "text", "text": text])
                 return [
@@ -229,19 +255,19 @@ struct AnthropicProvider: LLMProvider {
                 "content": text
             ]
         case .toolCalls(let calls):
-            let content: [[String: Any]] = try calls.map { call in
+            var content: [[String: Any]] = thinkingBlocks
+            try content.append(contentsOf: calls.map { call in
                 [
                     "type": "tool_use",
                     "id": call.id,
                     "name": call.name,
                     "input": try Self.parseToolArguments(call.arguments)
-                ]
-            }
+                ] as [String: Any]
+            })
             return ["role": "assistant", "content": content]
         case .mixed(let text, let calls):
-            var content: [[String: Any]] = [
-                ["type": "text", "text": text]
-            ]
+            var content: [[String: Any]] = thinkingBlocks
+            content.append(["type": "text", "text": text])
             try content.append(contentsOf: calls.map { call in
                 [
                     "type": "tool_use",
@@ -365,14 +391,25 @@ struct AnthropicProvider: LLMProvider {
 
         var text: String?
         var toolCalls: [LLMToolCall] = []
+        var thinkingBlocks: [AnthropicThinkingBlock] = []
         var reasoning: String?
 
         for block in contentBlocks {
             guard let type = block["type"] as? String else { continue }
             switch type {
             case "thinking":
-                if let thinking = block["thinking"] as? String {
-                    logger.debug("Thinking block (\(thinking.count) chars)")
+                // Capture BOTH the thinking text (for display/inspection via
+                // LLMResponse.reasoning) AND the signature (for multi-turn
+                // continuity replay via LLMResponse.continuation). Anthropic
+                // requires the signature to be replayed unchanged.
+                let thinking = block["thinking"] as? String ?? ""
+                let signature = block["signature"] as? String ?? ""
+                logger.debug("Thinking block (\(thinking.count) chars, signature \(signature.isEmpty ? "missing" : "present"))")
+                if !signature.isEmpty {
+                    thinkingBlocks.append(AnthropicThinkingBlock(thinking: thinking, signature: signature))
+                }
+                // Last thinking block's text feeds reasoning for display.
+                if !thinking.isEmpty {
                     reasoning = thinking
                 }
             case "text":
@@ -390,11 +427,16 @@ struct AnthropicProvider: LLMProvider {
             }
         }
 
+        let continuation: ProviderContinuation? = thinkingBlocks.isEmpty
+            ? nil
+            : ProviderContinuation(anthropicThinkingBlocks: thinkingBlocks)
+
         return LLMResponse(
             text: text?.isEmpty == true ? nil : text,
             toolCalls: toolCalls,
             reasoning: reasoning,
-            usage: tokenUsage
+            usage: tokenUsage,
+            continuation: continuation
         )
     }
 }

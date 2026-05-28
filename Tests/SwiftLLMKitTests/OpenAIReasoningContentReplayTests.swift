@@ -28,9 +28,9 @@ struct OpenAIReasoningContentReplayTests {
     func emitsReasoningWhenFlagOn() {
         let p = provider(flags: BehaviorFlags(replayReasoningContent: true))
         let msg = LLMMessage(
-            role: .assistant,
-            content: .toolCalls([LLMToolCall(id: "x", name: "noop", arguments: "{}")]),
-            reasoning: "I should call the noop tool now."
+            _role: .assistant,
+            _content: .toolCalls([LLMToolCall(id: "x", name: "noop", arguments: "{}")]),
+            _reasoning: "I should call the noop tool now."
         )
         let encoded = p.encodeMessage(msg)
         #expect(encoded["reasoning_content"] as? String == "I should call the noop tool now.")
@@ -41,9 +41,9 @@ struct OpenAIReasoningContentReplayTests {
     func skipsReasoningWhenFlagOff() {
         let p = provider(flags: BehaviorFlags())  // default: flag off
         let msg = LLMMessage(
-            role: .assistant,
-            content: .toolCalls([LLMToolCall(id: "x", name: "noop", arguments: "{}")]),
-            reasoning: "I should call the noop tool now."
+            _role: .assistant,
+            _content: .toolCalls([LLMToolCall(id: "x", name: "noop", arguments: "{}")]),
+            _reasoning: "I should call the noop tool now."
         )
         let encoded = p.encodeMessage(msg)
         #expect(encoded["reasoning_content"] == nil,
@@ -54,11 +54,11 @@ struct OpenAIReasoningContentReplayTests {
     func emitsReasoningOnMixedAssistant() {
         let p = provider(flags: BehaviorFlags(replayReasoningContent: true))
         let msg = LLMMessage(
-            role: .assistant,
-            content: .mixed(text: "Calling noop.", toolCalls: [
+            _role: .assistant,
+            _content: .mixed(text: "Calling noop.", toolCalls: [
                 LLMToolCall(id: "x", name: "noop", arguments: "{}")
             ]),
-            reasoning: "Thinking step: invoke noop."
+            _reasoning: "Thinking step: invoke noop."
         )
         let encoded = p.encodeMessage(msg)
         #expect(encoded["reasoning_content"] as? String == "Thinking step: invoke noop.")
@@ -71,7 +71,7 @@ struct OpenAIReasoningContentReplayTests {
         // if a user/system message somehow carries reasoning (e.g. it round-tripped
         // through persistence), don't send it back as if the model produced it.
         let p = provider(flags: BehaviorFlags(replayReasoningContent: true))
-        let msg = LLMMessage(role: .user, text: "hello", reasoning: "stray")
+        let msg = LLMMessage(_role: .user, _content: .text("hello"), _reasoning: "stray")
         let encoded = p.encodeMessage(msg)
         #expect(encoded["reasoning_content"] == nil)
     }
@@ -79,7 +79,7 @@ struct OpenAIReasoningContentReplayTests {
     @Test("flag on + assistant text without reasoning → reasoning_content absent")
     func absentReasoningStaysAbsent() {
         let p = provider(flags: BehaviorFlags(replayReasoningContent: true))
-        let msg = LLMMessage(role: .assistant, text: "ack")
+        let msg = LLMMessage(_role: .assistant, _content: .text("ack"))
         let encoded = p.encodeMessage(msg)
         #expect(encoded["reasoning_content"] == nil)
     }
@@ -87,9 +87,9 @@ struct OpenAIReasoningContentReplayTests {
     @Test("LLMMessage round-trips reasoning through Codable")
     func codableRoundTrip() throws {
         let msg = LLMMessage(
-            role: .assistant,
-            content: .text("done"),
-            reasoning: "step 1; step 2"
+            _role: .assistant,
+            _content: .text("done"),
+            _reasoning: "step 1; step 2"
         )
         let data = try JSONEncoder().encode(msg)
         let decoded = try JSONDecoder().decode(LLMMessage.self, from: data)

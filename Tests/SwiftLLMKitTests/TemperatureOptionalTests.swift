@@ -132,7 +132,7 @@ struct TemperatureOptionalTests {
             provider: Self.provider(.anthropic, endpoint: "https://api.anthropic.com/v1"),
             readAPIKey: Self.dummyKey
         )
-        let body = try p.buildRequestBody(messages: [LLMMessage(role: .user, text: "hi")], tools: [])
+        let body = try p.buildRequestBody(messages: [.user("hi")], tools: [])
         #expect(body["temperature"] == nil)
     }
 
@@ -142,7 +142,7 @@ struct TemperatureOptionalTests {
             provider: Self.provider(.anthropic, endpoint: "https://api.anthropic.com/v1"),
             readAPIKey: Self.dummyKey
         )
-        let body = try p.buildRequestBody(messages: [LLMMessage(role: .user, text: "hi")], tools: [])
+        let body = try p.buildRequestBody(messages: [.user("hi")], tools: [])
         #expect(body["temperature"] as? Double == 0.5)
     }
 
@@ -152,7 +152,7 @@ struct TemperatureOptionalTests {
             provider: try Self.provider(.openAICompatible, endpoint: "https://api.openai.com/v1"),
             readAPIKey: Self.dummyKey
         )
-        let body = p.buildRequestBody(messages: [LLMMessage(role: .user, text: "hi")], tools: [])
+        let body = p.buildRequestBody(messages: [.user("hi")], tools: [])
         #expect(body["temperature"] == nil)
     }
 
@@ -162,7 +162,7 @@ struct TemperatureOptionalTests {
             provider: try Self.provider(.openAICompatible, endpoint: "https://api.openai.com/v1"),
             readAPIKey: Self.dummyKey
         )
-        let body = p.buildRequestBody(messages: [LLMMessage(role: .user, text: "hi")], tools: [])
+        let body = p.buildRequestBody(messages: [.user("hi")], tools: [])
         #expect(body["temperature"] as? Double == 0.3)
     }
 
@@ -172,7 +172,7 @@ struct TemperatureOptionalTests {
             provider: Self.provider(.gemini, endpoint: "https://generativelanguage.googleapis.com/v1beta"),
             readAPIKey: Self.dummyKey
         )
-        let body = try p.buildRequestBody(messages: [LLMMessage(role: .user, text: "hi")], tools: [])
+        let body = try p.buildRequestBody(messages: [.user("hi")], tools: [])
         let gc = try #require(body["generationConfig"] as? [String: Any])
         #expect(gc["temperature"] == nil)
         // maxOutputTokens still present
@@ -185,7 +185,7 @@ struct TemperatureOptionalTests {
             provider: Self.provider(.gemini, endpoint: "https://generativelanguage.googleapis.com/v1beta"),
             readAPIKey: Self.dummyKey
         )
-        let body = try p.buildRequestBody(messages: [LLMMessage(role: .user, text: "hi")], tools: [])
+        let body = try p.buildRequestBody(messages: [.user("hi")], tools: [])
         let gc = try #require(body["generationConfig"] as? [String: Any])
         #expect(gc["temperature"] as? Double == 0.8)
     }
@@ -196,7 +196,7 @@ struct TemperatureOptionalTests {
             provider: (try? Self.provider(.ollama, endpoint: "http://localhost:11434/api"))!,
             readAPIKey: Self.dummyKey
         )
-        let body = p.buildRequestBody(messages: [LLMMessage(role: .user, text: "hi")], tools: [])
+        let body = p.buildRequestBody(messages: [.user("hi")], tools: [])
         let options = body["options"] as? [String: Any]
         #expect(options?["temperature"] == nil)
         #expect(options?["num_predict"] != nil)
@@ -208,7 +208,7 @@ struct TemperatureOptionalTests {
             provider: (try? Self.provider(.ollama, endpoint: "http://localhost:11434/api"))!,
             readAPIKey: Self.dummyKey
         )
-        let body = p.buildRequestBody(messages: [LLMMessage(role: .user, text: "hi")], tools: [])
+        let body = p.buildRequestBody(messages: [.user("hi")], tools: [])
         let options = body["options"] as? [String: Any]
         #expect(options?["temperature"] as? Double == 0.9)
     }
@@ -230,7 +230,7 @@ struct TemperatureOptionalTests {
             provider: Self.provider(.anthropic, endpoint: "https://api.anthropic.com/v1"),
             readAPIKey: Self.dummyKey
         )
-        let body = try p.buildRequestBody(messages: [LLMMessage(role: .user, text: "hi")], tools: [])
+        let body = try p.buildRequestBody(messages: [.user("hi")], tools: [])
         #expect(body["temperature"] as? Double == 1.0)
     }
 }

@@ -46,7 +46,7 @@ struct ExtraJSONOverridesTests {
             provider: try Self.provider("builtin.anthropic", type: .anthropic, endpoint: "https://api.anthropic.com/v1"),
             readAPIKey: Self.dummyKey
         )
-        let body = try p.buildRequestBody(messages: [LLMMessage(role: .user, text: "hi")], tools: [])
+        let body = try p.buildRequestBody(messages: [.user("hi")], tools: [])
         let thinking = try #require(body["thinking"] as? [String: Any])
         #expect(thinking["type"] as? String == "enabled")
         #expect(thinking["budget_tokens"] as? Int == 8000)
@@ -67,7 +67,7 @@ struct ExtraJSONOverridesTests {
             provider: try Self.provider("builtin.openai", type: .openAICompatible, endpoint: "https://api.openai.com/v1"),
             readAPIKey: Self.dummyKey
         )
-        let body = p.buildRequestBody(messages: [LLMMessage(role: .user, text: "hi")], tools: [])
+        let body = p.buildRequestBody(messages: [.user("hi")], tools: [])
         #expect(body["reasoning_effort"] as? String == "high")
         #expect(body["service_tier"] as? String == "priority")
         #expect(body["top_logprobs"] as? Int == 5)
@@ -89,7 +89,7 @@ struct ExtraJSONOverridesTests {
             provider: try Self.provider("builtin.gemini", type: .gemini, endpoint: "https://generativelanguage.googleapis.com/v1beta"),
             readAPIKey: Self.dummyKey
         )
-        let body = try p.buildRequestBody(messages: [LLMMessage(role: .user, text: "hi")], tools: [])
+        let body = try p.buildRequestBody(messages: [.user("hi")], tools: [])
         let safety = try #require(body["safetySettings"] as? [[String: Any]])
         #expect(safety.count == 1)
         #expect(safety[0]["category"] as? String == "HARM_CATEGORY_HARASSMENT")
@@ -108,7 +108,7 @@ struct ExtraJSONOverridesTests {
             provider: try Self.provider("builtin.ollama", type: .ollama, endpoint: "http://localhost:11434/api"),
             readAPIKey: Self.dummyKey
         )
-        let body = p.buildRequestBody(messages: [LLMMessage(role: .user, text: "hi")], tools: [])
+        let body = p.buildRequestBody(messages: [.user("hi")], tools: [])
         #expect(body["keep_alive"] as? String == "5m")
         #expect(body["format"] as? String == "json")
     }
@@ -133,8 +133,8 @@ struct ExtraJSONOverridesTests {
         )
         let body = try p.buildRequestBody(
             messages: [
-                LLMMessage(role: .system, text: "You are helpful."),
-                LLMMessage(role: .user, text: "hi")
+                .system("You are helpful."),
+                .user("hi")
             ],
             tools: []
         )
@@ -162,7 +162,7 @@ struct ExtraJSONOverridesTests {
             provider: Self.provider("builtin.gemini", type: .gemini, endpoint: "https://generativelanguage.googleapis.com/v1beta"),
             readAPIKey: Self.dummyKey
         )
-        let body = try p.buildRequestBody(messages: [LLMMessage(role: .user, text: "hi")], tools: [])
+        let body = try p.buildRequestBody(messages: [.user("hi")], tools: [])
         let gc = try #require(body["generationConfig"] as? [String: Any])
         #expect(gc["temperature"] != nil, "Gemini's default temperature must survive a generationConfig sub-key override")
         #expect(gc["maxOutputTokens"] != nil)
@@ -183,7 +183,7 @@ struct ExtraJSONOverridesTests {
             provider: try Self.provider("builtin.anthropic", type: .anthropic, endpoint: "https://api.anthropic.com/v1"),
             readAPIKey: Self.dummyKey
         )
-        let body = try p.buildRequestBody(messages: [LLMMessage(role: .user, text: "hi")], tools: [])
+        let body = try p.buildRequestBody(messages: [.user("hi")], tools: [])
         #expect(body["model"] as? String == "claude-override")
     }
 
@@ -193,14 +193,14 @@ struct ExtraJSONOverridesTests {
             provider: try Self.provider("builtin.anthropic", type: .anthropic, endpoint: "https://api.anthropic.com/v1"),
             readAPIKey: Self.dummyKey
         )
-        let bodyNil = try p.buildRequestBody(messages: [LLMMessage(role: .user, text: "hi")], tools: [])
+        let bodyNil = try p.buildRequestBody(messages: [.user("hi")], tools: [])
 
         let p2 = AnthropicProvider(
             configuration: Self.configuration(providerID: "builtin.anthropic", extras: [:]),
             provider: try Self.provider("builtin.anthropic", type: .anthropic, endpoint: "https://api.anthropic.com/v1"),
             readAPIKey: Self.dummyKey
         )
-        let bodyEmpty = try p2.buildRequestBody(messages: [LLMMessage(role: .user, text: "hi")], tools: [])
+        let bodyEmpty = try p2.buildRequestBody(messages: [.user("hi")], tools: [])
 
         let aData = try JSONSerialization.data(withJSONObject: bodyNil, options: [.sortedKeys])
         let bData = try JSONSerialization.data(withJSONObject: bodyEmpty, options: [.sortedKeys])

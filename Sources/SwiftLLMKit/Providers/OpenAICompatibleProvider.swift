@@ -103,11 +103,27 @@ struct OpenAICompatibleProvider: LLMProvider {
         // Extract any system messages from arbitrary positions (e.g. per-turn task
         // context appended by AgentActor) and consolidate them into a single leading
         // system message, followed by the remaining non-system messages in order.
+        //
+        // `.developer` is OpenAI's newer role for o-series/GPT-5 — semantically
+        // like system but with different precedence. We pass it through as a
+        // "developer" role when `BehaviorFlags.supportsDeveloperRole` is set
+        // (true for OpenAI proper); otherwise we downgrade to system by
+        // folding into systemParts. This keeps OpenAI-compatible-but-not-OpenAI
+        // backends (z.ai, Mistral, DeepSeek, …) from getting a role they don't
+        // understand.
         var systemParts: [String] = []
+        var developerParts: [String] = []
         var nonSystemMessages: [[String: Any]] = []
         for message in messages {
             if message.role == .system, case .text(let text) = message.content {
                 systemParts.append(text)
+            } else if message.role == .developer, case .text(let text) = message.content {
+                if behaviorFlags.supportsDeveloperRole {
+                    developerParts.append(text)
+                } else {
+                    // Downgrade to system for backends that don't support it.
+                    systemParts.append(text)
+                }
             } else {
                 nonSystemMessages.append(encodeMessage(message))
             }
@@ -115,6 +131,10 @@ struct OpenAICompatibleProvider: LLMProvider {
         var orderedMessages: [[String: Any]] = []
         if !systemParts.isEmpty {
             orderedMessages.append(["role": "system", "content": systemParts.joined(separator: "\n\n")])
+        }
+        if !developerParts.isEmpty {
+            // Developer messages go AFTER system per OpenAI's precedence model.
+            orderedMessages.append(["role": "developer", "content": developerParts.joined(separator: "\n\n")])
         }
         orderedMessages.append(contentsOf: nonSystemMessages)
 

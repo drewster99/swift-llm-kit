@@ -62,6 +62,14 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
     /// captured but never sent — safe default.
     public var replayReasoningContent: Bool = false
 
+    /// Whether the model accepts OpenAI's `developer` message role. OpenAI's
+    /// own o-series / GPT-5 do; most other OpenAI-compatible backends (z.ai,
+    /// Mistral, DeepSeek, etc.) don't and will reject or ignore it.
+    /// `OpenAICompatibleProvider` downgrades `developer` messages to `system`
+    /// when this flag is false. Default false — opt-in per model via bundled
+    /// metadata or user override.
+    public var supportsDeveloperRole: Bool = false
+
     /// Free-form key/value bag for one-off provider tweaks that haven't earned
     /// a typed field yet. Promoted fields must always have a Codable default
     /// so older persisted state still decodes cleanly.
@@ -75,12 +83,14 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         useMaxCompletionTokens: Bool = false,
         forceParallelToolCalls: Bool = false,
         replayReasoningContent: Bool = false,
+        supportsDeveloperRole: Bool = false,
         extras: [String: String] = [:]
     ) {
         self.glmTemplateSalvage = glmTemplateSalvage
         self.useMaxCompletionTokens = useMaxCompletionTokens
         self.forceParallelToolCalls = forceParallelToolCalls
         self.replayReasoningContent = replayReasoningContent
+        self.supportsDeveloperRole = supportsDeveloperRole
         self.extras = extras
     }
 
@@ -91,6 +101,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
             && !useMaxCompletionTokens
             && !forceParallelToolCalls
             && !replayReasoningContent
+            && !supportsDeveloperRole
             && extras.isEmpty
     }
 
@@ -103,6 +114,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         if useMaxCompletionTokens { out.append("max_completion_tokens") }
         if forceParallelToolCalls { out.append("parallel tools") }
         if replayReasoningContent { out.append("replay reasoning") }
+        if supportsDeveloperRole { out.append("developer role") }
         for key in extras.keys.sorted() {
             out.append("*\(key)")
         }
@@ -112,7 +124,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
     // MARK: - Codable (backward-compatible)
 
     private enum CodingKeys: String, CodingKey {
-        case glmTemplateSalvage, useMaxCompletionTokens, forceParallelToolCalls, replayReasoningContent, extras
+        case glmTemplateSalvage, useMaxCompletionTokens, forceParallelToolCalls, replayReasoningContent, supportsDeveloperRole, extras
     }
 
     public init(from decoder: Decoder) throws {
@@ -121,6 +133,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         useMaxCompletionTokens = try c.decodeIfPresent(Bool.self, forKey: .useMaxCompletionTokens) ?? false
         forceParallelToolCalls = try c.decodeIfPresent(Bool.self, forKey: .forceParallelToolCalls) ?? false
         replayReasoningContent = try c.decodeIfPresent(Bool.self, forKey: .replayReasoningContent) ?? false
+        supportsDeveloperRole = try c.decodeIfPresent(Bool.self, forKey: .supportsDeveloperRole) ?? false
         extras = try c.decodeIfPresent([String: String].self, forKey: .extras) ?? [:]
     }
 
@@ -132,6 +145,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         if useMaxCompletionTokens { try c.encode(useMaxCompletionTokens, forKey: .useMaxCompletionTokens) }
         if forceParallelToolCalls { try c.encode(forceParallelToolCalls, forKey: .forceParallelToolCalls) }
         if replayReasoningContent { try c.encode(replayReasoningContent, forKey: .replayReasoningContent) }
+        if supportsDeveloperRole { try c.encode(supportsDeveloperRole, forKey: .supportsDeveloperRole) }
         if !extras.isEmpty { try c.encode(extras, forKey: .extras) }
     }
 }
@@ -149,6 +163,7 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
     public var useMaxCompletionTokens: Bool?
     public var forceParallelToolCalls: Bool?
     public var replayReasoningContent: Bool?
+    public var supportsDeveloperRole: Bool?
     public var extras: [String: String]?
 
     public init(
@@ -156,12 +171,14 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
         useMaxCompletionTokens: Bool? = nil,
         forceParallelToolCalls: Bool? = nil,
         replayReasoningContent: Bool? = nil,
+        supportsDeveloperRole: Bool? = nil,
         extras: [String: String]? = nil
     ) {
         self.glmTemplateSalvage = glmTemplateSalvage
         self.useMaxCompletionTokens = useMaxCompletionTokens
         self.forceParallelToolCalls = forceParallelToolCalls
         self.replayReasoningContent = replayReasoningContent
+        self.supportsDeveloperRole = supportsDeveloperRole
         self.extras = extras
     }
 
@@ -170,6 +187,7 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
         if let v = useMaxCompletionTokens, (forceReplace || v) { flags.useMaxCompletionTokens = v }
         if let v = forceParallelToolCalls, (forceReplace || v) { flags.forceParallelToolCalls = v }
         if let v = replayReasoningContent, (forceReplace || v) { flags.replayReasoningContent = v }
+        if let v = supportsDeveloperRole, (forceReplace || v) { flags.supportsDeveloperRole = v }
         if let extrasPatch = extras {
             if forceReplace {
                 flags.extras = extrasPatch
@@ -188,6 +206,7 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
             && useMaxCompletionTokens == nil
             && forceParallelToolCalls == nil
             && replayReasoningContent == nil
+            && supportsDeveloperRole == nil
             && (extras?.isEmpty ?? true)
     }
 }
