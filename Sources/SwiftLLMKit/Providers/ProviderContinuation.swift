@@ -30,35 +30,116 @@ public struct ProviderContinuation: Sendable, Codable, Equatable {
     /// at the start of the assistant turn during multi-turn / tool-use flows.
     public let anthropicThinkingBlocks: [AnthropicThinkingBlock]?
 
-    /// Gemini per-part thought signatures, keyed by the part index in the
-    /// original response. Replayed as sibling fields on the corresponding
-    /// outgoing parts. (Keys are stringified Ints to keep the value Codable
-    /// without a custom encoder; valid keys are "0", "1", "2", ...)
+    /// Full Gemini response parts in original order, preserving every part's
+    /// content (text / functionCall) AND its thoughtSignature in one
+    /// structurally-faithful payload. Replayed verbatim by `GeminiProvider`
+    /// when constructing the next request — bypasses content-shape collapse
+    /// (e.g. the factory turning `[thoughtPart, fcA, fcB]` into
+    /// `.toolCalls([fcA, fcB])`, which would mis-align position-keyed sigs).
+    ///
+    /// Non-Gemini providers ignore this field. The parts are stored verbatim
+    /// from the parse-side; the encoder applies tool-name-by-call-id lookup
+    /// only to `functionResponse` parts (which come from the agent loop's
+    /// tool execution), never to `functionCall` parts (which came verbatim
+    /// from the model).
+    public let geminiResponseParts: [GeminiResponsePart]?
+
+    /// Legacy 0.0.24–0.0.25 storage for Gemini thought signatures keyed by
+    /// part-array index. Shape-fragile across `.assistant(from:)` factory
+    /// collapses — superseded by `geminiResponseParts` in 0.0.26. Retained
+    /// for backward-compatible decoding of saved conversations.
+    @available(*, deprecated, message: "Superseded by geminiResponseParts in 0.0.26. Position-keyed signatures misalign when the factory collapses a multi-part response into a single .text/.toolCalls/.mixed content. Reads from disk for legacy saved conversations still work; new code path captures and replays the full parts structure.")
     public let geminiThoughtSignatures: [String: String]?
 
     public init(
         anthropicThinkingBlocks: [AnthropicThinkingBlock]? = nil,
+        geminiResponseParts: [GeminiResponsePart]? = nil,
         geminiThoughtSignatures: [String: String]? = nil
     ) {
         self.anthropicThinkingBlocks = anthropicThinkingBlocks
+        self.geminiResponseParts = geminiResponseParts
         self.geminiThoughtSignatures = geminiThoughtSignatures
     }
 
     /// True if every field is nil — no continuation data carried.
     public var isEmpty: Bool {
-        anthropicThinkingBlocks == nil && geminiThoughtSignatures == nil
+        anthropicThinkingBlocks == nil
+            && geminiResponseParts == nil
+            && geminiThoughtSignatures == nil
     }
 
     /// Backward-compatible decoder: legacy JSON without these keys decodes
-    /// cleanly with all fields nil.
+    /// cleanly with all fields nil. 0.0.24–0.0.25 saved files with the old
+    /// `geminiThoughtSignatures` field still load — the field is kept for
+    /// read-side compatibility even though new captures go via
+    /// `geminiResponseParts`.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.anthropicThinkingBlocks = try c.decodeIfPresent([AnthropicThinkingBlock].self, forKey: .anthropicThinkingBlocks)
+        self.geminiResponseParts = try c.decodeIfPresent([GeminiResponsePart].self, forKey: .geminiResponseParts)
         self.geminiThoughtSignatures = try c.decodeIfPresent([String: String].self, forKey: .geminiThoughtSignatures)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case anthropicThinkingBlocks, geminiThoughtSignatures
+        case anthropicThinkingBlocks, geminiResponseParts, geminiThoughtSignatures
+    }
+}
+
+/// One part from a Gemini response. Preserves text content, functionCall,
+/// and the part's thoughtSignature in a single structurally-faithful
+/// payload. The Gemini encoder emits saved parts verbatim on replay.
+public struct GeminiResponsePart: Sendable, Codable, Equatable {
+    /// Text content of this part. `nil` for pure-functionCall parts.
+    public let text: String?
+    /// Function call emitted by the model. `nil` for pure-text parts.
+    public let functionCall: GeminiFunctionCall?
+    /// Opaque signature binding this part to the model's reasoning. Must
+    /// be replayed verbatim on the corresponding outgoing part or Gemini's
+    /// strict validation drops tool results downstream.
+    public let thoughtSignature: String?
+    /// True if this part was marked as "thought" content (only emitted by
+    /// Gemini when `thinkingConfig.includeThoughts: true` is requested —
+    /// off by default in our configuration).
+    public let thought: Bool?
+
+    public init(
+        text: String? = nil,
+        functionCall: GeminiFunctionCall? = nil,
+        thoughtSignature: String? = nil,
+        thought: Bool? = nil
+    ) {
+        self.text = text
+        self.functionCall = functionCall
+        self.thoughtSignature = thoughtSignature
+        self.thought = thought
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.text = try c.decodeIfPresent(String.self, forKey: .text)
+        self.functionCall = try c.decodeIfPresent(GeminiFunctionCall.self, forKey: .functionCall)
+        self.thoughtSignature = try c.decodeIfPresent(String.self, forKey: .thoughtSignature)
+        self.thought = try c.decodeIfPresent(Bool.self, forKey: .thought)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case text, functionCall, thoughtSignature, thought
+    }
+}
+
+/// Gemini functionCall payload: name + raw JSON arguments. Args are stored
+/// as a raw JSON string for byte-stable replay (matches what we get from
+/// the wire and what we hand back to it).
+public struct GeminiFunctionCall: Sendable, Codable, Equatable {
+    public let name: String
+    /// Raw JSON-encoded argument object (`"{}"` for no args). Encoded
+    /// verbatim back into the outgoing request body to preserve byte
+    /// stability for any prompt caching downstream.
+    public let argsJSON: String
+
+    public init(name: String, argsJSON: String) {
+        self.name = name
+        self.argsJSON = argsJSON
     }
 }
 

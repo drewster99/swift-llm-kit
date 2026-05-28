@@ -199,14 +199,25 @@ struct GeminiProvider: LLMProvider {
     ) throws -> [String: Any] {
         let role = geminiRole(for: message)
 
-        // Gemini thoughtSignatures from a prior response, keyed by part index.
-        // Only meaningful for assistant turns (Gemini calls them "model").
-        let signatures: [String: String] = (message.role == .assistant)
-            ? (message.continuation?.geminiThoughtSignatures ?? [:])
-            : [:]
+        // For assistant turns with a saved Gemini parts payload, emit those
+        // parts VERBATIM — they preserve every text / functionCall / sig from
+        // the original response, in original order. This bypasses the 0.0.24
+        // shape-fragility (factory collapsing a multi-part response into one
+        // .text/.toolCalls/.mixed content, which misaligned position-keyed
+        // signatures). Faithful replay is the goal.
+        if message.role == .assistant,
+           let parts = message.continuation?.geminiResponseParts {
+            return ["role": "model", "parts": parts.map(encodeSavedPart)]
+        }
 
-        func attachSignature(_ part: [String: Any], at index: Int) -> [String: Any] {
-            guard let sig = signatures[String(index)] else { return part }
+        // Legacy 0.0.24/0.0.25 path: if a saved conversation has the older
+        // position-keyed `geminiThoughtSignatures` (no parts), fall back to
+        // content-rendering with position-keyed sig attachment. Shape-fragile
+        // but the best we can do for legacy data.
+        let legacySignatures: [String: String] = legacyGeminiSignatures(message: message)
+
+        func attachLegacySig(_ part: [String: Any], at index: Int) -> [String: Any] {
+            guard let sig = legacySignatures[String(index)] else { return part }
             var withSig = part
             withSig["thoughtSignature"] = sig
             return withSig
@@ -226,9 +237,7 @@ struct GeminiProvider: LLMProvider {
                 }
             }
             parts.append(["text": text])
-            // Attach signatures by emitted-part index (matches the source-side
-            // parsing which also keyed by part index).
-            parts = parts.enumerated().map { attachSignature($1, at: $0) }
+            parts = parts.enumerated().map { attachLegacySig($1, at: $0) }
             return ["role": role, "parts": parts]
 
         case .toolCalls(let calls):
@@ -240,7 +249,7 @@ struct GeminiProvider: LLMProvider {
                     ] as [String: Any]
                 ]
             }
-            parts = parts.enumerated().map { attachSignature($1, at: $0) }
+            parts = parts.enumerated().map { attachLegacySig($1, at: $0) }
             return ["role": "model", "parts": parts]
 
         case .mixed(let text, let calls):
@@ -253,7 +262,7 @@ struct GeminiProvider: LLMProvider {
                     ] as [String: Any]
                 ])
             }
-            parts = parts.enumerated().map { attachSignature($1, at: $0) }
+            parts = parts.enumerated().map { attachLegacySig($1, at: $0) }
             return ["role": "model", "parts": parts]
 
         case .toolResult(let toolCallID, let content):
@@ -282,6 +291,55 @@ struct GeminiProvider: LLMProvider {
                 ]
             ]
         }
+    }
+
+    /// Serializes a saved `GeminiResponsePart` back to the wire shape. The
+    /// args JSON is re-parsed into a Foundation object so the outgoing body
+    /// can include it as a nested dict rather than an opaque string.
+    private func encodeSavedPart(_ part: GeminiResponsePart) -> [String: Any] {
+        var out: [String: Any] = [:]
+        if let text = part.text {
+            out["text"] = text
+        }
+        if let fc = part.functionCall {
+            let args = (try? JSONSerialization.jsonObject(with: Data(fc.argsJSON.utf8))) ?? [String: Any]()
+            out["functionCall"] = [
+                "name": fc.name,
+                "args": args
+            ] as [String: Any]
+        }
+        if let sig = part.thoughtSignature, !sig.isEmpty {
+            out["thoughtSignature"] = sig
+        }
+        if part.thought == true {
+            out["thought"] = true
+        }
+        return out
+    }
+
+    /// Reads the legacy 0.0.24/0.0.25 `geminiThoughtSignatures` field. Isolated
+    /// in a helper marked `@available(*, deprecated)` so callers don't surface
+    /// the deprecation warning at every legacy fallback site.
+    @available(*, deprecated)
+    private func legacyGeminiSignatures(message: LLMMessage) -> [String: String] {
+        guard message.role == .assistant else { return [:] }
+        return message.continuation?.geminiThoughtSignatures ?? [:]
+    }
+
+    /// Builds a `ProviderContinuation` that populates BOTH the new
+    /// `geminiResponseParts` (primary) AND the legacy `geminiThoughtSignatures`
+    /// (for backward compat with code that reads the old field). Isolated in
+    /// an `@available(*, deprecated)` helper so the legacy-field assignment
+    /// doesn't pepper deprecation warnings across the parser.
+    @available(*, deprecated)
+    private func makeGeminiContinuation(
+        parts: [GeminiResponsePart],
+        legacySignatures: [String: String]
+    ) -> ProviderContinuation {
+        ProviderContinuation(
+            geminiResponseParts: parts,
+            geminiThoughtSignatures: legacySignatures
+        )
     }
 
     private func geminiRole(for message: LLMMessage) -> String {
@@ -336,37 +394,50 @@ struct GeminiProvider: LLMProvider {
 
         var text: String?
         var toolCalls: [LLMToolCall] = []
-        // Capture thoughtSignature per original part index. Gemini 2.5 returns
-        // these on EVERY response with thinking enabled (default on Pro). They
-        // must be echoed back on subsequent turns or the model loses thinking-
-        // continuity validation and silently drops tool results. Re-attached
-        // to the corresponding outgoing parts in encodeContent.
-        var thoughtSignatures: [String: String] = [:]
+        // Capture the FULL parts structure (text + functionCall + thoughtSignature
+        // + thought flag) so replay can emit byte-faithful parts back to Gemini
+        // without depending on per-part-index position keying — which 0.0.24's
+        // shape-fragile design depended on. The 0.0.26 redesign stores parts
+        // verbatim so `.assistant(from:)` factory shape-collapse (a multi-part
+        // response folded into one `.text` / `.toolCalls` / `.mixed` content)
+        // doesn't misalign signatures.
+        var capturedParts: [GeminiResponsePart] = []
 
-        for (partIndex, part) in parts.enumerated() {
-            if let sig = part["thoughtSignature"] as? String, !sig.isEmpty {
-                thoughtSignatures[String(partIndex)] = sig
-            }
+        for part in parts {
+            let sig = part["thoughtSignature"] as? String
+            let thought = part["thought"] as? Bool
+            var partText: String?
+            var partFunctionCall: GeminiFunctionCall?
+
             if let textContent = part["text"] as? String {
+                partText = textContent
                 if let existing = text {
                     text = existing + textContent
                 } else {
                     text = textContent
                 }
-            } else if let functionCall = part["functionCall"] as? [String: Any],
-                      let name = functionCall["name"] as? String {
-                let args = functionCall["args"]
+            }
+            if let functionCall = part["functionCall"] as? [String: Any],
+               let name = functionCall["name"] as? String {
                 let argString: String
-                if let argsDict = args {
-                    let argsData = try JSONSerialization.data(withJSONObject: argsDict)
+                if let args = functionCall["args"] {
+                    let argsData = try JSONSerialization.data(withJSONObject: args)
                     argString = String(data: argsData, encoding: .utf8) ?? "{}"
                 } else {
                     argString = "{}"
                 }
+                partFunctionCall = GeminiFunctionCall(name: name, argsJSON: argString)
                 // Gemini has no real tool call IDs. Use UUID for internal routing;
                 // functionResponse matching uses the `name` field, not the `id`.
                 toolCalls.append(LLMToolCall(id: UUID().uuidString, name: name, arguments: argString))
             }
+
+            capturedParts.append(GeminiResponsePart(
+                text: partText,
+                functionCall: partFunctionCall,
+                thoughtSignature: (sig?.isEmpty ?? true) ? nil : sig,
+                thought: thought
+            ))
         }
 
         // Parse token usage from usageMetadata.
@@ -392,9 +463,27 @@ struct GeminiProvider: LLMProvider {
             }
         }
 
-        let continuation: ProviderContinuation? = thoughtSignatures.isEmpty
-            ? nil
-            : ProviderContinuation(geminiThoughtSignatures: thoughtSignatures)
+        // Only attach continuation when at least one part carried a signature —
+        // otherwise we'd persist noise on every plain-text response. The
+        // legacy 0.0.24/0.0.25 `geminiThoughtSignatures` dict is auto-derived
+        // from the captured parts so existing downstream consumers that read
+        // the old field still see signatures (deprecated but functional).
+        let hasAnySignature = capturedParts.contains { ($0.thoughtSignature?.isEmpty == false) }
+        let continuation: ProviderContinuation?
+        if hasAnySignature {
+            let legacySigs: [String: String] = Dictionary(
+                uniqueKeysWithValues: capturedParts.enumerated().compactMap { idx, part in
+                    guard let sig = part.thoughtSignature, !sig.isEmpty else { return nil }
+                    return (String(idx), sig)
+                }
+            )
+            continuation = makeGeminiContinuation(
+                parts: capturedParts,
+                legacySignatures: legacySigs
+            )
+        } else {
+            continuation = nil
+        }
 
         return LLMResponse(
             text: text?.isEmpty == true ? nil : text,

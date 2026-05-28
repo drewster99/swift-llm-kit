@@ -229,7 +229,8 @@ struct AnthropicProvider: LLMProvider {
         switch message.content {
         case .text(let text):
             // If there are images OR thinking blocks to prepend, encode as
-            // a content-blocks array.
+            // a content-blocks array. Empty text blocks are silently skipped
+            // — Anthropic rejects `{"type":"text","text":""}` entries.
             if !thinkingBlocks.isEmpty || !(message.images ?? []).isEmpty {
                 var blocks: [[String: Any]] = thinkingBlocks
                 if let images = message.images, !images.isEmpty {
@@ -244,15 +245,23 @@ struct AnthropicProvider: LLMProvider {
                         ] as [String: Any]
                     })
                 }
-                blocks.append(["type": "text", "text": text])
+                if !text.isEmpty {
+                    blocks.append(["type": "text", "text": text])
+                }
                 return [
                     "role": role,
                     "content": blocks
                 ]
             }
+            // Plain-text path. Anthropic rejects `"content": ""` with HTTP
+            // 400 — substitute a single space so callers passing through
+            // `.assistant(from: LLMResponse(text: nil, toolCalls: []))`
+            // (the degenerate "model returned nothing" shape) don't crash
+            // the request. The model didn't say " ", but the wire needs
+            // *some* content; this is the documented Anthropic workaround.
             return [
                 "role": role,
-                "content": text
+                "content": text.isEmpty ? " " : text
             ]
         case .toolCalls(let calls):
             var content: [[String: Any]] = thinkingBlocks
@@ -267,7 +276,11 @@ struct AnthropicProvider: LLMProvider {
             return ["role": "assistant", "content": content]
         case .mixed(let text, let calls):
             var content: [[String: Any]] = thinkingBlocks
-            content.append(["type": "text", "text": text])
+            // Skip empty text block — Anthropic rejects empty `{"type":"text","text":""}`
+            // entries even when other blocks are present.
+            if !text.isEmpty {
+                content.append(["type": "text", "text": text])
+            }
             try content.append(contentsOf: calls.map { call in
                 [
                     "type": "tool_use",

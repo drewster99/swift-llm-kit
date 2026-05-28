@@ -99,6 +99,95 @@ let response = try await provider.send(messages: [.init(role: .user, content: .t
 
 ## Changelog
 
+### 0.0.26 — Gemini parts redesign + Anthropic empty-content fix
+
+Resolves both 0.0.25 known limitations.
+
+#### Fixed
+
+- **Gemini per-part `thoughtSignature` index keying was shape-fragile.** The
+  0.0.24 design stored signatures as `[String: String]` keyed by part-array
+  index. When `.assistant(from: response)` collapsed a multi-part response
+  into a single `.text` / `.toolCalls` / `.mixed` content (e.g. `[thought,
+  fcA, fcB]` collapses to `.toolCalls([fcA, fcB])`), the replay re-attached
+  signatures by emitted-part index — misaligning them onto the wrong parts
+  and dropping the last sig entirely.
+
+  Replaced with `ProviderContinuation.geminiResponseParts: [GeminiResponsePart]?`
+  — the full parts structure captured verbatim at parse time. The Gemini
+  encoder emits these parts verbatim on replay, bypassing the content-shape
+  collapse entirely. Faithful 1:1 round-trip regardless of how the factory
+  represents the content.
+
+  `geminiThoughtSignatures` is kept for backward-compatible decoding of
+  0.0.24/0.0.25 saved conversations (and is auto-derived from the new parts
+  on parse so code reading the old field still sees signatures) but is now
+  marked `@available(*, deprecated)`. Migrate to `geminiResponseParts` for
+  new code paths.
+
+- **AnthropicProvider rejected `content: ""` with HTTP 400.**
+  `.assistant(from: LLMResponse(text: nil, toolCalls: []))` produces
+  `.text("")` (the "model returned nothing" degenerate shape — rare but
+  reachable). AnthropicProvider was emitting either `"content": ""` (plain-
+  text path) or `[{type:"text",text:""}]` (content-array path), both
+  rejected by the API.
+
+  Fix is localized to AnthropicProvider's encoder:
+  - Plain-text path: empty text becomes a single space `" "` (the
+    documented Anthropic workaround for "empty assistant turn").
+  - Content-array path (with thinking blocks or images): empty
+    `{type:"text",text:""}` entries are silently skipped — the other
+    blocks alone satisfy the "non-empty content" requirement.
+  - `.mixed` with empty text + tool calls: the empty text block is skipped,
+    leaving only the tool_use blocks.
+
+  `LLMMessage.content` is left honest — the factory still produces
+  `.text("")` for an empty response, accurately reflecting what the model
+  returned. The wire-level workaround stays in the one provider that needs
+  it.
+
+#### Tests
+
+11 new tests in `V0_0_26_Tests`:
+- Gemini parses full parts array into the new field (including text +
+  functionCall + thoughtSignature + thought-flag per part)
+- Gemini still auto-populates the legacy `geminiThoughtSignatures` field
+  for backward compat
+- Gemini encoder uses saved parts verbatim when available — including the
+  worst-case shape `[empty-thought-text, fcA, fcB]` collapsed by the
+  factory into `.toolCalls([fcA, fcB])`, where the wire correctly emits
+  3 parts with sigs intact
+- Gemini parse → replay round-trip is byte-faithful
+- Gemini encoder falls back to legacy position-keyed sigs when only the
+  legacy field is present (covers 0.0.24/0.0.25 saved conversations)
+- ProviderContinuation Codable round-trips parts and falls back cleanly on
+  legacy-only JSON
+- Anthropic substitutes space for empty plain text content
+- Anthropic skips empty text blocks in content-array and `.mixed` paths
+- Anthropic still emits non-empty text unchanged
+
+144 tests total (was 133).
+
+#### Migration
+
+Existing consumers reading `continuation.geminiThoughtSignatures` continue
+to work without code changes — the field is deprecated but still populated.
+The deprecation warning points at the new field. Migration is mechanical:
+
+```swift
+// BEFORE — still works, emits deprecation warning
+if let sigs = response.continuation?.geminiThoughtSignatures {
+    // sigs["0"] etc.
+}
+
+// AFTER — structurally faithful
+if let parts = response.continuation?.geminiResponseParts {
+    for part in parts {
+        // part.text, part.functionCall, part.thoughtSignature, part.thought
+    }
+}
+```
+
 ### 0.0.25 — Ollama developer-role fold
 
 Fixes a 0.0.24 regression: `OllamaProvider` was passing
