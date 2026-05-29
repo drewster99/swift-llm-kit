@@ -166,6 +166,53 @@ struct V0_0_26_Tests {
         #expect(parts[2]["thoughtSignature"] as? String == "sig-B")
     }
 
+    @Test("Gemini parts replay preserves multi-text-part shape that .mixed collapses")
+    func gemini_partsReplayPreservesConcatenatedTextShape() throws {
+        // The other shape-fragility scenario: response has TWO text parts
+        // (a thought-text and an answer-text), each with its own sig, plus
+        // a functionCall. The parser concatenates the text into one string,
+        // so `.assistant(from:)` produces `.mixed("thinking aloudreal answer",
+        // [fc])` — a 2-part wire shape from .mixed (text + fc), not the
+        // original 3-part shape. The parts-based replay must emit ALL THREE
+        // original parts so sigs align with the parts Gemini expected.
+        let provider = try gemini()
+        let savedParts = [
+            GeminiResponsePart(text: "thinking aloud", thoughtSignature: "sig-thought"),
+            GeminiResponsePart(text: "real answer", thoughtSignature: "sig-answer"),
+            GeminiResponsePart(
+                functionCall: GeminiFunctionCall(name: "tool_x", argsJSON: "{}"),
+                thoughtSignature: "sig-fc"
+            )
+        ]
+        let continuation = ProviderContinuation(geminiResponseParts: savedParts)
+        let response = LLMResponse(
+            text: "thinking aloudreal answer",
+            toolCalls: [LLMToolCall(id: "id-x", name: "tool_x", arguments: "{}")],
+            continuation: continuation
+        )
+        let assistant = LLMMessage.assistant(from: response)
+        let messages: [LLMMessage] = [
+            .user("ask"),
+            assistant,
+            .toolResult("ok", callID: "id-x")
+        ]
+        let body = try provider.buildRequestBody(messages: messages, tools: [])
+        let contents = try #require(body["contents"] as? [[String: Any]])
+        let modelTurn = try #require(contents.first { ($0["role"] as? String) == "model" })
+        let parts = try #require(modelTurn["parts"] as? [[String: Any]])
+
+        // Three parts on the wire — matches the SAVED parts, not the
+        // 2-part collapsed `.mixed` content shape.
+        #expect(parts.count == 3)
+        #expect(parts[0]["text"] as? String == "thinking aloud")
+        #expect(parts[0]["thoughtSignature"] as? String == "sig-thought")
+        #expect(parts[1]["text"] as? String == "real answer")
+        #expect(parts[1]["thoughtSignature"] as? String == "sig-answer")
+        let fc = try #require(parts[2]["functionCall"] as? [String: Any])
+        #expect(fc["name"] as? String == "tool_x")
+        #expect(parts[2]["thoughtSignature"] as? String == "sig-fc")
+    }
+
     @Test("Gemini round-trip — parse → replay produces matching wire-shape parts")
     func gemini_roundTripPartsAreFaithful() throws {
         // Parse a response that had multiple parts with sigs, then encode the

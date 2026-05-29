@@ -188,7 +188,12 @@ struct ProviderContinuationTests {
         )
     }
 
-    @Test("Gemini parseResponse captures thoughtSignature per part index")
+    // Note: legacy `geminiThoughtSignatures` is still populated by the parser
+    // for backward-compat with 0.0.24/0.0.25 consumers; the new field is
+    // `geminiResponseParts` covered in V0_0_26_Tests. This test exercises
+    // the legacy field via an @available(*, deprecated) bridge to keep the
+    // test body warning-free.
+    @Test("Gemini parseResponse populates legacy geminiThoughtSignatures (0.0.24/0.0.25 compat)")
     func gemini_parseResponse_capturesThoughtSignaturesPerPartIndex() throws {
         let provider = try gemini()
         let body: [String: Any] = [
@@ -214,7 +219,7 @@ struct ProviderContinuationTests {
         let data = try JSONSerialization.data(withJSONObject: body)
         let response = try provider.parseResponse(data: data)
 
-        let sigs = try #require(response.continuation?.geminiThoughtSignatures)
+        let sigs = try #require(legacySignaturesBridge(response.continuation))
         #expect(sigs["0"] == "sig-0")
         #expect(sigs["1"] == "sig-1")
         #expect(sigs["2"] == nil, "part 2 had no signature, must not appear in map")
@@ -363,4 +368,14 @@ struct ProviderContinuationTests {
         #expect(parts[1]["thoughtSignature"] as? String == "sig-only-on-B")
         #expect(parts[2]["thoughtSignature"] == nil)
     }
+}
+
+// MARK: - 0.0.26 deprecation bridge
+
+/// Reads the legacy 0.0.24/0.0.25 `geminiThoughtSignatures` field. Isolated
+/// in an `@available(*, deprecated)` helper so the test bodies that
+/// intentionally exercise the backward-compat path stay warning-free.
+@available(*, deprecated)
+private func legacySignaturesBridge(_ continuation: ProviderContinuation?) -> [String: String]? {
+    continuation?.geminiThoughtSignatures
 }

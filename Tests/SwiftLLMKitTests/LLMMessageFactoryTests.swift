@@ -148,10 +148,10 @@ struct LLMMessageFactoryTests {
 
     @Test func assistantFromResponse_preservesGeminiContinuation() {
         let sigs = ["0": "sig-zero", "1": "sig-one"]
-        let continuation = ProviderContinuation(geminiThoughtSignatures: sigs)
+        let continuation = makeLegacyGeminiContinuation(sigs: sigs)
         let response = LLMResponse(text: "answer", toolCalls: [], continuation: continuation)
         let msg = LLMMessage.assistant(from: response)
-        #expect(msg.continuation?.geminiThoughtSignatures == sigs)
+        #expect(readLegacyGeminiSignatures(msg.continuation) == sigs)
     }
 
     // MARK: - Synthetic assistant factories — DO NOT carry continuation
@@ -211,13 +211,13 @@ struct LLMMessageFactoryTests {
         let response = LLMResponse(
             text: "answer",
             toolCalls: [],
-            continuation: ProviderContinuation(geminiThoughtSignatures: sigs)
+            continuation: makeLegacyGeminiContinuation(sigs: sigs)
         )
         let msg = LLMMessage.assistant(from: response)
 
         let data = try JSONEncoder().encode(msg)
         let decoded = try JSONDecoder().decode(LLMMessage.self, from: data)
-        #expect(decoded.continuation?.geminiThoughtSignatures == sigs)
+        #expect(readLegacyGeminiSignatures(decoded.continuation) == sigs)
     }
 
     @Test func codableRoundTrip_emptyContinuation_omittedFromJSON() throws {
@@ -251,4 +251,21 @@ private func useDeprecatedSyntheticAssistantToolCalls(
     text: String?
 ) -> LLMMessage {
     LLMMessage.assistant(toolCalls: toolCalls, text: text)
+}
+
+// MARK: - 0.0.26 deprecation bridges for legacy Gemini sigs field
+
+/// Constructs a continuation populating only the legacy
+/// `geminiThoughtSignatures` field. Wraps the deprecated init so the
+/// deprecation warning is contained to this one helper.
+@available(*, deprecated)
+private func makeLegacyGeminiContinuation(sigs: [String: String]) -> ProviderContinuation {
+    ProviderContinuation(geminiThoughtSignatures: sigs)
+}
+
+/// Reads the legacy `geminiThoughtSignatures` field, isolated in this
+/// `@available(*, deprecated)` helper so test bodies stay warning-free.
+@available(*, deprecated)
+private func readLegacyGeminiSignatures(_ continuation: ProviderContinuation?) -> [String: String]? {
+    continuation?.geminiThoughtSignatures
 }

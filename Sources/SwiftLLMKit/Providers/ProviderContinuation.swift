@@ -132,9 +132,12 @@ public struct GeminiResponsePart: Sendable, Codable, Equatable {
 /// the wire and what we hand back to it).
 public struct GeminiFunctionCall: Sendable, Codable, Equatable {
     public let name: String
-    /// Raw JSON-encoded argument object (`"{}"` for no args). Encoded
-    /// verbatim back into the outgoing request body to preserve byte
-    /// stability for any prompt caching downstream.
+    /// Raw JSON-encoded argument object captured at parse time (`"{}"` for
+    /// no args). The string itself is not guaranteed byte-identical to the
+    /// wire bytes Gemini originally emitted — `JSONSerialization` decides
+    /// key ordering at capture. But the *outgoing* body that swift-llm-kit
+    /// emits IS deterministic across replays (via `.sortedKeys` on the
+    /// outer body), which is what prompt-prefix caching downstream needs.
     public let argsJSON: String
 
     public init(name: String, argsJSON: String) {
