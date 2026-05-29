@@ -74,7 +74,8 @@ struct OllamaProvider: LLMProvider {
         tools: [LLMToolDefinition],
         toolChoice: LLMToolChoice? = nil,
         thinkingEffortOverride: String? = nil,
-        maxOutputTokensOverride: Int? = nil
+        maxOutputTokensOverride: Int? = nil,
+        temperatureOverride: Double? = nil
     ) async throws -> LLMResponse {
         // Ollama doesn't have an effort enum — chat completions stream
         // accepts standard sampling parameters but no reasoning_effort.
@@ -100,7 +101,7 @@ struct OllamaProvider: LLMProvider {
         // natively support a tool role still receive the result content, just
         // wrapped as user text with a "[Tool result for <id>]: ..." prefix.
         let finalMessages = Self.normalizeMessages(messages)
-        let body = buildRequestBody(messages: Self.extractSystemMessages(finalMessages), tools: tools, toolChoice: toolChoice, maxOutputTokensOverride: maxOutputTokensOverride)
+        let body = buildRequestBody(messages: Self.extractSystemMessages(finalMessages), tools: tools, toolChoice: toolChoice, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: temperatureOverride)
         // .sortedKeys keeps wire bytes stable across requests for any
         // downstream prefix-caching the model applies.
         let requestData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
@@ -133,11 +134,12 @@ struct OllamaProvider: LLMProvider {
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
         toolChoice: LLMToolChoice? = nil,
-        maxOutputTokensOverride: Int? = nil
+        maxOutputTokensOverride: Int? = nil,
+        temperatureOverride: Double? = nil
     ) -> [String: Any] {
         let effectiveMaxTokens = maxOutputTokensOverride ?? configuration.maxTokens
         var options: [String: Any] = ["num_predict": effectiveMaxTokens]
-        if let temperature = configuration.temperature {
+        if let temperature = temperatureOverride ?? configuration.temperature {
             options["temperature"] = temperature
         }
         var body: [String: Any] = [

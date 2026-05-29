@@ -33,7 +33,8 @@ struct AnthropicProvider: LLMProvider {
         tools: [LLMToolDefinition],
         toolChoice: LLMToolChoice? = nil,
         thinkingEffortOverride: String? = nil,
-        maxOutputTokensOverride: Int? = nil
+        maxOutputTokensOverride: Int? = nil,
+        temperatureOverride: Double? = nil
     ) async throws -> LLMResponse {
         let base = provider.endpoint.ensureAnthropicV1()
         let url = base.appendingPathComponent("messages")
@@ -43,7 +44,7 @@ struct AnthropicProvider: LLMProvider {
         request.setValue(readAPIKey(), forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
 
-        let body = try buildRequestBody(messages: messages, tools: tools, toolChoice: toolChoice, thinkingEffortOverride: thinkingEffortOverride, maxOutputTokensOverride: maxOutputTokensOverride)
+        let body = try buildRequestBody(messages: messages, tools: tools, toolChoice: toolChoice, thinkingEffortOverride: thinkingEffortOverride, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: temperatureOverride)
         // .sortedKeys keeps wire bytes stable across requests so Anthropic's
         // prompt cache (which is byte-prefix matched) keeps hitting.
         let requestData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
@@ -77,7 +78,8 @@ struct AnthropicProvider: LLMProvider {
         tools: [LLMToolDefinition],
         toolChoice: LLMToolChoice? = nil,
         thinkingEffortOverride: String? = nil,
-        maxOutputTokensOverride: Int? = nil
+        maxOutputTokensOverride: Int? = nil,
+        temperatureOverride: Double? = nil
     ) throws -> [String: Any] {
         // Anthropic requires system prompt separate from messages.
         // Concatenate all system messages so per-turn context doesn't overwrite the base prompt.
@@ -143,9 +145,11 @@ struct AnthropicProvider: LLMProvider {
         // Anthropic requires temperature = 1 when extended thinking is enabled
         // (overrides any explicit value or "omit" preference). Otherwise, only
         // send temperature if the caller specified one — nil means omit.
+        // Per-call temperatureOverride wins over configuration.temperature
+        // (but NOT over the thinking-on constraint, which is API-enforced).
         if thinkingEnabled {
             body["temperature"] = 1.0
-        } else if let temperature = configuration.temperature {
+        } else if let temperature = temperatureOverride ?? configuration.temperature {
             body["temperature"] = temperature
         }
 

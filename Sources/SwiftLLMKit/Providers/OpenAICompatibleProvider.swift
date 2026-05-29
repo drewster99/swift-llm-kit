@@ -39,7 +39,8 @@ struct OpenAICompatibleProvider: LLMProvider {
         tools: [LLMToolDefinition],
         toolChoice: LLMToolChoice? = nil,
         thinkingEffortOverride: String? = nil,
-        maxOutputTokensOverride: Int? = nil
+        maxOutputTokensOverride: Int? = nil,
+        temperatureOverride: Double? = nil
     ) async throws -> LLMResponse {
         let url = provider.endpoint.appendingPathComponent("chat/completions")
         var request = URLRequest(url: url)
@@ -67,7 +68,7 @@ struct OpenAICompatibleProvider: LLMProvider {
             request.setValue(appName, forHTTPHeaderField: "X-Title")
         }
 
-        let body = buildRequestBody(messages: messages, tools: tools, toolChoice: toolChoice, thinkingEffortOverride: thinkingEffortOverride, maxOutputTokensOverride: maxOutputTokensOverride)
+        let body = buildRequestBody(messages: messages, tools: tools, toolChoice: toolChoice, thinkingEffortOverride: thinkingEffortOverride, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: temperatureOverride)
         // .sortedKeys keeps wire bytes stable across requests so OpenAI's
         // automatic prefix cache (>=1024-token prefix match) keeps hitting.
         let requestData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
@@ -101,7 +102,8 @@ struct OpenAICompatibleProvider: LLMProvider {
         tools: [LLMToolDefinition],
         toolChoice: LLMToolChoice? = nil,
         thinkingEffortOverride: String? = nil,
-        maxOutputTokensOverride: Int? = nil
+        maxOutputTokensOverride: Int? = nil,
+        temperatureOverride: Double? = nil
     ) -> [String: Any] {
         // OpenAI API requires system messages at the start of the conversation.
         // Extract any system messages from arbitrary positions (e.g. per-turn task
@@ -153,7 +155,7 @@ struct OpenAICompatibleProvider: LLMProvider {
             tokenLimitKey: maxOutputTokensOverride ?? configuration.maxTokens,
             "messages": orderedMessages
         ]
-        if let temperature = configuration.temperature {
+        if let temperature = temperatureOverride ?? configuration.temperature {
             body["temperature"] = temperature
         }
 

@@ -39,7 +39,8 @@ struct GeminiProvider: LLMProvider {
         tools: [LLMToolDefinition],
         toolChoice: LLMToolChoice? = nil,
         thinkingEffortOverride: String? = nil,
-        maxOutputTokensOverride: Int? = nil
+        maxOutputTokensOverride: Int? = nil,
+        temperatureOverride: Double? = nil
     ) async throws -> LLMResponse {
         // Gemini doesn't have an effort enum — depth is controlled via
         // `thinkingConfig.thinkingBudget` (token count) in the request.
@@ -63,7 +64,7 @@ struct GeminiProvider: LLMProvider {
             request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
         }
 
-        let body = try buildRequestBody(messages: messages, tools: tools, toolChoice: toolChoice, maxOutputTokensOverride: maxOutputTokensOverride)
+        let body = try buildRequestBody(messages: messages, tools: tools, toolChoice: toolChoice, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: temperatureOverride)
         // .sortedKeys keeps wire bytes stable across requests for any
         // downstream prefix-caching the provider applies.
         let requestData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
@@ -98,7 +99,8 @@ struct GeminiProvider: LLMProvider {
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
         toolChoice: LLMToolChoice? = nil,
-        maxOutputTokensOverride: Int? = nil
+        maxOutputTokensOverride: Int? = nil,
+        temperatureOverride: Double? = nil
     ) throws -> [String: Any] {
         var systemParts: [String] = []
         var conversationMessages: [LLMMessage] = []
@@ -133,7 +135,7 @@ struct GeminiProvider: LLMProvider {
 
         let effectiveMaxTokens = maxOutputTokensOverride ?? configuration.maxTokens
         var generationConfig: [String: Any] = ["maxOutputTokens": effectiveMaxTokens]
-        if let temperature = configuration.temperature {
+        if let temperature = temperatureOverride ?? configuration.temperature {
             generationConfig["temperature"] = temperature
         }
         var body: [String: Any] = [
