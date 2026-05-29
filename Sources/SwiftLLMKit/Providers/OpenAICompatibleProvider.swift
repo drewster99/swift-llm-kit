@@ -160,6 +160,18 @@ struct OpenAICompatibleProvider: LLMProvider {
             body["thinking_budget"] = max(budget, 1024)
         }
 
+        // OpenAI `reasoning_effort` — depth control for reasoning models
+        // (o-series, GPT-5 family). Top-level enum, sibling of `messages`.
+        // Gated on the `supportsReasoningEffort` flag because non-reasoning
+        // models (GPT-4o, GPT-3.5-turbo, DeepSeek-V*, etc.) reject the
+        // field with HTTP 400. `ModelConfiguration.thinkingEffort` is the
+        // unified knob — same string used by Anthropic's
+        // `output_config.effort`.
+        if behaviorFlags.supportsReasoningEffort,
+           let effort = configuration.thinkingEffort {
+            body["reasoning_effort"] = effort
+        }
+
         if !tools.isEmpty {
             body["tools"] = tools.map { tool in
                 [

@@ -49,6 +49,34 @@
         },
         "anthropic/claude-opus-4-8": {
             "behaviorFlags": { "requiresAdaptiveThinking": true }
+        },
+
+        "openAICompatible/o1": {
+            "behaviorFlags": { "supportsReasoningEffort": true }
+        },
+        "openAICompatible/o1-preview": {
+            "behaviorFlags": { "supportsReasoningEffort": true }
+        },
+        "openAICompatible/o1-mini": {
+            "behaviorFlags": { "supportsReasoningEffort": true }
+        },
+        "openAICompatible/o3": {
+            "behaviorFlags": { "supportsReasoningEffort": true }
+        },
+        "openAICompatible/o3-mini": {
+            "behaviorFlags": { "supportsReasoningEffort": true }
+        },
+        "openAICompatible/o4-mini": {
+            "behaviorFlags": { "supportsReasoningEffort": true }
+        },
+        "openAICompatible/gpt-5": {
+            "behaviorFlags": { "supportsReasoningEffort": true }
+        },
+        "openAICompatible/gpt-5-mini": {
+            "behaviorFlags": { "supportsReasoningEffort": true }
+        },
+        "openAICompatible/gpt-5-pro": {
+            "behaviorFlags": { "supportsReasoningEffort": true }
         }
     },
 

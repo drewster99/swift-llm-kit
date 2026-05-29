@@ -99,6 +99,58 @@ let response = try await provider.send(messages: [.init(role: .user, content: .t
 
 ## Changelog
 
+### 0.0.28 — OpenAI `reasoning_effort` emission
+
+Extends 0.0.27's `ModelConfiguration.thinkingEffort` field to flow through the
+OpenAI-compatible wire path. Set once on the config; swift-llm-kit emits the
+right wire shape per provider — `output_config.effort` for Anthropic,
+`reasoning_effort` for OpenAI.
+
+#### New
+
+- **`BehaviorFlags.supportsReasoningEffort: Bool`** (default false). Gates
+  emission of `reasoning_effort` on OpenAI-compatible providers. Non-reasoning
+  models (GPT-4o, GPT-3.5-turbo, DeepSeek-V*, etc.) reject the field with
+  HTTP 400, so we gate per-model rather than emit unconditionally.
+- **Bundled metadata entries** for OpenAI reasoning models with
+  `supportsReasoningEffort: true`: `o1`, `o1-preview`, `o1-mini`, `o3`,
+  `o3-mini`, `o4-mini`, `gpt-5`, `gpt-5-mini`, `gpt-5-pro`. Existing configs
+  pointing at these model IDs that set `thinkingEffort` will auto-emit
+  `reasoning_effort` on the wire.
+
+#### Behavior
+
+- `configuration.thinkingEffort = "high"` on `o3-mini` → emits
+  `reasoning_effort: "high"` at the top level of the chat-completions request.
+- Same field on `gpt-4o` → not emitted (no flag → silent skip → request goes
+  through without the field, which gpt-4o requires anyway).
+- Custom-tuned reasoning models can opt in via
+  `BehaviorFlagsOverride.supportsReasoningEffort = true`.
+
+#### Cross-provider effort enum compatibility
+
+OpenAI and Anthropic share `low`, `medium`, `high`. OpenAI adds `minimal`
+(GPT-5 only); Anthropic adds `xhigh` (Opus 4.7+) and `max`. swift-llm-kit
+doesn't validate effort strings — pass-through means a value not supported
+by the routed model produces a clear API 400 rather than a silent drop.
+
+Use OpenAI's enum values if your config might route to OpenAI; use
+Anthropic's if it routes only to Anthropic.
+
+#### Not yet covered
+
+- **Gemini effort mapping**: Gemini doesn't have an effort enum — its
+  `thinkingConfig.thinkingBudget` is a token count. Arbitrary mapping
+  (`low` → 1024, `high` → 8192, etc.) would be confusing. Deferred until
+  someone needs it; will likely surface as a separate
+  `ModelConfiguration.thinkingBudgetGemini` field or a per-effort lookup
+  table.
+- The `display: "summarized" | "omitted"` field on Anthropic adaptive
+  thinking is not yet typed; use `extraJSONOverrides` for now (see 0.0.27
+  notes).
+
+9 new tests in `V0_0_28_Tests`. 170 total (was 161).
+
 ### 0.0.27 — Anthropic adaptive thinking + output_config.effort
 
 Adds support for Anthropic's new thinking API. Claude Opus 4.7 and 4.8 require

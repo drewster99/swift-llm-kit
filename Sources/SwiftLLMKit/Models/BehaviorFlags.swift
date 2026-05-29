@@ -81,6 +81,16 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
     /// where manual still works) keep the legacy path.
     public var requiresAdaptiveThinking: Bool = false
 
+    /// OpenAI-compatible models that accept a top-level `reasoning_effort`
+    /// field for reasoning depth control. Set on OpenAI o-series (o1,
+    /// o1-mini, o3, o3-mini, o4-mini) and GPT-5 family. Non-reasoning
+    /// models (GPT-4o, GPT-3.5-turbo, etc.) reject the field with HTTP
+    /// 400, so emission is gated. When true AND
+    /// `ModelConfiguration.thinkingEffort` is set,
+    /// `OpenAICompatibleProvider` emits `reasoning_effort: <value>` at the
+    /// top level of the request body. Default false.
+    public var supportsReasoningEffort: Bool = false
+
     /// Free-form key/value bag for one-off provider tweaks that haven't earned
     /// a typed field yet. Promoted fields must always have a Codable default
     /// so older persisted state still decodes cleanly.
@@ -96,6 +106,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         replayReasoningContent: Bool = false,
         supportsDeveloperRole: Bool = false,
         requiresAdaptiveThinking: Bool = false,
+        supportsReasoningEffort: Bool = false,
         extras: [String: String] = [:]
     ) {
         self.glmTemplateSalvage = glmTemplateSalvage
@@ -104,6 +115,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         self.replayReasoningContent = replayReasoningContent
         self.supportsDeveloperRole = supportsDeveloperRole
         self.requiresAdaptiveThinking = requiresAdaptiveThinking
+        self.supportsReasoningEffort = supportsReasoningEffort
         self.extras = extras
     }
 
@@ -116,6 +128,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
             && !replayReasoningContent
             && !supportsDeveloperRole
             && !requiresAdaptiveThinking
+            && !supportsReasoningEffort
             && extras.isEmpty
     }
 
@@ -130,6 +143,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         if replayReasoningContent { out.append("replay reasoning") }
         if supportsDeveloperRole { out.append("developer role") }
         if requiresAdaptiveThinking { out.append("adaptive thinking") }
+        if supportsReasoningEffort { out.append("reasoning_effort") }
         for key in extras.keys.sorted() {
             out.append("*\(key)")
         }
@@ -139,7 +153,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
     // MARK: - Codable (backward-compatible)
 
     private enum CodingKeys: String, CodingKey {
-        case glmTemplateSalvage, useMaxCompletionTokens, forceParallelToolCalls, replayReasoningContent, supportsDeveloperRole, requiresAdaptiveThinking, extras
+        case glmTemplateSalvage, useMaxCompletionTokens, forceParallelToolCalls, replayReasoningContent, supportsDeveloperRole, requiresAdaptiveThinking, supportsReasoningEffort, extras
     }
 
     public init(from decoder: Decoder) throws {
@@ -150,6 +164,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         replayReasoningContent = try c.decodeIfPresent(Bool.self, forKey: .replayReasoningContent) ?? false
         supportsDeveloperRole = try c.decodeIfPresent(Bool.self, forKey: .supportsDeveloperRole) ?? false
         requiresAdaptiveThinking = try c.decodeIfPresent(Bool.self, forKey: .requiresAdaptiveThinking) ?? false
+        supportsReasoningEffort = try c.decodeIfPresent(Bool.self, forKey: .supportsReasoningEffort) ?? false
         extras = try c.decodeIfPresent([String: String].self, forKey: .extras) ?? [:]
     }
 
@@ -163,6 +178,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         if replayReasoningContent { try c.encode(replayReasoningContent, forKey: .replayReasoningContent) }
         if supportsDeveloperRole { try c.encode(supportsDeveloperRole, forKey: .supportsDeveloperRole) }
         if requiresAdaptiveThinking { try c.encode(requiresAdaptiveThinking, forKey: .requiresAdaptiveThinking) }
+        if supportsReasoningEffort { try c.encode(supportsReasoningEffort, forKey: .supportsReasoningEffort) }
         if !extras.isEmpty { try c.encode(extras, forKey: .extras) }
     }
 }
@@ -182,6 +198,7 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
     public var replayReasoningContent: Bool?
     public var supportsDeveloperRole: Bool?
     public var requiresAdaptiveThinking: Bool?
+    public var supportsReasoningEffort: Bool?
     public var extras: [String: String]?
 
     public init(
@@ -191,6 +208,7 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
         replayReasoningContent: Bool? = nil,
         supportsDeveloperRole: Bool? = nil,
         requiresAdaptiveThinking: Bool? = nil,
+        supportsReasoningEffort: Bool? = nil,
         extras: [String: String]? = nil
     ) {
         self.glmTemplateSalvage = glmTemplateSalvage
@@ -199,6 +217,7 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
         self.replayReasoningContent = replayReasoningContent
         self.supportsDeveloperRole = supportsDeveloperRole
         self.requiresAdaptiveThinking = requiresAdaptiveThinking
+        self.supportsReasoningEffort = supportsReasoningEffort
         self.extras = extras
     }
 
@@ -209,6 +228,7 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
         if let v = replayReasoningContent, (forceReplace || v) { flags.replayReasoningContent = v }
         if let v = supportsDeveloperRole, (forceReplace || v) { flags.supportsDeveloperRole = v }
         if let v = requiresAdaptiveThinking, (forceReplace || v) { flags.requiresAdaptiveThinking = v }
+        if let v = supportsReasoningEffort, (forceReplace || v) { flags.supportsReasoningEffort = v }
         if let extrasPatch = extras {
             if forceReplace {
                 flags.extras = extrasPatch
@@ -229,6 +249,7 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
             && replayReasoningContent == nil
             && supportsDeveloperRole == nil
             && requiresAdaptiveThinking == nil
+            && supportsReasoningEffort == nil
             && (extras?.isEmpty ?? true)
     }
 }
