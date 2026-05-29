@@ -24,7 +24,23 @@ public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
     /// Total context window budget in tokens (for conversation pruning).
     public var maxContextTokens: Int
     /// Extended thinking token budget. Relevant for `.anthropic` and `.alibabaCloud` providers.
+    ///
+    /// On Anthropic models with `BehaviorFlags.requiresAdaptiveThinking` set
+    /// (Opus 4.7, 4.8), this budget is no longer used as a token count — those
+    /// models only accept adaptive thinking which lets the model choose depth.
+    /// The field is interpreted as a boolean signal: budget > 0 means "enable
+    /// adaptive thinking", budget == 0 / nil means "thinking off." Use
+    /// `thinkingEffort` to control depth on adaptive-thinking models.
     public var thinkingBudget: Int?
+    /// Anthropic adaptive-thinking effort hint. Valid values: `"low"`,
+    /// `"medium"`, `"high"`, `"xhigh"`, `"max"` (xhigh only on Opus 4.7, 4.8).
+    /// `nil` (default) omits the field and lets Anthropic default to `"high"`.
+    ///
+    /// Emitted on Anthropic requests as a top-level `output_config: {effort: <value>}`
+    /// field, independent of the thinking mode. Older Anthropic models that don't
+    /// support the effort parameter will reject the request — set only on
+    /// supported models (Opus 4.5+, Sonnet 4.6+, Opus 4.6+, Opus 4.7+, Opus 4.8).
+    public var thinkingEffort: String?
     /// Use 1-hour prompt cache TTL instead of the default 5-minute ephemeral cache.
     /// Only relevant for `.anthropic` providers. Cached tokens cost 2x the base input price.
     public var extendedCacheTTL: Bool
@@ -50,6 +66,7 @@ public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
         maxOutputTokens: Int = 4096,
         maxContextTokens: Int = 128_000,
         thinkingBudget: Int? = nil,
+        thinkingEffort: String? = nil,
         extendedCacheTTL: Bool = false,
         streaming: Bool = true,
         isValid: Bool = true,
@@ -64,6 +81,7 @@ public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
         self.maxOutputTokens = maxOutputTokens
         self.maxContextTokens = maxContextTokens
         self.thinkingBudget = thinkingBudget
+        self.thinkingEffort = thinkingEffort
         self.extendedCacheTTL = extendedCacheTTL
         self.streaming = streaming
         self.isValid = isValid
@@ -93,6 +111,7 @@ public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
         maxOutputTokens = try container.decode(Int.self, forKey: .maxOutputTokens)
         maxContextTokens = try container.decode(Int.self, forKey: .maxContextTokens)
         thinkingBudget = try container.decodeIfPresent(Int.self, forKey: .thinkingBudget)
+        thinkingEffort = try container.decodeIfPresent(String.self, forKey: .thinkingEffort)
         extendedCacheTTL = try container.decodeIfPresent(Bool.self, forKey: .extendedCacheTTL) ?? false
         streaming = try container.decode(Bool.self, forKey: .streaming)
         isValid = try container.decode(Bool.self, forKey: .isValid)
@@ -104,7 +123,7 @@ public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
     /// 0.0.21; its legacy decode lives in `LegacyCodingKeys` below.
     private enum CodingKeys: String, CodingKey {
         case id, name, providerID, modelID, temperature
-        case maxOutputTokens, maxContextTokens, thinkingBudget, extendedCacheTTL
+        case maxOutputTokens, maxContextTokens, thinkingBudget, thinkingEffort, extendedCacheTTL
         case streaming, isValid, validationError, extraJSONOverrides
     }
 

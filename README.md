@@ -99,6 +99,63 @@ let response = try await provider.send(messages: [.init(role: .user, content: .t
 
 ## Changelog
 
+### 0.0.27 — Anthropic adaptive thinking + output_config.effort
+
+Adds support for Anthropic's new thinking API. Claude Opus 4.7 and 4.8 require
+`thinking: {type: "adaptive"}` and reject the legacy `thinking: {type: "enabled",
+budget_tokens: N}` format with HTTP 400. swift-llm-kit now detects required-
+adaptive models via `BehaviorFlags.requiresAdaptiveThinking` (auto-set in the
+bundled metadata for known model IDs) and emits the correct wire shape. Plus
+typed `thinkingEffort` field for the new `output_config.effort` knob.
+
+#### New
+
+- **`BehaviorFlags.requiresAdaptiveThinking: Bool`** (default false). When
+  true, `AnthropicProvider` emits `thinking: {type: "adaptive"}` instead of
+  the legacy manual format. The `thinkingBudget` config field acts as a
+  boolean signal on these models: > 0 means "thinking on" (depth decided by
+  the model and steered via effort), 0 / nil means "thinking off."
+- **`ModelConfiguration.thinkingEffort: String?`** (Optional). Valid values:
+  `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"` (xhigh only on Opus 4.7,
+  4.8). When non-nil, `AnthropicProvider` emits a top-level
+  `output_config: {effort: <value>}` field independent of the thinking mode.
+  Backward-compatible Codable (legacy configs without the key decode cleanly
+  with `thinkingEffort = nil`).
+- **Bundled metadata entries** for `claude-opus-4-7` and `claude-opus-4-8`
+  with `requiresAdaptiveThinking: true`. Existing configs pointing at these
+  modelIDs auto-flip to adaptive on first request — no user action needed.
+  Configs with a custom Opus 4.7/4.8 model ID can opt in via
+  `BehaviorFlagsOverride.requiresAdaptiveThinking = true`.
+- `AnthropicProvider.init` now takes an optional `behaviorFlags: BehaviorFlags`
+  parameter (default `BehaviorFlags()`). `LLMKitManager.makeProvider(for:)`
+  passes the resolved flags through automatically.
+
+#### Migration matrix
+
+| Model | Existing behavior (0.0.26) | New behavior (0.0.27) |
+|---|---|---|
+| **Opus 4.5 and earlier** | Manual `{type: "enabled", budget_tokens: N}` | Unchanged |
+| **Opus 4.6, Sonnet 4.6** | Manual works (deprecated by Anthropic) | Unchanged unless you set the flag yourself |
+| **Opus 4.7, Opus 4.8** | HTTP 400 on every thinking request | Auto-adaptive via registry; works |
+| Custom modelIDs | n/a | Set `requiresAdaptiveThinking` via override |
+
+#### Notes
+
+- The `output_config.effort` field is emitted unconditionally when
+  `thinkingEffort` is set — older models that don't support it will return
+  HTTP 400. Set only on models that support it (Opus 4.5+, Sonnet 4.6+).
+- Adaptive thinking does NOT have the manual `max_tokens > budget_tokens + 1`
+  constraint — `AnthropicProvider` skips that floor on adaptive paths.
+- `temperature = 1.0` is still forced when thinking is on (both manual and
+  adaptive paths), preserving the existing Anthropic-thinking convention.
+- `display: "summarized" | "omitted"` is not yet exposed as a typed field.
+  Opus 4.7/4.8 default to `"omitted"` — signatures still flow for
+  multi-turn continuity (thinking continuity unchanged), but visible
+  reasoning text in `LLMResponse.reasoning` will be empty on these models
+  unless you set `display: "summarized"` via `extraJSONOverrides`.
+
+15 new tests in `V0_0_27_Tests`. 160 total (was 145).
+
 ### 0.0.26 — Gemini parts redesign + Anthropic empty-content fix
 
 Resolves both 0.0.25 known limitations.

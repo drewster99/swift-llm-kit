@@ -70,6 +70,17 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
     /// metadata or user override.
     public var supportsDeveloperRole: Bool = false
 
+    /// Anthropic models that REQUIRE adaptive thinking
+    /// (`thinking: {type: "adaptive"}`) and REJECT the legacy manual format
+    /// (`thinking: {type: "enabled", budget_tokens: N}`) with HTTP 400.
+    /// Applies to Claude Opus 4.7, 4.8, and Mythos Preview. When true,
+    /// `AnthropicProvider` emits `{type: "adaptive"}` regardless of
+    /// `ModelConfiguration.thinkingBudget` (the budget field is silently
+    /// ignored — Anthropic doesn't accept it alongside adaptive). Default
+    /// false — older models (Opus 4.5 and earlier, Sonnet 4.6 and earlier
+    /// where manual still works) keep the legacy path.
+    public var requiresAdaptiveThinking: Bool = false
+
     /// Free-form key/value bag for one-off provider tweaks that haven't earned
     /// a typed field yet. Promoted fields must always have a Codable default
     /// so older persisted state still decodes cleanly.
@@ -84,6 +95,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         forceParallelToolCalls: Bool = false,
         replayReasoningContent: Bool = false,
         supportsDeveloperRole: Bool = false,
+        requiresAdaptiveThinking: Bool = false,
         extras: [String: String] = [:]
     ) {
         self.glmTemplateSalvage = glmTemplateSalvage
@@ -91,6 +103,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         self.forceParallelToolCalls = forceParallelToolCalls
         self.replayReasoningContent = replayReasoningContent
         self.supportsDeveloperRole = supportsDeveloperRole
+        self.requiresAdaptiveThinking = requiresAdaptiveThinking
         self.extras = extras
     }
 
@@ -102,6 +115,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
             && !forceParallelToolCalls
             && !replayReasoningContent
             && !supportsDeveloperRole
+            && !requiresAdaptiveThinking
             && extras.isEmpty
     }
 
@@ -115,6 +129,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         if forceParallelToolCalls { out.append("parallel tools") }
         if replayReasoningContent { out.append("replay reasoning") }
         if supportsDeveloperRole { out.append("developer role") }
+        if requiresAdaptiveThinking { out.append("adaptive thinking") }
         for key in extras.keys.sorted() {
             out.append("*\(key)")
         }
@@ -124,7 +139,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
     // MARK: - Codable (backward-compatible)
 
     private enum CodingKeys: String, CodingKey {
-        case glmTemplateSalvage, useMaxCompletionTokens, forceParallelToolCalls, replayReasoningContent, supportsDeveloperRole, extras
+        case glmTemplateSalvage, useMaxCompletionTokens, forceParallelToolCalls, replayReasoningContent, supportsDeveloperRole, requiresAdaptiveThinking, extras
     }
 
     public init(from decoder: Decoder) throws {
@@ -134,6 +149,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         forceParallelToolCalls = try c.decodeIfPresent(Bool.self, forKey: .forceParallelToolCalls) ?? false
         replayReasoningContent = try c.decodeIfPresent(Bool.self, forKey: .replayReasoningContent) ?? false
         supportsDeveloperRole = try c.decodeIfPresent(Bool.self, forKey: .supportsDeveloperRole) ?? false
+        requiresAdaptiveThinking = try c.decodeIfPresent(Bool.self, forKey: .requiresAdaptiveThinking) ?? false
         extras = try c.decodeIfPresent([String: String].self, forKey: .extras) ?? [:]
     }
 
@@ -146,6 +162,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         if forceParallelToolCalls { try c.encode(forceParallelToolCalls, forKey: .forceParallelToolCalls) }
         if replayReasoningContent { try c.encode(replayReasoningContent, forKey: .replayReasoningContent) }
         if supportsDeveloperRole { try c.encode(supportsDeveloperRole, forKey: .supportsDeveloperRole) }
+        if requiresAdaptiveThinking { try c.encode(requiresAdaptiveThinking, forKey: .requiresAdaptiveThinking) }
         if !extras.isEmpty { try c.encode(extras, forKey: .extras) }
     }
 }
@@ -164,6 +181,7 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
     public var forceParallelToolCalls: Bool?
     public var replayReasoningContent: Bool?
     public var supportsDeveloperRole: Bool?
+    public var requiresAdaptiveThinking: Bool?
     public var extras: [String: String]?
 
     public init(
@@ -172,6 +190,7 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
         forceParallelToolCalls: Bool? = nil,
         replayReasoningContent: Bool? = nil,
         supportsDeveloperRole: Bool? = nil,
+        requiresAdaptiveThinking: Bool? = nil,
         extras: [String: String]? = nil
     ) {
         self.glmTemplateSalvage = glmTemplateSalvage
@@ -179,6 +198,7 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
         self.forceParallelToolCalls = forceParallelToolCalls
         self.replayReasoningContent = replayReasoningContent
         self.supportsDeveloperRole = supportsDeveloperRole
+        self.requiresAdaptiveThinking = requiresAdaptiveThinking
         self.extras = extras
     }
 
@@ -188,6 +208,7 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
         if let v = forceParallelToolCalls, (forceReplace || v) { flags.forceParallelToolCalls = v }
         if let v = replayReasoningContent, (forceReplace || v) { flags.replayReasoningContent = v }
         if let v = supportsDeveloperRole, (forceReplace || v) { flags.supportsDeveloperRole = v }
+        if let v = requiresAdaptiveThinking, (forceReplace || v) { flags.requiresAdaptiveThinking = v }
         if let extrasPatch = extras {
             if forceReplace {
                 flags.extras = extrasPatch
@@ -207,6 +228,7 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
             && forceParallelToolCalls == nil
             && replayReasoningContent == nil
             && supportsDeveloperRole == nil
+            && requiresAdaptiveThinking == nil
             && (extras?.isEmpty ?? true)
     }
 }

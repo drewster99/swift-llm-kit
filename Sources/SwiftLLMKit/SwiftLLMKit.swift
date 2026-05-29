@@ -774,7 +774,8 @@ public final class LLMKitManager {
         case .anthropic:
             return AnthropicProvider(
                 configuration: config, provider: modelProvider,
-                readAPIKey: readAPIKey, verboseLogging: verbose
+                readAPIKey: readAPIKey, verboseLogging: verbose,
+                behaviorFlags: flags
             )
         case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaLlama, .alibabaCloud, .openRouter:
             // `parallel_tool_calls` is enabled when the model's catalog capability says so

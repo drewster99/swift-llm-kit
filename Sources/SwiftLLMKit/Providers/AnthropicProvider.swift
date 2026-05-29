@@ -10,19 +10,22 @@ struct AnthropicProvider: LLMProvider {
     private let readAPIKey: @Sendable () -> String
     private let verboseLogging: Bool
     private let session: URLSession
+    private let behaviorFlags: BehaviorFlags
 
     public init(
         configuration: ModelConfiguration,
         provider: ModelProvider,
         readAPIKey: @Sendable @escaping () -> String,
         verboseLogging: Bool = false,
-        session: URLSession = llmURLSession
+        session: URLSession = llmURLSession,
+        behaviorFlags: BehaviorFlags = BehaviorFlags()
     ) {
         self.configuration = configuration
         self.provider = provider
         self.readAPIKey = readAPIKey
         self.verboseLogging = verboseLogging
         self.session = session
+        self.behaviorFlags = behaviorFlags
     }
 
     public func send(
@@ -95,14 +98,21 @@ struct AnthropicProvider: LLMProvider {
         // and must be combined into a single user message with all tool_result content blocks.
         let encodedMessages = Self.mergeConsecutiveSameRole(try conversationMessages.map(encodeMessage))
 
+        // Adaptive thinking (Opus 4.7, 4.8) — `thinking: {type: "adaptive"}`,
+        // no budget_tokens. The `thinkingBudget` field is interpreted as a
+        // boolean signal on adaptive-thinking models: > 0 means "thinking on,"
+        // model picks depth itself (steered via `output_config.effort`).
+        let usesAdaptiveThinking = behaviorFlags.requiresAdaptiveThinking
         let thinkingEnabled = (configuration.thinkingBudget ?? 0) > 0
 
-        // When extended thinking is enabled, max_tokens must exceed budget_tokens
-        // (which is itself floored at 1024 by Anthropic). Clamp the override so a
-        // tight per-call cap doesn't produce an API error in thinking-enabled paths.
+        // When MANUAL extended thinking is enabled, max_tokens must exceed
+        // budget_tokens (which is itself floored at 1024 by Anthropic). Clamp
+        // the override so a tight per-call cap doesn't produce an API error.
+        // Adaptive thinking has no budget concept, so the constraint doesn't
+        // apply.
         let effectiveMaxTokens: Int = {
             guard let override = maxOutputTokensOverride else { return configuration.maxTokens }
-            if thinkingEnabled, let budget = configuration.thinkingBudget {
+            if thinkingEnabled, !usesAdaptiveThinking, let budget = configuration.thinkingBudget {
                 return max(override, max(budget, 1024) + 1)
             }
             return override
@@ -157,11 +167,27 @@ struct AnthropicProvider: LLMProvider {
             ]
         }
 
-        if thinkingEnabled, let budget = configuration.thinkingBudget {
-            body["thinking"] = [
-                "type": "enabled",
-                "budget_tokens": max(budget, 1024)
-            ] as [String: Any]
+        if thinkingEnabled {
+            if usesAdaptiveThinking {
+                // Adaptive thinking — model decides depth, no budget_tokens.
+                // Steered via `output_config.effort` below if user set it.
+                body["thinking"] = ["type": "adaptive"] as [String: Any]
+            } else if let budget = configuration.thinkingBudget {
+                body["thinking"] = [
+                    "type": "enabled",
+                    "budget_tokens": max(budget, 1024)
+                ] as [String: Any]
+            }
+        }
+
+        // Top-level `output_config.effort` (independent of thinking mode). Anthropic
+        // emits this on every supported model — Opus 4.5+ accepts it alongside
+        // manual thinking; Opus 4.6 / Sonnet 4.6 / Opus 4.7+ accept it alongside
+        // adaptive thinking; older models (3.x, 4.0–4.4) will reject the field
+        // with HTTP 400. We pass through unconditionally when the user set it
+        // — better a clear API error than a silently-dropped knob.
+        if let effort = configuration.thinkingEffort {
+            body["output_config"] = ["effort": effort] as [String: Any]
         }
 
         if !tools.isEmpty {
