@@ -82,13 +82,13 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
     public var requiresAdaptiveThinking: Bool = false
 
     /// OpenAI-compatible models that accept a top-level `reasoning_effort`
-    /// field for reasoning depth control. Set on OpenAI o-series (o1,
-    /// o1-mini, o3, o3-mini, o4-mini) and GPT-5 family. Non-reasoning
-    /// models (GPT-4o, GPT-3.5-turbo, etc.) reject the field with HTTP
-    /// 400, so emission is gated. When true AND
-    /// `ModelConfiguration.thinkingEffort` is set,
-    /// `OpenAICompatibleProvider` emits `reasoning_effort: <value>` at the
-    /// top level of the request body. Default false.
+    /// field for reasoning depth control. Set on the OpenAI o-series (o1,
+    /// o1-preview, o1-mini, o3, o3-mini, o4-mini) and the GPT-5 family
+    /// (gpt-5, gpt-5-mini, gpt-5-pro). Non-reasoning models (GPT-4o,
+    /// GPT-3.5-turbo, etc.) reject the field with HTTP 400, so emission
+    /// is gated. When true AND `ModelConfiguration.thinkingEffort` is
+    /// set, `OpenAICompatibleProvider` emits `reasoning_effort: <value>`
+    /// at the top level of the request body. Default false.
     public var supportsReasoningEffort: Bool = false
 
     /// Free-form key/value bag for one-off provider tweaks that haven't earned

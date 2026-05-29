@@ -126,4 +126,28 @@ struct V0_0_28_Tests {
         let flags = BehaviorFlags(supportsReasoningEffort: true)
         #expect(flags.displayLabels.contains("reasoning_effort"))
     }
+
+    @Test("requiresAdaptiveThinking and supportsReasoningEffort are independent")
+    func adaptiveAndEffortFlagsAreIndependent() throws {
+        // Both flags can be set on the same BehaviorFlags value without
+        // interaction. AnthropicProvider only reads requiresAdaptiveThinking;
+        // OpenAICompatibleProvider only reads supportsReasoningEffort.
+        // Setting both produces no cross-provider weirdness — each provider
+        // emits its own wire shape from its own flag + the shared
+        // thinkingEffort config field.
+        let flags = BehaviorFlags(
+            requiresAdaptiveThinking: true,
+            supportsReasoningEffort: true
+        )
+        #expect(flags.requiresAdaptiveThinking == true)
+        #expect(flags.supportsReasoningEffort == true)
+
+        // OpenAI provider with both flags: still emits reasoning_effort
+        // (not output_config.effort — that's Anthropic's field).
+        let provider = try openAI(thinkingEffort: "high", flags: flags)
+        let body = provider.buildRequestBody(messages: [.user("hi")], tools: [])
+        #expect(body["reasoning_effort"] as? String == "high")
+        #expect(body["output_config"] == nil,
+                "OpenAI provider must not emit Anthropic's output_config")
+    }
 }
