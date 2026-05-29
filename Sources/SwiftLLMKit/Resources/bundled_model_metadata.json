@@ -107,6 +107,41 @@
         },
         "builtin.ollama-cloud/glm-5": {
             "behaviorFlags": { "glmTemplateSalvage": true }
+        },
+
+        "builtin.openrouter/anthropic/claude-opus-4-7": {
+            "behaviorFlags": { "requiresAdaptiveThinking": true }
+        },
+        "builtin.openrouter/anthropic/claude-opus-4-8": {
+            "behaviorFlags": { "requiresAdaptiveThinking": true }
+        },
+
+        "builtin.openrouter/openai/o1": {
+            "behaviorFlags": { "supportsReasoningEffort": true }
+        },
+        "builtin.openrouter/openai/o1-preview": {
+            "behaviorFlags": { "supportsReasoningEffort": true }
+        },
+        "builtin.openrouter/openai/o1-mini": {
+            "behaviorFlags": { "supportsReasoningEffort": true }
+        },
+        "builtin.openrouter/openai/o3": {
+            "behaviorFlags": { "supportsReasoningEffort": true }
+        },
+        "builtin.openrouter/openai/o3-mini": {
+            "behaviorFlags": { "supportsReasoningEffort": true }
+        },
+        "builtin.openrouter/openai/o4-mini": {
+            "behaviorFlags": { "supportsReasoningEffort": true }
+        },
+        "builtin.openrouter/openai/gpt-5": {
+            "behaviorFlags": { "supportsReasoningEffort": true }
+        },
+        "builtin.openrouter/openai/gpt-5-mini": {
+            "behaviorFlags": { "supportsReasoningEffort": true }
+        },
+        "builtin.openrouter/openai/gpt-5-pro": {
+            "behaviorFlags": { "supportsReasoningEffort": true }
         }
     },
 

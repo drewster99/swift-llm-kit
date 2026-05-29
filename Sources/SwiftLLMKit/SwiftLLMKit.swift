@@ -283,19 +283,20 @@ public final class LLMKitManager {
     }
 
     /// Creates a duplicate of an existing configuration with a new ID and "(Copy)" suffix.
+    ///
+    /// Uses the "mutate-from-existing" pattern (`var newConfig = original`)
+    /// instead of rebuilding via named init parameters. This guarantees every
+    /// field present on `ModelConfiguration` is preserved into the duplicate
+    /// — including any fields added in future releases. The named-init path
+    /// the old implementation used would silently drop new fields (e.g.
+    /// `thinkingEffort`, `extendedCacheTTL`, `extraJSONOverrides` were all
+    /// dropped before this fix).
     @discardableResult
     public func duplicateConfiguration(id: UUID) -> ModelConfiguration? {
         guard let original = configurations.first(where: { $0.id == id }) else { return nil }
-        let newConfig = ModelConfiguration(
-            name: "\(original.name) (Copy)",
-            providerID: original.providerID,
-            modelID: original.modelID,
-            temperature: original.temperature,
-            maxOutputTokens: original.maxOutputTokens,
-            maxContextTokens: original.maxContextTokens,
-            thinkingBudget: original.thinkingBudget,
-            streaming: original.streaming
-        )
+        var newConfig = original
+        newConfig.id = UUID()
+        newConfig.name = "\(original.name) (Copy)"
         configurations.append(newConfig)
         validateConfigurations()
         return newConfig
@@ -574,6 +575,40 @@ public final class LLMKitManager {
             return
         }
 
+        // thinkingEffort validation: must be a recognized effort enum value
+        // AND only emitted by providers that actually consume it. Anthropic
+        // accepts effort on Opus 4.5+ / Sonnet 4.6+; OpenAI on reasoning
+        // models flagged with `supportsReasoningEffort`. On every other
+        // provider (Ollama, Gemini, alibabaCloud, etc.) the field is silently
+        // dropped — flag that as invalid so users don't set it expecting it
+        // to fire. Anthropic provider always emits it (no flag gating), so
+        // a model that doesn't accept the field will 400 — preferable to
+        // silent drop but worth surfacing pre-flight.
+        if let effort = config.thinkingEffort {
+            let validEfforts: Set<String> = ["minimal", "low", "medium", "high", "xhigh", "max"]
+            guard validEfforts.contains(effort) else {
+                configurations[index].isValid = false
+                configurations[index].validationError = "thinkingEffort '\(effort)' is not a recognized value (valid: \(validEfforts.sorted().joined(separator: ", ")))"
+                return
+            }
+            let configFlags = behaviorFlags(forProviderID: provider.id, modelID: config.modelID)
+            let providerSupports: Bool = {
+                switch provider.apiType {
+                case .anthropic, .alibabaCloud:
+                    return true   // Anthropic emits effort unconditionally; alibaba uses thinking_budget but effort field harmless
+                case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaLlama, .openRouter:
+                    return configFlags.supportsReasoningEffort
+                case .gemini, .ollama:
+                    return false
+                }
+            }()
+            if !providerSupports {
+                configurations[index].isValid = false
+                configurations[index].validationError = "thinkingEffort is not supported by \(provider.apiType.displayName) for this model (drop it or pick a model with reasoning support)"
+                return
+            }
+        }
+
         // Check model exists in that provider's models
         let providerModels = models.filter { $0.providerID == config.providerID }
         if !providerModels.isEmpty {
@@ -687,13 +722,33 @@ public final class LLMKitManager {
             body["temperature"] = temperature
         }
 
+        // Resolve behavior flags once — used by multiple per-apiType branches below.
+        let prepFlags = behaviorFlags(forProviderID: provider.id, modelID: config.modelID)
+
         switch provider.apiType {
         case .anthropic:
             body["max_tokens"] = config.maxOutputTokens
-            // Anthropic requires temperature = 1 when extended thinking is enabled.
-            if let budget = config.thinkingBudget, budget > 0 {
+            // Anthropic thinking: adaptive (Opus 4.7/4.8) vs manual (older
+            // models). Mirrors AnthropicProvider.buildRequestBody. The
+            // `thinkingBudget` field acts as a boolean signal on adaptive
+            // models (>0 = on, 0/nil = off); manual models use it as the
+            // token budget. temperature pinned to 1.0 when thinking is on
+            // (both modes — Anthropic-thinking convention).
+            let thinkingEnabled = (config.thinkingBudget ?? 0) > 0
+            if thinkingEnabled {
                 body["temperature"] = 1.0
-                body["thinking"] = ["type": "enabled", "budget_tokens": max(budget, 1024)] as [String: Any]
+                if prepFlags.requiresAdaptiveThinking {
+                    body["thinking"] = ["type": "adaptive"] as [String: Any]
+                } else if let budget = config.thinkingBudget {
+                    body["thinking"] = [
+                        "type": "enabled",
+                        "budget_tokens": max(budget, 1024)
+                    ] as [String: Any]
+                }
+            }
+            // Top-level `output_config.effort` — independent of thinking mode.
+            if let effort = config.thinkingEffort {
+                body["output_config"] = ["effort": effort] as [String: Any]
             }
             // Enable prompt caching for all Anthropic requests.
             body["cache_control"] = config.extendedCacheTTL
@@ -704,9 +759,15 @@ public final class LLMKitManager {
             // `max_completion_tokens`. Bundled-defaults JSON flags affected models
             // with `useMaxCompletionTokens: true`; users override per-model. Used to
             // be a hardcoded `provider.id == BuiltInProviders.ID.openai` check.
-            let prepFlags = behaviorFlags(forProviderID: provider.id, modelID: config.modelID)
             let tokenLimitKey = prepFlags.useMaxCompletionTokens ? "max_completion_tokens" : "max_tokens"
             body[tokenLimitKey] = config.maxOutputTokens
+            // OpenAI reasoning_effort — depth control for reasoning models
+            // (o-series, GPT-5 family). Gated on `supportsReasoningEffort`
+            // because non-reasoning models reject the field with HTTP 400.
+            if prepFlags.supportsReasoningEffort,
+               let effort = config.thinkingEffort {
+                body["reasoning_effort"] = effort
+            }
             // OpenRouter passes top-level cache_control through to Anthropic upstreams.
             // Mirrors AnthropicProvider's automatic-caching shape; gated to OpenRouter +
             // Anthropic-prefixed model IDs so other upstreams don't see unfamiliar fields.
