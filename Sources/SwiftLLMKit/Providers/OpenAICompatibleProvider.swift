@@ -41,7 +41,8 @@ struct OpenAICompatibleProvider: LLMProvider {
         thinkingEffortOverride: String? = nil,
         maxOutputTokensOverride: Int? = nil,
         temperatureOverride: Double? = nil,
-        topPOverride: Double? = nil
+        topPOverride: Double? = nil,
+        stopSequencesOverride: [String]? = nil
     ) async throws -> LLMResponse {
         let url = provider.endpoint.appendingPathComponent("chat/completions")
         var request = URLRequest(url: url)
@@ -69,7 +70,7 @@ struct OpenAICompatibleProvider: LLMProvider {
             request.setValue(appName, forHTTPHeaderField: "X-Title")
         }
 
-        let body = buildRequestBody(messages: messages, tools: tools, toolChoice: toolChoice, thinkingEffortOverride: thinkingEffortOverride, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: temperatureOverride, topPOverride: topPOverride)
+        let body = buildRequestBody(messages: messages, tools: tools, toolChoice: toolChoice, thinkingEffortOverride: thinkingEffortOverride, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: temperatureOverride, topPOverride: topPOverride, stopSequencesOverride: stopSequencesOverride)
         // .sortedKeys keeps wire bytes stable across requests so OpenAI's
         // automatic prefix cache (>=1024-token prefix match) keeps hitting.
         let requestData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
@@ -105,7 +106,8 @@ struct OpenAICompatibleProvider: LLMProvider {
         thinkingEffortOverride: String? = nil,
         maxOutputTokensOverride: Int? = nil,
         temperatureOverride: Double? = nil,
-        topPOverride: Double? = nil
+        topPOverride: Double? = nil,
+        stopSequencesOverride: [String]? = nil
     ) -> [String: Any] {
         // OpenAI API requires system messages at the start of the conversation.
         // Extract any system messages from arbitrary positions (e.g. per-turn task
@@ -162,6 +164,9 @@ struct OpenAICompatibleProvider: LLMProvider {
         }
         if let topP = topPOverride {
             body["top_p"] = topP
+        }
+        if let stops = stopSequencesOverride, !stops.isEmpty {
+            body["stop"] = stops
         }
 
         // Alibaba Cloud thinking support (uses different keys than Anthropic).

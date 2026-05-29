@@ -76,7 +76,8 @@ struct OllamaProvider: LLMProvider {
         thinkingEffortOverride: String? = nil,
         maxOutputTokensOverride: Int? = nil,
         temperatureOverride: Double? = nil,
-        topPOverride: Double? = nil
+        topPOverride: Double? = nil,
+        stopSequencesOverride: [String]? = nil
     ) async throws -> LLMResponse {
         // Ollama doesn't have an effort enum — chat completions stream
         // accepts standard sampling parameters but no reasoning_effort.
@@ -102,7 +103,7 @@ struct OllamaProvider: LLMProvider {
         // natively support a tool role still receive the result content, just
         // wrapped as user text with a "[Tool result for <id>]: ..." prefix.
         let finalMessages = Self.normalizeMessages(messages)
-        let body = buildRequestBody(messages: Self.extractSystemMessages(finalMessages), tools: tools, toolChoice: toolChoice, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: temperatureOverride, topPOverride: topPOverride)
+        let body = buildRequestBody(messages: Self.extractSystemMessages(finalMessages), tools: tools, toolChoice: toolChoice, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: temperatureOverride, topPOverride: topPOverride, stopSequencesOverride: stopSequencesOverride)
         // .sortedKeys keeps wire bytes stable across requests for any
         // downstream prefix-caching the model applies.
         let requestData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
@@ -137,7 +138,8 @@ struct OllamaProvider: LLMProvider {
         toolChoice: LLMToolChoice? = nil,
         maxOutputTokensOverride: Int? = nil,
         temperatureOverride: Double? = nil,
-        topPOverride: Double? = nil
+        topPOverride: Double? = nil,
+        stopSequencesOverride: [String]? = nil
     ) -> [String: Any] {
         let effectiveMaxTokens = maxOutputTokensOverride ?? configuration.maxTokens
         var options: [String: Any] = ["num_predict": effectiveMaxTokens]
@@ -146,6 +148,9 @@ struct OllamaProvider: LLMProvider {
         }
         if let topP = topPOverride {
             options["top_p"] = topP
+        }
+        if let stops = stopSequencesOverride, !stops.isEmpty {
+            options["stop"] = stops
         }
         var body: [String: Any] = [
             "model": configuration.model,

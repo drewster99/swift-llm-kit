@@ -35,7 +35,8 @@ struct AnthropicProvider: LLMProvider {
         thinkingEffortOverride: String? = nil,
         maxOutputTokensOverride: Int? = nil,
         temperatureOverride: Double? = nil,
-        topPOverride: Double? = nil
+        topPOverride: Double? = nil,
+        stopSequencesOverride: [String]? = nil
     ) async throws -> LLMResponse {
         let base = provider.endpoint.ensureAnthropicV1()
         let url = base.appendingPathComponent("messages")
@@ -45,7 +46,7 @@ struct AnthropicProvider: LLMProvider {
         request.setValue(readAPIKey(), forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
 
-        let body = try buildRequestBody(messages: messages, tools: tools, toolChoice: toolChoice, thinkingEffortOverride: thinkingEffortOverride, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: temperatureOverride, topPOverride: topPOverride)
+        let body = try buildRequestBody(messages: messages, tools: tools, toolChoice: toolChoice, thinkingEffortOverride: thinkingEffortOverride, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: temperatureOverride, topPOverride: topPOverride, stopSequencesOverride: stopSequencesOverride)
         // .sortedKeys keeps wire bytes stable across requests so Anthropic's
         // prompt cache (which is byte-prefix matched) keeps hitting.
         let requestData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
@@ -81,7 +82,8 @@ struct AnthropicProvider: LLMProvider {
         thinkingEffortOverride: String? = nil,
         maxOutputTokensOverride: Int? = nil,
         temperatureOverride: Double? = nil,
-        topPOverride: Double? = nil
+        topPOverride: Double? = nil,
+        stopSequencesOverride: [String]? = nil
     ) throws -> [String: Any] {
         // Anthropic requires system prompt separate from messages.
         // Concatenate all system messages so per-turn context doesn't overwrite the base prompt.
@@ -161,6 +163,10 @@ struct AnthropicProvider: LLMProvider {
         // enabled, Anthropic ignores top_p — preserved by emitting nothing.
         if !thinkingEnabled, let topP = topPOverride {
             body["top_p"] = topP
+        }
+
+        if let stops = stopSequencesOverride, !stops.isEmpty {
+            body["stop_sequences"] = stops
         }
 
         // Per-block cache_control breakpoint payload, reused for the system block

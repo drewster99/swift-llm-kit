@@ -33,6 +33,13 @@ public protocol LLMProvider: Sendable {
     ///     `ModelConfiguration` has no `topP` field today, so this parameter
     ///     is the ONLY way to send it. Provider-specific constraints apply
     ///     (e.g. Anthropic ignores top_p when extended thinking is enabled).
+    ///   - stopSequencesOverride: Optional list of strings that cause the
+    ///     model to stop generation when encountered. `nil` or `[]` means
+    ///     "don't emit the field." Each provider has its own wire shape:
+    ///     - Anthropic: `stop_sequences: [...]`
+    ///     - OpenAI-compatible: `stop: [...]`
+    ///     - Gemini: `generationConfig.stopSequences: [...]`
+    ///     - Ollama: `options.stop: [...]`
     /// - Returns: The model's response (text, tool calls, or both).
     func send(
         messages: [LLMMessage],
@@ -41,7 +48,8 @@ public protocol LLMProvider: Sendable {
         thinkingEffortOverride: String?,
         maxOutputTokensOverride: Int?,
         temperatureOverride: Double?,
-        topPOverride: Double?
+        topPOverride: Double?,
+        stopSequencesOverride: [String]?
     ) async throws -> LLMResponse
 }
 
@@ -53,7 +61,7 @@ extension LLMProvider {
         messages: [LLMMessage],
         tools: [LLMToolDefinition]
     ) async throws -> LLMResponse {
-        try await send(messages: messages, tools: tools, toolChoice: nil, thinkingEffortOverride: nil, maxOutputTokensOverride: nil, temperatureOverride: nil, topPOverride: nil)
+        try await send(messages: messages, tools: tools, toolChoice: nil, thinkingEffortOverride: nil, maxOutputTokensOverride: nil, temperatureOverride: nil, topPOverride: nil, stopSequencesOverride: nil)
     }
 
     /// Convenience overload — maxOutput override only.
@@ -62,7 +70,7 @@ extension LLMProvider {
         tools: [LLMToolDefinition],
         maxOutputTokensOverride: Int?
     ) async throws -> LLMResponse {
-        try await send(messages: messages, tools: tools, toolChoice: nil, thinkingEffortOverride: nil, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: nil, topPOverride: nil)
+        try await send(messages: messages, tools: tools, toolChoice: nil, thinkingEffortOverride: nil, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: nil, topPOverride: nil, stopSequencesOverride: nil)
     }
 
     /// Convenience overload — toolChoice + maxOutput override (0.0.30 shape).
@@ -72,10 +80,10 @@ extension LLMProvider {
         toolChoice: LLMToolChoice?,
         maxOutputTokensOverride: Int?
     ) async throws -> LLMResponse {
-        try await send(messages: messages, tools: tools, toolChoice: toolChoice, thinkingEffortOverride: nil, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: nil, topPOverride: nil)
+        try await send(messages: messages, tools: tools, toolChoice: toolChoice, thinkingEffortOverride: nil, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: nil, topPOverride: nil, stopSequencesOverride: nil)
     }
 
-    /// Convenience overload — 0.0.31 shape (without temperatureOverride / topPOverride).
+    /// Convenience overload — 0.0.31 shape (without temperatureOverride / topPOverride / stopSequencesOverride).
     public func send(
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
@@ -83,10 +91,10 @@ extension LLMProvider {
         thinkingEffortOverride: String?,
         maxOutputTokensOverride: Int?
     ) async throws -> LLMResponse {
-        try await send(messages: messages, tools: tools, toolChoice: toolChoice, thinkingEffortOverride: thinkingEffortOverride, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: nil, topPOverride: nil)
+        try await send(messages: messages, tools: tools, toolChoice: toolChoice, thinkingEffortOverride: thinkingEffortOverride, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: nil, topPOverride: nil, stopSequencesOverride: nil)
     }
 
-    /// Convenience overload — 0.0.32 shape (without topPOverride).
+    /// Convenience overload — 0.0.32 shape (without topPOverride / stopSequencesOverride).
     public func send(
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
@@ -95,7 +103,20 @@ extension LLMProvider {
         maxOutputTokensOverride: Int?,
         temperatureOverride: Double?
     ) async throws -> LLMResponse {
-        try await send(messages: messages, tools: tools, toolChoice: toolChoice, thinkingEffortOverride: thinkingEffortOverride, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: temperatureOverride, topPOverride: nil)
+        try await send(messages: messages, tools: tools, toolChoice: toolChoice, thinkingEffortOverride: thinkingEffortOverride, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: temperatureOverride, topPOverride: nil, stopSequencesOverride: nil)
+    }
+
+    /// Convenience overload — 0.0.33 shape (without stopSequencesOverride).
+    public func send(
+        messages: [LLMMessage],
+        tools: [LLMToolDefinition],
+        toolChoice: LLMToolChoice?,
+        thinkingEffortOverride: String?,
+        maxOutputTokensOverride: Int?,
+        temperatureOverride: Double?,
+        topPOverride: Double?
+    ) async throws -> LLMResponse {
+        try await send(messages: messages, tools: tools, toolChoice: toolChoice, thinkingEffortOverride: thinkingEffortOverride, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: temperatureOverride, topPOverride: topPOverride, stopSequencesOverride: nil)
     }
 }
 

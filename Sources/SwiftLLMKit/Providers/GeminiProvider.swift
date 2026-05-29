@@ -41,7 +41,8 @@ struct GeminiProvider: LLMProvider {
         thinkingEffortOverride: String? = nil,
         maxOutputTokensOverride: Int? = nil,
         temperatureOverride: Double? = nil,
-        topPOverride: Double? = nil
+        topPOverride: Double? = nil,
+        stopSequencesOverride: [String]? = nil
     ) async throws -> LLMResponse {
         // Gemini doesn't have an effort enum — depth is controlled via
         // `thinkingConfig.thinkingBudget` (token count) in the request.
@@ -65,7 +66,7 @@ struct GeminiProvider: LLMProvider {
             request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
         }
 
-        let body = try buildRequestBody(messages: messages, tools: tools, toolChoice: toolChoice, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: temperatureOverride, topPOverride: topPOverride)
+        let body = try buildRequestBody(messages: messages, tools: tools, toolChoice: toolChoice, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: temperatureOverride, topPOverride: topPOverride, stopSequencesOverride: stopSequencesOverride)
         // .sortedKeys keeps wire bytes stable across requests for any
         // downstream prefix-caching the provider applies.
         let requestData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
@@ -102,7 +103,8 @@ struct GeminiProvider: LLMProvider {
         toolChoice: LLMToolChoice? = nil,
         maxOutputTokensOverride: Int? = nil,
         temperatureOverride: Double? = nil,
-        topPOverride: Double? = nil
+        topPOverride: Double? = nil,
+        stopSequencesOverride: [String]? = nil
     ) throws -> [String: Any] {
         var systemParts: [String] = []
         var conversationMessages: [LLMMessage] = []
@@ -142,6 +144,9 @@ struct GeminiProvider: LLMProvider {
         }
         if let topP = topPOverride {
             generationConfig["topP"] = topP
+        }
+        if let stops = stopSequencesOverride, !stops.isEmpty {
+            generationConfig["stopSequences"] = stops
         }
         var body: [String: Any] = [
             "contents": mergedContents,
