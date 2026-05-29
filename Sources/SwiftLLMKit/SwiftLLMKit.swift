@@ -647,8 +647,15 @@ public final class LLMKitManager {
     /// Prepares an authenticated URLRequest stub for the given configuration.
     ///
     /// The returned `PreparedRequest` contains the URL, auth headers, and base body
-    /// parameters (model, temperature, max_tokens, thinking, stream). The app adds
-    /// messages/tools to the body and sends the request.
+    /// parameters (model, temperature, max_tokens, thinking, output_config.effort,
+    /// reasoning_effort, stream, cache_control). The app adds messages/tools to
+    /// the body and sends the request.
+    ///
+    /// **`tool_choice` is NOT pre-populated** — it's a per-call field that the
+    /// caller must add to the body alongside `tools`. Use `LLMToolChoice`'s
+    /// per-provider wire shapes (see the type's documentation). For most uses,
+    /// prefer the high-level `LLMProvider.send(messages:tools:toolChoice:)`
+    /// path which handles all per-provider translation automatically.
     public func prepareRequest(for configurationID: UUID) throws -> PreparedRequest {
         guard let config = configurations.first(where: { $0.id == configurationID }) else {
             throw SwiftLLMKitError.configurationNotFound(id: configurationID)

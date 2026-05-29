@@ -14,10 +14,10 @@ import Foundation
 /// "don't emit the field" — provider's API default applies (usually `auto`).
 ///
 /// **Note:** `LLMToolChoice` is meaningful only when `tools` is non-empty.
-/// Setting any value other than `.auto` (or `.none`) without tools produces
-/// undefined / provider-rejected behavior; providers may silently ignore the
-/// field, return an error, or behave inconsistently. swift-llm-kit does not
-/// validate this — the caller is responsible.
+/// Setting any value other than `.auto` (or `.textOnly`) without tools
+/// produces undefined / provider-rejected behavior; providers may silently
+/// ignore the field, return an error, or behave inconsistently. swift-llm-kit
+/// does not validate this — the caller is responsible.
 public enum LLMToolChoice: Sendable, Equatable {
     /// Model decides whether to call a tool. Equivalent to omitting the field
     /// entirely; emitted explicitly so callers can be unambiguous.
