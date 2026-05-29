@@ -77,8 +77,14 @@ struct OllamaProvider: LLMProvider {
         maxOutputTokensOverride: Int? = nil,
         temperatureOverride: Double? = nil,
         topPOverride: Double? = nil,
-        stopSequencesOverride: [String]? = nil
+        stopSequencesOverride: [String]? = nil,
+        frequencyPenaltyOverride: Double? = nil,
+        presencePenaltyOverride: Double? = nil
     ) async throws -> LLMResponse {
+        // Ollama's chat options don't expose frequency_penalty /
+        // presence_penalty. Accept and silently discard.
+        _ = frequencyPenaltyOverride
+        _ = presencePenaltyOverride
         // Ollama doesn't have an effort enum — chat completions stream
         // accepts standard sampling parameters but no reasoning_effort.
         // `thinkingEffortOverride` is silently ignored.

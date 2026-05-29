@@ -42,7 +42,9 @@ struct GeminiProvider: LLMProvider {
         maxOutputTokensOverride: Int? = nil,
         temperatureOverride: Double? = nil,
         topPOverride: Double? = nil,
-        stopSequencesOverride: [String]? = nil
+        stopSequencesOverride: [String]? = nil,
+        frequencyPenaltyOverride: Double? = nil,
+        presencePenaltyOverride: Double? = nil
     ) async throws -> LLMResponse {
         // Gemini doesn't have an effort enum — depth is controlled via
         // `thinkingConfig.thinkingBudget` (token count) in the request.
@@ -66,7 +68,7 @@ struct GeminiProvider: LLMProvider {
             request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
         }
 
-        let body = try buildRequestBody(messages: messages, tools: tools, toolChoice: toolChoice, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: temperatureOverride, topPOverride: topPOverride, stopSequencesOverride: stopSequencesOverride)
+        let body = try buildRequestBody(messages: messages, tools: tools, toolChoice: toolChoice, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: temperatureOverride, topPOverride: topPOverride, stopSequencesOverride: stopSequencesOverride, frequencyPenaltyOverride: frequencyPenaltyOverride, presencePenaltyOverride: presencePenaltyOverride)
         // .sortedKeys keeps wire bytes stable across requests for any
         // downstream prefix-caching the provider applies.
         let requestData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
@@ -104,7 +106,9 @@ struct GeminiProvider: LLMProvider {
         maxOutputTokensOverride: Int? = nil,
         temperatureOverride: Double? = nil,
         topPOverride: Double? = nil,
-        stopSequencesOverride: [String]? = nil
+        stopSequencesOverride: [String]? = nil,
+        frequencyPenaltyOverride: Double? = nil,
+        presencePenaltyOverride: Double? = nil
     ) throws -> [String: Any] {
         var systemParts: [String] = []
         var conversationMessages: [LLMMessage] = []
@@ -147,6 +151,12 @@ struct GeminiProvider: LLMProvider {
         }
         if let stops = stopSequencesOverride, !stops.isEmpty {
             generationConfig["stopSequences"] = stops
+        }
+        if let fp = frequencyPenaltyOverride {
+            generationConfig["frequencyPenalty"] = fp
+        }
+        if let pp = presencePenaltyOverride {
+            generationConfig["presencePenalty"] = pp
         }
         var body: [String: Any] = [
             "contents": mergedContents,

@@ -36,8 +36,16 @@ struct AnthropicProvider: LLMProvider {
         maxOutputTokensOverride: Int? = nil,
         temperatureOverride: Double? = nil,
         topPOverride: Double? = nil,
-        stopSequencesOverride: [String]? = nil
+        stopSequencesOverride: [String]? = nil,
+        frequencyPenaltyOverride: Double? = nil,
+        presencePenaltyOverride: Double? = nil
     ) async throws -> LLMResponse {
+        // Anthropic doesn't support frequency_penalty / presence_penalty.
+        // Accept and silently discard so callers don't need to branch by
+        // provider type.
+        _ = frequencyPenaltyOverride
+        _ = presencePenaltyOverride
+
         let base = provider.endpoint.ensureAnthropicV1()
         let url = base.appendingPathComponent("messages")
         var request = URLRequest(url: url)
