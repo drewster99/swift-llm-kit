@@ -110,6 +110,24 @@ struct V0_0_27_Tests {
         #expect(body["output_config"] == nil)
     }
 
+    @Test("effort works on adaptive model with thinking off (budget == 0 or nil)")
+    func effortAloneOnAdaptiveModelWithThinkingOff() throws {
+        // Some users will want effort control without enabling thinking on
+        // an adaptive-required model (e.g. force `medium` effort for cost
+        // control while leaving thinking off). The wire must emit
+        // output_config.effort but NO thinking field. The effort knob
+        // affects all tokens, not just thinking — see the Anthropic
+        // effort docs.
+        let flags = BehaviorFlags(requiresAdaptiveThinking: true)
+        let provider = try anthropic(thinkingBudget: 0, thinkingEffort: "medium", flags: flags)
+        let body = try provider.buildRequestBody(messages: [.user("hi")], tools: [])
+        #expect(body["thinking"] == nil,
+                "no thinking when budget is 0 even on adaptive-required models")
+        let oc = try #require(body["output_config"] as? [String: Any])
+        #expect(oc["effort"] as? String == "medium",
+                "effort is independent of thinking — emitted when set regardless")
+    }
+
     @Test("output_config.effort + adaptive thinking work together")
     func effortPlusAdaptive() throws {
         let flags = BehaviorFlags(requiresAdaptiveThinking: true)
