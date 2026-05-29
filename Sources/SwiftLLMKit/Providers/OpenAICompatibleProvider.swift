@@ -37,6 +37,7 @@ struct OpenAICompatibleProvider: LLMProvider {
     public func send(
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
+        toolChoice: LLMToolChoice? = nil,
         maxOutputTokensOverride: Int? = nil
     ) async throws -> LLMResponse {
         let url = provider.endpoint.appendingPathComponent("chat/completions")
@@ -65,7 +66,7 @@ struct OpenAICompatibleProvider: LLMProvider {
             request.setValue(appName, forHTTPHeaderField: "X-Title")
         }
 
-        let body = buildRequestBody(messages: messages, tools: tools, maxOutputTokensOverride: maxOutputTokensOverride)
+        let body = buildRequestBody(messages: messages, tools: tools, toolChoice: toolChoice, maxOutputTokensOverride: maxOutputTokensOverride)
         // .sortedKeys keeps wire bytes stable across requests so OpenAI's
         // automatic prefix cache (>=1024-token prefix match) keeps hitting.
         let requestData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
@@ -97,6 +98,7 @@ struct OpenAICompatibleProvider: LLMProvider {
     func buildRequestBody(
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
+        toolChoice: LLMToolChoice? = nil,
         maxOutputTokensOverride: Int? = nil
     ) -> [String: Any] {
         // OpenAI API requires system messages at the start of the conversation.
@@ -189,6 +191,15 @@ struct OpenAICompatibleProvider: LLMProvider {
             // Alibaba Cloud defaults parallel_tool_calls to false; enable explicitly.
             if provider.apiType == .alibabaCloud {
                 body["parallel_tool_calls"] = true
+            }
+
+            // tool_choice (OpenAI shape). Only emit when caller set it —
+            // otherwise the provider's default (`auto` when tools present)
+            // applies. Format depends on case: enum string for auto/required/
+            // none, or `{"type": "function", "function": {"name": "..."}}`
+            // for a specific tool.
+            if let toolChoice {
+                body["tool_choice"] = Self.encodeOpenAIToolChoice(toolChoice)
             }
         }
 
@@ -405,4 +416,22 @@ struct OpenAICompatibleProvider: LLMProvider {
         )
     }
 
+    /// Translates the unified `LLMToolChoice` to OpenAI's `tool_choice` wire
+    /// shape. The auto/required/none cases are plain enum strings; the
+    /// specific case is a nested function-object.
+    private static func encodeOpenAIToolChoice(_ choice: LLMToolChoice) -> Any {
+        switch choice {
+        case .auto:
+            return "auto"
+        case .required:
+            return "required"
+        case .textOnly:
+            return "none"
+        case .specific(let name):
+            return [
+                "type": "function",
+                "function": ["name": name]
+            ] as [String: Any]
+        }
+    }
 }

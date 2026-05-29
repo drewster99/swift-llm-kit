@@ -31,6 +31,7 @@ struct AnthropicProvider: LLMProvider {
     public func send(
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
+        toolChoice: LLMToolChoice? = nil,
         maxOutputTokensOverride: Int? = nil
     ) async throws -> LLMResponse {
         let base = provider.endpoint.ensureAnthropicV1()
@@ -41,7 +42,7 @@ struct AnthropicProvider: LLMProvider {
         request.setValue(readAPIKey(), forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
 
-        let body = try buildRequestBody(messages: messages, tools: tools, maxOutputTokensOverride: maxOutputTokensOverride)
+        let body = try buildRequestBody(messages: messages, tools: tools, toolChoice: toolChoice, maxOutputTokensOverride: maxOutputTokensOverride)
         // .sortedKeys keeps wire bytes stable across requests so Anthropic's
         // prompt cache (which is byte-prefix matched) keeps hitting.
         let requestData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
@@ -73,6 +74,7 @@ struct AnthropicProvider: LLMProvider {
     func buildRequestBody(
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
+        toolChoice: LLMToolChoice? = nil,
         maxOutputTokensOverride: Int? = nil
     ) throws -> [String: Any] {
         // Anthropic requires system prompt separate from messages.
@@ -205,6 +207,13 @@ struct AnthropicProvider: LLMProvider {
                 toolsArray[toolsArray.count - 1]["cache_control"] = cacheControl
             }
             body["tools"] = toolsArray
+
+            // tool_choice (Anthropic shape): {"type": "auto"|"any"|"tool"|"none", "name": "..."}
+            // Only emit when caller explicitly set it — otherwise Anthropic's
+            // default ("auto" when tools are present) applies.
+            if let toolChoice {
+                body["tool_choice"] = Self.encodeAnthropicToolChoice(toolChoice)
+            }
         }
 
         // Apply caller-provided overrides last so they win over any defaults
@@ -477,5 +486,22 @@ struct AnthropicProvider: LLMProvider {
             usage: tokenUsage,
             continuation: continuation
         )
+    }
+
+    /// Translates the unified `LLMToolChoice` to Anthropic's `tool_choice`
+    /// wire shape. Anthropic uses "any" for the "require some tool" mode
+    /// (not "required" as OpenAI does), and a `name` field on the `"tool"`
+    /// case to pin a specific tool.
+    private static func encodeAnthropicToolChoice(_ choice: LLMToolChoice) -> [String: Any] {
+        switch choice {
+        case .auto:
+            return ["type": "auto"]
+        case .required:
+            return ["type": "any"]
+        case .textOnly:
+            return ["type": "none"]
+        case .specific(let name):
+            return ["type": "tool", "name": name]
+        }
     }
 }

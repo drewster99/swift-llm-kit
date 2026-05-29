@@ -6,6 +6,10 @@ public protocol LLMProvider: Sendable {
     /// - Parameters:
     ///   - messages: The conversation history.
     ///   - tools: Available tool definitions the model may invoke.
+    ///   - toolChoice: Optional per-call control over how the model picks tools.
+    ///     `nil` (default) omits the field — each provider's natural default
+    ///     applies (typically `auto`). See `LLMToolChoice` for cross-provider
+    ///     semantics. Meaningful only when `tools` is non-empty.
     ///   - maxOutputTokensOverride: When non-nil, overrides the configuration's
     ///     `maxOutputTokens` for this single call. Useful for callers that need
     ///     a tight per-call cap (e.g. a security gatekeeper that produces only
@@ -16,17 +20,30 @@ public protocol LLMProvider: Sendable {
     func send(
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
+        toolChoice: LLMToolChoice?,
         maxOutputTokensOverride: Int?
     ) async throws -> LLMResponse
 }
 
 extension LLMProvider {
-    /// Convenience overload preserving the original two-argument call site.
+    /// Convenience overload — original two-argument call site (no toolChoice,
+    /// no maxOutput override). Existing callers from before 0.0.30 continue
+    /// to compile without source changes.
     public func send(
         messages: [LLMMessage],
         tools: [LLMToolDefinition]
     ) async throws -> LLMResponse {
-        try await send(messages: messages, tools: tools, maxOutputTokensOverride: nil)
+        try await send(messages: messages, tools: tools, toolChoice: nil, maxOutputTokensOverride: nil)
+    }
+
+    /// Convenience overload — maxOutput override but no toolChoice. Preserves
+    /// the 0.0.x three-argument signature that callers may have adopted.
+    public func send(
+        messages: [LLMMessage],
+        tools: [LLMToolDefinition],
+        maxOutputTokensOverride: Int?
+    ) async throws -> LLMResponse {
+        try await send(messages: messages, tools: tools, toolChoice: nil, maxOutputTokensOverride: maxOutputTokensOverride)
     }
 }
 

@@ -99,6 +99,65 @@ let response = try await provider.send(messages: [.init(role: .user, content: .t
 
 ## Changelog
 
+### 0.0.30 — `LLMToolChoice` per-call control
+
+Adds per-call control over how the model selects from the provided `tools`.
+New `LLMToolChoice` enum is the unified abstraction; each provider translates
+to its own wire format.
+
+#### New
+
+- **`LLMToolChoice`** enum: `.auto`, `.required`, `.textOnly`, `.specific(name:)`.
+  Note: the "must not call any tool" case is named `.textOnly` (not `.none`)
+  because `LLMToolChoice.none` would silently collide with
+  `Optional<LLMToolChoice>.none` — Swift's overload resolution picks the
+  Optional case at the call site, producing the OPPOSITE behavior.
+- **`LLMProvider.send`** gains an optional `toolChoice:` parameter (default
+  nil → omit field → provider default applies). Two backward-compatible
+  protocol extension overloads preserve the original 2- and 3-argument call
+  shapes; existing callers compile unchanged.
+
+#### Wire translation per provider
+
+| Choice | Anthropic | OpenAI | Gemini | Ollama |
+|---|---|---|---|---|
+| `.auto` | `{type: "auto"}` | `"auto"` | `mode: "AUTO"` | `"auto"` |
+| `.required` | `{type: "any"}` | `"required"` | `mode: "ANY"` | `"required"` |
+| `.textOnly` | `{type: "none"}` | `"none"` | `mode: "NONE"` | `"none"` |
+| `.specific("foo")` | `{type: "tool", name: "foo"}` | `{type: "function", function: {name: "foo"}}` | `mode: "ANY", allowedFunctionNames: ["foo"]` | `{type: "function", function: {name: "foo"}}` |
+
+`toolChoice` is meaningful only when `tools` is non-empty — providers gate
+emission on `!tools.isEmpty`, so setting it without tools is a no-op.
+
+23 new tests in `V0_0_30_ToolChoiceTests` covering every (provider × choice)
+combination plus the nil + empty-tools cases. 194 tests total (was 171).
+
+### 0.0.29 — fix prepareRequest stale + duplicateConfiguration field drop
+
+Two real bugs surfaced by a comprehensive code review:
+
+- **`LLMKitManager.prepareRequest` was stale relative to 0.0.27/0.0.28** —
+  emitted legacy `thinking: {type: "enabled", budget_tokens: N}` unconditionally,
+  never emitted `output_config.effort` or `reasoning_effort`. Any caller using
+  this lower-level prep API against Opus 4.7/4.8 got guaranteed HTTP 400.
+  Fixed to mirror the dispatch in AnthropicProvider / OpenAICompatibleProvider.
+
+- **`LLMKitManager.duplicateConfiguration` silently dropped 3 fields** —
+  `thinkingEffort`, `extendedCacheTTL`, `extraJSONOverrides`. Was using a
+  rebuild-from-scratch named-init pattern that's blind to field additions.
+  Switched to `var newConfig = original; newConfig.id = UUID(); ...` mutate-
+  from-existing pattern — every future field is preserved automatically.
+
+Plus two important polish items:
+
+- **`thinkingEffort` validation** in `validateConfigurations`: rejects unknown
+  enum values; rejects when the routed provider doesn't consume the field.
+- **OpenRouter `providerEntries`** for every model with a per-apiType
+  behavior flag — `builtin.openrouter/anthropic/claude-opus-4-{7,8}` get
+  `requiresAdaptiveThinking`, `builtin.openrouter/openai/{o-series, gpt-5*}`
+  get `supportsReasoningEffort`. Users routing via OpenRouter get the right
+  wire shape without manual override.
+
 ### 0.0.28 — OpenAI `reasoning_effort` emission
 
 Extends 0.0.27's `ModelConfiguration.thinkingEffort` field to flow through the

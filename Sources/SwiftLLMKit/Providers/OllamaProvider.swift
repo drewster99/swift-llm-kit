@@ -72,6 +72,7 @@ struct OllamaProvider: LLMProvider {
     public func send(
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
+        toolChoice: LLMToolChoice? = nil,
         maxOutputTokensOverride: Int? = nil
     ) async throws -> LLMResponse {
         let url = provider.endpoint.appendingPathComponent("chat")
@@ -94,7 +95,7 @@ struct OllamaProvider: LLMProvider {
         // natively support a tool role still receive the result content, just
         // wrapped as user text with a "[Tool result for <id>]: ..." prefix.
         let finalMessages = Self.normalizeMessages(messages)
-        let body = buildRequestBody(messages: Self.extractSystemMessages(finalMessages), tools: tools, maxOutputTokensOverride: maxOutputTokensOverride)
+        let body = buildRequestBody(messages: Self.extractSystemMessages(finalMessages), tools: tools, toolChoice: toolChoice, maxOutputTokensOverride: maxOutputTokensOverride)
         // .sortedKeys keeps wire bytes stable across requests for any
         // downstream prefix-caching the model applies.
         let requestData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
@@ -126,6 +127,7 @@ struct OllamaProvider: LLMProvider {
     func buildRequestBody(
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
+        toolChoice: LLMToolChoice? = nil,
         maxOutputTokensOverride: Int? = nil
     ) -> [String: Any] {
         let effectiveMaxTokens = maxOutputTokensOverride ?? configuration.maxTokens
@@ -150,6 +152,15 @@ struct OllamaProvider: LLMProvider {
                         "parameters": tool.parameters.mapValues(\.rawValue)
                     ] as [String: Any]
                 ] as [String: Any]
+            }
+            // Ollama follows the OpenAI tool_choice shape on the wire. Some
+            // models / chat templates respect it; others (gemma3 and other
+            // strict-alternation templates) ignore the field. Pass through
+            // when set so models that DO honor it get the right control;
+            // models that don't are unaffected. No flag gating — emission
+            // is benign even when ignored.
+            if let toolChoice {
+                body["tool_choice"] = Self.encodeOllamaToolChoice(toolChoice)
             }
         }
 
@@ -697,5 +708,23 @@ struct OllamaProvider: LLMProvider {
             range: NSRange(location: 0, length: (content as NSString).length),
             withTemplate: ""
         )
+    }
+
+    /// Translates the unified `LLMToolChoice` to Ollama's wire shape, which
+    /// mirrors OpenAI's `tool_choice` field.
+    private static func encodeOllamaToolChoice(_ choice: LLMToolChoice) -> Any {
+        switch choice {
+        case .auto:
+            return "auto"
+        case .required:
+            return "required"
+        case .textOnly:
+            return "none"
+        case .specific(let name):
+            return [
+                "type": "function",
+                "function": ["name": name]
+            ] as [String: Any]
+        }
     }
 }

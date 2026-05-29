@@ -37,6 +37,7 @@ struct GeminiProvider: LLMProvider {
     public func send(
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
+        toolChoice: LLMToolChoice? = nil,
         maxOutputTokensOverride: Int? = nil
     ) async throws -> LLMResponse {
         // Build URL: {endpoint}/models/{model}:generateContent
@@ -54,7 +55,7 @@ struct GeminiProvider: LLMProvider {
             request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
         }
 
-        let body = try buildRequestBody(messages: messages, tools: tools, maxOutputTokensOverride: maxOutputTokensOverride)
+        let body = try buildRequestBody(messages: messages, tools: tools, toolChoice: toolChoice, maxOutputTokensOverride: maxOutputTokensOverride)
         // .sortedKeys keeps wire bytes stable across requests for any
         // downstream prefix-caching the provider applies.
         let requestData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
@@ -88,6 +89,7 @@ struct GeminiProvider: LLMProvider {
     func buildRequestBody(
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
+        toolChoice: LLMToolChoice? = nil,
         maxOutputTokensOverride: Int? = nil
     ) throws -> [String: Any] {
         var systemParts: [String] = []
@@ -149,10 +151,11 @@ struct GeminiProvider: LLMProvider {
                     }
                 ] as [String: Any]
             ]
+            // toolConfig.functionCallingConfig — Gemini's tool-choice analog.
+            // Default `AUTO` when caller didn't specify; pinned to `ANY`/`NONE`
+            // or `ANY + allowedFunctionNames=[name]` for .specific.
             body["toolConfig"] = [
-                "functionCallingConfig": [
-                    "mode": "AUTO"
-                ]
+                "functionCallingConfig": Self.encodeGeminiToolChoice(toolChoice ?? .auto)
             ] as [String: Any]
         }
 
@@ -527,6 +530,22 @@ struct GeminiProvider: LLMProvider {
             return try JSONSerialization.jsonObject(with: data)
         } catch {
             throw LLMProviderError.malformedResponse(detail: "tool arguments JSON parse failed: \(error.localizedDescription), input: \(jsonString.prefix(200))")
+        }
+    }
+
+    /// Translates the unified `LLMToolChoice` to Gemini's
+    /// `toolConfig.functionCallingConfig` shape. `.specific(name)` becomes
+    /// `mode: "ANY"` plus an `allowedFunctionNames` whitelist of one.
+    private static func encodeGeminiToolChoice(_ choice: LLMToolChoice) -> [String: Any] {
+        switch choice {
+        case .auto:
+            return ["mode": "AUTO"]
+        case .required:
+            return ["mode": "ANY"]
+        case .textOnly:
+            return ["mode": "NONE"]
+        case .specific(let name):
+            return ["mode": "ANY", "allowedFunctionNames": [name]]
         }
     }
 }
