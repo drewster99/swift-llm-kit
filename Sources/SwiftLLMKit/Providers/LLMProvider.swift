@@ -28,6 +28,11 @@ public protocol LLMProvider: Sendable {
     ///     nil)." Provider-specific constraints still apply (e.g. Anthropic
     ///     forces temperature=1.0 when extended thinking is enabled, ignoring
     ///     this override).
+    ///   - topPOverride: Optional per-call value for nucleus sampling.
+    ///     `nil` means "don't emit the field" — provider's default applies.
+    ///     `ModelConfiguration` has no `topP` field today, so this parameter
+    ///     is the ONLY way to send it. Provider-specific constraints apply
+    ///     (e.g. Anthropic ignores top_p when extended thinking is enabled).
     /// - Returns: The model's response (text, tool calls, or both).
     func send(
         messages: [LLMMessage],
@@ -35,7 +40,8 @@ public protocol LLMProvider: Sendable {
         toolChoice: LLMToolChoice?,
         thinkingEffortOverride: String?,
         maxOutputTokensOverride: Int?,
-        temperatureOverride: Double?
+        temperatureOverride: Double?,
+        topPOverride: Double?
     ) async throws -> LLMResponse
 }
 
@@ -47,7 +53,7 @@ extension LLMProvider {
         messages: [LLMMessage],
         tools: [LLMToolDefinition]
     ) async throws -> LLMResponse {
-        try await send(messages: messages, tools: tools, toolChoice: nil, thinkingEffortOverride: nil, maxOutputTokensOverride: nil, temperatureOverride: nil)
+        try await send(messages: messages, tools: tools, toolChoice: nil, thinkingEffortOverride: nil, maxOutputTokensOverride: nil, temperatureOverride: nil, topPOverride: nil)
     }
 
     /// Convenience overload — maxOutput override only.
@@ -56,7 +62,7 @@ extension LLMProvider {
         tools: [LLMToolDefinition],
         maxOutputTokensOverride: Int?
     ) async throws -> LLMResponse {
-        try await send(messages: messages, tools: tools, toolChoice: nil, thinkingEffortOverride: nil, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: nil)
+        try await send(messages: messages, tools: tools, toolChoice: nil, thinkingEffortOverride: nil, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: nil, topPOverride: nil)
     }
 
     /// Convenience overload — toolChoice + maxOutput override (0.0.30 shape).
@@ -66,10 +72,10 @@ extension LLMProvider {
         toolChoice: LLMToolChoice?,
         maxOutputTokensOverride: Int?
     ) async throws -> LLMResponse {
-        try await send(messages: messages, tools: tools, toolChoice: toolChoice, thinkingEffortOverride: nil, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: nil)
+        try await send(messages: messages, tools: tools, toolChoice: toolChoice, thinkingEffortOverride: nil, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: nil, topPOverride: nil)
     }
 
-    /// Convenience overload — 0.0.31 shape (without temperatureOverride).
+    /// Convenience overload — 0.0.31 shape (without temperatureOverride / topPOverride).
     public func send(
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
@@ -77,7 +83,19 @@ extension LLMProvider {
         thinkingEffortOverride: String?,
         maxOutputTokensOverride: Int?
     ) async throws -> LLMResponse {
-        try await send(messages: messages, tools: tools, toolChoice: toolChoice, thinkingEffortOverride: thinkingEffortOverride, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: nil)
+        try await send(messages: messages, tools: tools, toolChoice: toolChoice, thinkingEffortOverride: thinkingEffortOverride, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: nil, topPOverride: nil)
+    }
+
+    /// Convenience overload — 0.0.32 shape (without topPOverride).
+    public func send(
+        messages: [LLMMessage],
+        tools: [LLMToolDefinition],
+        toolChoice: LLMToolChoice?,
+        thinkingEffortOverride: String?,
+        maxOutputTokensOverride: Int?,
+        temperatureOverride: Double?
+    ) async throws -> LLMResponse {
+        try await send(messages: messages, tools: tools, toolChoice: toolChoice, thinkingEffortOverride: thinkingEffortOverride, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: temperatureOverride, topPOverride: nil)
     }
 }
 

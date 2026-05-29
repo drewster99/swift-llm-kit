@@ -34,7 +34,8 @@ struct AnthropicProvider: LLMProvider {
         toolChoice: LLMToolChoice? = nil,
         thinkingEffortOverride: String? = nil,
         maxOutputTokensOverride: Int? = nil,
-        temperatureOverride: Double? = nil
+        temperatureOverride: Double? = nil,
+        topPOverride: Double? = nil
     ) async throws -> LLMResponse {
         let base = provider.endpoint.ensureAnthropicV1()
         let url = base.appendingPathComponent("messages")
@@ -44,7 +45,7 @@ struct AnthropicProvider: LLMProvider {
         request.setValue(readAPIKey(), forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
 
-        let body = try buildRequestBody(messages: messages, tools: tools, toolChoice: toolChoice, thinkingEffortOverride: thinkingEffortOverride, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: temperatureOverride)
+        let body = try buildRequestBody(messages: messages, tools: tools, toolChoice: toolChoice, thinkingEffortOverride: thinkingEffortOverride, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: temperatureOverride, topPOverride: topPOverride)
         // .sortedKeys keeps wire bytes stable across requests so Anthropic's
         // prompt cache (which is byte-prefix matched) keeps hitting.
         let requestData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
@@ -79,7 +80,8 @@ struct AnthropicProvider: LLMProvider {
         toolChoice: LLMToolChoice? = nil,
         thinkingEffortOverride: String? = nil,
         maxOutputTokensOverride: Int? = nil,
-        temperatureOverride: Double? = nil
+        temperatureOverride: Double? = nil,
+        topPOverride: Double? = nil
     ) throws -> [String: Any] {
         // Anthropic requires system prompt separate from messages.
         // Concatenate all system messages so per-turn context doesn't overwrite the base prompt.
@@ -151,6 +153,14 @@ struct AnthropicProvider: LLMProvider {
             body["temperature"] = 1.0
         } else if let temperature = temperatureOverride ?? configuration.temperature {
             body["temperature"] = temperature
+        }
+
+        // top_p: Anthropic accepts the field but explicitly recommends
+        // using temperature OR top_p, not both. We send whatever the caller
+        // asked for and let the API enforce its rules. With extended thinking
+        // enabled, Anthropic ignores top_p — preserved by emitting nothing.
+        if !thinkingEnabled, let topP = topPOverride {
+            body["top_p"] = topP
         }
 
         // Per-block cache_control breakpoint payload, reused for the system block

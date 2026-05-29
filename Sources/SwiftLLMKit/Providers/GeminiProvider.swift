@@ -40,7 +40,8 @@ struct GeminiProvider: LLMProvider {
         toolChoice: LLMToolChoice? = nil,
         thinkingEffortOverride: String? = nil,
         maxOutputTokensOverride: Int? = nil,
-        temperatureOverride: Double? = nil
+        temperatureOverride: Double? = nil,
+        topPOverride: Double? = nil
     ) async throws -> LLMResponse {
         // Gemini doesn't have an effort enum — depth is controlled via
         // `thinkingConfig.thinkingBudget` (token count) in the request.
@@ -64,7 +65,7 @@ struct GeminiProvider: LLMProvider {
             request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
         }
 
-        let body = try buildRequestBody(messages: messages, tools: tools, toolChoice: toolChoice, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: temperatureOverride)
+        let body = try buildRequestBody(messages: messages, tools: tools, toolChoice: toolChoice, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: temperatureOverride, topPOverride: topPOverride)
         // .sortedKeys keeps wire bytes stable across requests for any
         // downstream prefix-caching the provider applies.
         let requestData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
@@ -100,7 +101,8 @@ struct GeminiProvider: LLMProvider {
         tools: [LLMToolDefinition],
         toolChoice: LLMToolChoice? = nil,
         maxOutputTokensOverride: Int? = nil,
-        temperatureOverride: Double? = nil
+        temperatureOverride: Double? = nil,
+        topPOverride: Double? = nil
     ) throws -> [String: Any] {
         var systemParts: [String] = []
         var conversationMessages: [LLMMessage] = []
@@ -137,6 +139,9 @@ struct GeminiProvider: LLMProvider {
         var generationConfig: [String: Any] = ["maxOutputTokens": effectiveMaxTokens]
         if let temperature = temperatureOverride ?? configuration.temperature {
             generationConfig["temperature"] = temperature
+        }
+        if let topP = topPOverride {
+            generationConfig["topP"] = topP
         }
         var body: [String: Any] = [
             "contents": mergedContents,
