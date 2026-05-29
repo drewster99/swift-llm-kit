@@ -32,6 +32,7 @@ struct AnthropicProvider: LLMProvider {
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
         toolChoice: LLMToolChoice? = nil,
+        thinkingEffortOverride: String? = nil,
         maxOutputTokensOverride: Int? = nil
     ) async throws -> LLMResponse {
         let base = provider.endpoint.ensureAnthropicV1()
@@ -42,7 +43,7 @@ struct AnthropicProvider: LLMProvider {
         request.setValue(readAPIKey(), forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
 
-        let body = try buildRequestBody(messages: messages, tools: tools, toolChoice: toolChoice, maxOutputTokensOverride: maxOutputTokensOverride)
+        let body = try buildRequestBody(messages: messages, tools: tools, toolChoice: toolChoice, thinkingEffortOverride: thinkingEffortOverride, maxOutputTokensOverride: maxOutputTokensOverride)
         // .sortedKeys keeps wire bytes stable across requests so Anthropic's
         // prompt cache (which is byte-prefix matched) keeps hitting.
         let requestData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
@@ -75,6 +76,7 @@ struct AnthropicProvider: LLMProvider {
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
         toolChoice: LLMToolChoice? = nil,
+        thinkingEffortOverride: String? = nil,
         maxOutputTokensOverride: Int? = nil
     ) throws -> [String: Any] {
         // Anthropic requires system prompt separate from messages.
@@ -188,7 +190,16 @@ struct AnthropicProvider: LLMProvider {
         // adaptive thinking; older models (3.x, 4.0–4.4) will reject the field
         // with HTTP 400. We pass through unconditionally when the user set it
         // — better a clear API error than a silently-dropped knob.
-        if let effort = configuration.thinkingEffort {
+        //
+        // Per-call `thinkingEffortOverride` wins over the configuration's value.
+        // Empty string normalized to nil (skip emission). Used by HTTP servers
+        // that receive `reasoning_effort` per request without rebuilding the
+        // provider per call.
+        let effectiveEffort: String? = {
+            if let override = thinkingEffortOverride, !override.isEmpty { return override }
+            return configuration.thinkingEffort
+        }()
+        if let effort = effectiveEffort {
             body["output_config"] = ["effort": effort] as [String: Any]
         }
 

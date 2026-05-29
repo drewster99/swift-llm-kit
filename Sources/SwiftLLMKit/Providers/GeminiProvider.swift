@@ -38,8 +38,16 @@ struct GeminiProvider: LLMProvider {
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
         toolChoice: LLMToolChoice? = nil,
+        thinkingEffortOverride: String? = nil,
         maxOutputTokensOverride: Int? = nil
     ) async throws -> LLMResponse {
+        // Gemini doesn't have an effort enum — depth is controlled via
+        // `thinkingConfig.thinkingBudget` (token count) in the request.
+        // `thinkingEffortOverride` is silently ignored here. Consumers
+        // routing through Gemini members of a hydra: set thinkingBudget
+        // on the underlying LLM config instead of relying on per-call
+        // effort. Future release may map effort → budget bucket.
+        _ = thinkingEffortOverride
         // Build URL: {endpoint}/models/{model}:generateContent
         let base = provider.endpoint.path.hasSuffix("/")
             ? provider.endpoint

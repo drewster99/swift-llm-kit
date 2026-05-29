@@ -10,6 +10,11 @@ public protocol LLMProvider: Sendable {
     ///     `nil` (default) omits the field — each provider's natural default
     ///     applies (typically `auto`). See `LLMToolChoice` for cross-provider
     ///     semantics. Meaningful only when `tools` is non-empty.
+    ///   - thinkingEffortOverride: Optional per-call override of the
+    ///     configuration's `thinkingEffort`. Useful for HTTP servers that
+    ///     receive `reasoning_effort` per request and don't want to rebuild
+    ///     the provider per call. `nil` means "use the configuration's value
+    ///     (which itself may be nil)." Empty string treated as nil.
     ///   - maxOutputTokensOverride: When non-nil, overrides the configuration's
     ///     `maxOutputTokens` for this single call. Useful for callers that need
     ///     a tight per-call cap (e.g. a security gatekeeper that produces only
@@ -21,29 +26,39 @@ public protocol LLMProvider: Sendable {
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
         toolChoice: LLMToolChoice?,
+        thinkingEffortOverride: String?,
         maxOutputTokensOverride: Int?
     ) async throws -> LLMResponse
 }
 
 extension LLMProvider {
     /// Convenience overload — original two-argument call site (no toolChoice,
-    /// no maxOutput override). Existing callers from before 0.0.30 continue
-    /// to compile without source changes.
+    /// no effort, no maxOutput override). Existing callers from before 0.0.30
+    /// continue to compile without source changes.
     public func send(
         messages: [LLMMessage],
         tools: [LLMToolDefinition]
     ) async throws -> LLMResponse {
-        try await send(messages: messages, tools: tools, toolChoice: nil, maxOutputTokensOverride: nil)
+        try await send(messages: messages, tools: tools, toolChoice: nil, thinkingEffortOverride: nil, maxOutputTokensOverride: nil)
     }
 
-    /// Convenience overload — maxOutput override but no toolChoice. Preserves
-    /// the 0.0.x three-argument signature that callers may have adopted.
+    /// Convenience overload — maxOutput override only.
     public func send(
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
         maxOutputTokensOverride: Int?
     ) async throws -> LLMResponse {
-        try await send(messages: messages, tools: tools, toolChoice: nil, maxOutputTokensOverride: maxOutputTokensOverride)
+        try await send(messages: messages, tools: tools, toolChoice: nil, thinkingEffortOverride: nil, maxOutputTokensOverride: maxOutputTokensOverride)
+    }
+
+    /// Convenience overload — toolChoice + maxOutput override (0.0.30 shape).
+    public func send(
+        messages: [LLMMessage],
+        tools: [LLMToolDefinition],
+        toolChoice: LLMToolChoice?,
+        maxOutputTokensOverride: Int?
+    ) async throws -> LLMResponse {
+        try await send(messages: messages, tools: tools, toolChoice: toolChoice, thinkingEffortOverride: nil, maxOutputTokensOverride: maxOutputTokensOverride)
     }
 }
 

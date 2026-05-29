@@ -38,6 +38,7 @@ struct OpenAICompatibleProvider: LLMProvider {
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
         toolChoice: LLMToolChoice? = nil,
+        thinkingEffortOverride: String? = nil,
         maxOutputTokensOverride: Int? = nil
     ) async throws -> LLMResponse {
         let url = provider.endpoint.appendingPathComponent("chat/completions")
@@ -66,7 +67,7 @@ struct OpenAICompatibleProvider: LLMProvider {
             request.setValue(appName, forHTTPHeaderField: "X-Title")
         }
 
-        let body = buildRequestBody(messages: messages, tools: tools, toolChoice: toolChoice, maxOutputTokensOverride: maxOutputTokensOverride)
+        let body = buildRequestBody(messages: messages, tools: tools, toolChoice: toolChoice, thinkingEffortOverride: thinkingEffortOverride, maxOutputTokensOverride: maxOutputTokensOverride)
         // .sortedKeys keeps wire bytes stable across requests so OpenAI's
         // automatic prefix cache (>=1024-token prefix match) keeps hitting.
         let requestData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
@@ -99,6 +100,7 @@ struct OpenAICompatibleProvider: LLMProvider {
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
         toolChoice: LLMToolChoice? = nil,
+        thinkingEffortOverride: String? = nil,
         maxOutputTokensOverride: Int? = nil
     ) -> [String: Any] {
         // OpenAI API requires system messages at the start of the conversation.
@@ -166,11 +168,17 @@ struct OpenAICompatibleProvider: LLMProvider {
         // (o-series, GPT-5 family). Top-level enum, sibling of `messages`.
         // Gated on the `supportsReasoningEffort` flag because non-reasoning
         // models (GPT-4o, GPT-3.5-turbo, DeepSeek-V*, etc.) reject the
-        // field with HTTP 400. `ModelConfiguration.thinkingEffort` is the
-        // unified knob — same string used by Anthropic's
-        // `output_config.effort`.
+        // field with HTTP 400.
+        //
+        // Per-call `thinkingEffortOverride` wins over the configuration's
+        // value (used by HTTP servers that map `reasoning_effort` from
+        // inbound requests). Empty string normalized to nil.
+        let effectiveEffort: String? = {
+            if let override = thinkingEffortOverride, !override.isEmpty { return override }
+            return configuration.thinkingEffort
+        }()
         if behaviorFlags.supportsReasoningEffort,
-           let effort = configuration.thinkingEffort {
+           let effort = effectiveEffort {
             body["reasoning_effort"] = effort
         }
 

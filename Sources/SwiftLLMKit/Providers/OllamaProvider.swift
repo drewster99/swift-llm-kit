@@ -73,8 +73,13 @@ struct OllamaProvider: LLMProvider {
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
         toolChoice: LLMToolChoice? = nil,
+        thinkingEffortOverride: String? = nil,
         maxOutputTokensOverride: Int? = nil
     ) async throws -> LLMResponse {
+        // Ollama doesn't have an effort enum — chat completions stream
+        // accepts standard sampling parameters but no reasoning_effort.
+        // `thinkingEffortOverride` is silently ignored.
+        _ = thinkingEffortOverride
         let url = provider.endpoint.appendingPathComponent("chat")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
