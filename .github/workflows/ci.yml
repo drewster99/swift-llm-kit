@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Build & test (macOS)
+    runs-on: macos-15
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show available Xcode versions
+        run: ls /Applications | grep -i xcode || true
+
+      - name: swift --version
+        run: swift --version
+
+      - name: Build
+        run: swift build -c debug
+
+      - name: Test
+        run: swift test --parallel
