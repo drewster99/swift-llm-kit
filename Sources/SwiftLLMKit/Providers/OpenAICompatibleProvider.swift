@@ -37,14 +37,7 @@ struct OpenAICompatibleProvider: LLMProvider {
     public func send(
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
-        toolChoice: LLMToolChoice? = nil,
-        thinkingEffortOverride: String? = nil,
-        maxOutputTokensOverride: Int? = nil,
-        temperatureOverride: Double? = nil,
-        topPOverride: Double? = nil,
-        stopSequencesOverride: [String]? = nil,
-        frequencyPenaltyOverride: Double? = nil,
-        presencePenaltyOverride: Double? = nil
+        overrides: LLMCallOverrides = LLMCallOverrides()
     ) async throws -> LLMResponse {
         let url = provider.endpoint.appendingPathComponent("chat/completions")
         var request = URLRequest(url: url)
@@ -72,7 +65,7 @@ struct OpenAICompatibleProvider: LLMProvider {
             request.setValue(appName, forHTTPHeaderField: "X-Title")
         }
 
-        let body = buildRequestBody(messages: messages, tools: tools, toolChoice: toolChoice, thinkingEffortOverride: thinkingEffortOverride, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: temperatureOverride, topPOverride: topPOverride, stopSequencesOverride: stopSequencesOverride, frequencyPenaltyOverride: frequencyPenaltyOverride, presencePenaltyOverride: presencePenaltyOverride)
+        let body = buildRequestBody(messages: messages, tools: tools, overrides: overrides)
         // .sortedKeys keeps wire bytes stable across requests so OpenAI's
         // automatic prefix cache (>=1024-token prefix match) keeps hitting.
         let requestData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
@@ -101,18 +94,32 @@ struct OpenAICompatibleProvider: LLMProvider {
         return try parseResponse(data: data)
     }
 
+    /// Convenience overload for tests that only care about a couple of knobs.
     func buildRequestBody(
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
-        toolChoice: LLMToolChoice? = nil,
-        thinkingEffortOverride: String? = nil,
-        maxOutputTokensOverride: Int? = nil,
-        temperatureOverride: Double? = nil,
-        topPOverride: Double? = nil,
-        stopSequencesOverride: [String]? = nil,
-        frequencyPenaltyOverride: Double? = nil,
-        presencePenaltyOverride: Double? = nil
+        toolChoice: LLMToolChoice? = nil
     ) -> [String: Any] {
+        buildRequestBody(
+            messages: messages,
+            tools: tools,
+            overrides: LLMCallOverrides(toolChoice: toolChoice)
+        )
+    }
+
+    func buildRequestBody(
+        messages: [LLMMessage],
+        tools: [LLMToolDefinition],
+        overrides: LLMCallOverrides
+    ) -> [String: Any] {
+        let toolChoice = overrides.toolChoice
+        let thinkingEffortOverride = overrides.thinkingEffort
+        let maxOutputTokensOverride = overrides.maxOutputTokens
+        let temperatureOverride = overrides.temperature
+        let topPOverride = overrides.topP
+        let stopSequencesOverride = overrides.stopSequences
+        let frequencyPenaltyOverride = overrides.frequencyPenalty
+        let presencePenaltyOverride = overrides.presencePenalty
         // OpenAI API requires system messages at the start of the conversation.
         // Extract any system messages from arbitrary positions (e.g. per-turn task
         // context appended by AgentActor) and consolidate them into a single leading

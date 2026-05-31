@@ -31,20 +31,10 @@ struct AnthropicProvider: LLMProvider {
     public func send(
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
-        toolChoice: LLMToolChoice? = nil,
-        thinkingEffortOverride: String? = nil,
-        maxOutputTokensOverride: Int? = nil,
-        temperatureOverride: Double? = nil,
-        topPOverride: Double? = nil,
-        stopSequencesOverride: [String]? = nil,
-        frequencyPenaltyOverride: Double? = nil,
-        presencePenaltyOverride: Double? = nil
+        overrides: LLMCallOverrides = LLMCallOverrides()
     ) async throws -> LLMResponse {
-        // Anthropic doesn't support frequency_penalty / presence_penalty.
-        // Accept and silently discard so callers don't need to branch by
-        // provider type.
-        _ = frequencyPenaltyOverride
-        _ = presencePenaltyOverride
+        // Anthropic doesn't support frequency_penalty / presence_penalty;
+        // those fields in `overrides` are silently discarded.
 
         let base = provider.endpoint.ensureAnthropicV1()
         let url = base.appendingPathComponent("messages")
@@ -54,7 +44,7 @@ struct AnthropicProvider: LLMProvider {
         request.setValue(readAPIKey(), forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
 
-        let body = try buildRequestBody(messages: messages, tools: tools, toolChoice: toolChoice, thinkingEffortOverride: thinkingEffortOverride, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: temperatureOverride, topPOverride: topPOverride, stopSequencesOverride: stopSequencesOverride)
+        let body = try buildRequestBody(messages: messages, tools: tools, overrides: overrides)
         // .sortedKeys keeps wire bytes stable across requests so Anthropic's
         // prompt cache (which is byte-prefix matched) keeps hitting.
         let requestData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
@@ -83,16 +73,31 @@ struct AnthropicProvider: LLMProvider {
         return try parseResponse(data: data)
     }
 
+    /// Convenience overload for tests that only care about a couple of knobs.
     func buildRequestBody(
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
         toolChoice: LLMToolChoice? = nil,
-        thinkingEffortOverride: String? = nil,
-        maxOutputTokensOverride: Int? = nil,
-        temperatureOverride: Double? = nil,
-        topPOverride: Double? = nil,
-        stopSequencesOverride: [String]? = nil
+        maxOutputTokensOverride: Int? = nil
     ) throws -> [String: Any] {
+        try buildRequestBody(
+            messages: messages,
+            tools: tools,
+            overrides: LLMCallOverrides(toolChoice: toolChoice, maxOutputTokens: maxOutputTokensOverride)
+        )
+    }
+
+    func buildRequestBody(
+        messages: [LLMMessage],
+        tools: [LLMToolDefinition],
+        overrides: LLMCallOverrides
+    ) throws -> [String: Any] {
+        let toolChoice = overrides.toolChoice
+        let thinkingEffortOverride = overrides.thinkingEffort
+        let maxOutputTokensOverride = overrides.maxOutputTokens
+        let temperatureOverride = overrides.temperature
+        let topPOverride = overrides.topP
+        let stopSequencesOverride = overrides.stopSequences
         // Anthropic requires system prompt separate from messages.
         // Concatenate all system messages so per-turn context doesn't overwrite the base prompt.
         var systemParts: [String] = []

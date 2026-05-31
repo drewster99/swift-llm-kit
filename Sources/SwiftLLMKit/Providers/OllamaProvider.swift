@@ -72,23 +72,11 @@ struct OllamaProvider: LLMProvider {
     public func send(
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
-        toolChoice: LLMToolChoice? = nil,
-        thinkingEffortOverride: String? = nil,
-        maxOutputTokensOverride: Int? = nil,
-        temperatureOverride: Double? = nil,
-        topPOverride: Double? = nil,
-        stopSequencesOverride: [String]? = nil,
-        frequencyPenaltyOverride: Double? = nil,
-        presencePenaltyOverride: Double? = nil
+        overrides: LLMCallOverrides = LLMCallOverrides()
     ) async throws -> LLMResponse {
-        // Ollama's chat options don't expose frequency_penalty /
-        // presence_penalty. Accept and silently discard.
-        _ = frequencyPenaltyOverride
-        _ = presencePenaltyOverride
-        // Ollama doesn't have an effort enum — chat completions stream
-        // accepts standard sampling parameters but no reasoning_effort.
-        // `thinkingEffortOverride` is silently ignored.
-        _ = thinkingEffortOverride
+        // Ollama doesn't have an effort enum and its chat options don't
+        // expose frequency_penalty / presence_penalty. Those fields on
+        // `overrides` are silently discarded.
         let url = provider.endpoint.appendingPathComponent("chat")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -109,7 +97,7 @@ struct OllamaProvider: LLMProvider {
         // natively support a tool role still receive the result content, just
         // wrapped as user text with a "[Tool result for <id>]: ..." prefix.
         let finalMessages = Self.normalizeMessages(messages)
-        let body = buildRequestBody(messages: Self.extractSystemMessages(finalMessages), tools: tools, toolChoice: toolChoice, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: temperatureOverride, topPOverride: topPOverride, stopSequencesOverride: stopSequencesOverride)
+        let body = buildRequestBody(messages: Self.extractSystemMessages(finalMessages), tools: tools, overrides: overrides)
         // .sortedKeys keeps wire bytes stable across requests for any
         // downstream prefix-caching the model applies.
         let requestData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
@@ -138,15 +126,29 @@ struct OllamaProvider: LLMProvider {
         return try parseResponse(data: data)
     }
 
+    /// Convenience overload for tests that only care about a couple of knobs.
     func buildRequestBody(
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
-        toolChoice: LLMToolChoice? = nil,
-        maxOutputTokensOverride: Int? = nil,
-        temperatureOverride: Double? = nil,
-        topPOverride: Double? = nil,
-        stopSequencesOverride: [String]? = nil
+        toolChoice: LLMToolChoice? = nil
     ) -> [String: Any] {
+        buildRequestBody(
+            messages: messages,
+            tools: tools,
+            overrides: LLMCallOverrides(toolChoice: toolChoice)
+        )
+    }
+
+    func buildRequestBody(
+        messages: [LLMMessage],
+        tools: [LLMToolDefinition],
+        overrides: LLMCallOverrides
+    ) -> [String: Any] {
+        let toolChoice = overrides.toolChoice
+        let maxOutputTokensOverride = overrides.maxOutputTokens
+        let temperatureOverride = overrides.temperature
+        let topPOverride = overrides.topP
+        let stopSequencesOverride = overrides.stopSequences
         let effectiveMaxTokens = maxOutputTokensOverride ?? configuration.maxTokens
         var options: [String: Any] = ["num_predict": effectiveMaxTokens]
         if let temperature = temperatureOverride ?? configuration.temperature {

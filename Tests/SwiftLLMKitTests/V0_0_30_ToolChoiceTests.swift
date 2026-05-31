@@ -255,26 +255,18 @@ struct V0_0_30_ToolChoiceTests {
         #expect(fn["name"] as? String == "do_x")
     }
 
-    // MARK: - Convenience overloads (backward compat)
+    // MARK: - Convenience overloads (0.0.36+ shape)
 
-    @Test("Backward-compat extension overloads on LLMProvider still resolve")
-    func protocol_backwardCompatOverloads_resolve() throws {
-        // Forces the compiler to verify both old-shape protocol extensions
-        // still exist (2-arg and 3-arg). If either is dropped, this test
-        // file fails to compile — which IS the assertion. We don't invoke
-        // send() (would need network) — type-binding to the function
-        // signatures is sufficient.
+    @Test("Two-argument send convenience still resolves to the overrides-taking core")
+    func protocol_twoArgConvenience_resolve() throws {
+        // Forces the compiler to verify the 2-arg extension still exists. If
+        // it ever gets dropped, this test file fails to compile — which IS
+        // the assertion. We don't invoke send() (no network) — type-binding
+        // is sufficient.
         let provider = try anthropic()
-
-        // 2-arg overload (pre-0.0.x signature):
         let twoArg: ([LLMMessage], [LLMToolDefinition]) async throws -> LLMResponse = provider.send
-        // 3-arg overload (0.0.x signature with maxOutputTokensOverride):
-        let threeArg: ([LLMMessage], [LLMToolDefinition], Int?) async throws -> LLMResponse =
-            { try await provider.send(messages: $0, tools: $1, maxOutputTokensOverride: $2) }
-
         _ = twoArg
-        _ = threeArg
-        #expect(Bool(true), "both backward-compat overloads resolved")
+        #expect(Bool(true), "2-arg convenience resolved")
     }
 
     // MARK: - Empty tools wire-shape symmetry across providers

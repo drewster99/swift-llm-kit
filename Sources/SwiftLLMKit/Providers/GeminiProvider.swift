@@ -37,22 +37,13 @@ struct GeminiProvider: LLMProvider {
     public func send(
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
-        toolChoice: LLMToolChoice? = nil,
-        thinkingEffortOverride: String? = nil,
-        maxOutputTokensOverride: Int? = nil,
-        temperatureOverride: Double? = nil,
-        topPOverride: Double? = nil,
-        stopSequencesOverride: [String]? = nil,
-        frequencyPenaltyOverride: Double? = nil,
-        presencePenaltyOverride: Double? = nil
+        overrides: LLMCallOverrides = LLMCallOverrides()
     ) async throws -> LLMResponse {
         // Gemini doesn't have an effort enum — depth is controlled via
         // `thinkingConfig.thinkingBudget` (token count) in the request.
-        // `thinkingEffortOverride` is silently ignored here. Consumers
-        // routing through Gemini members of a hydra: set thinkingBudget
-        // on the underlying LLM config instead of relying on per-call
-        // effort. Future release may map effort → budget bucket.
-        _ = thinkingEffortOverride
+        // `overrides.thinkingEffort` is silently ignored. Consumers routing
+        // through Gemini members of a hydra: set thinkingBudget on the
+        // underlying LLM config instead of relying on per-call effort.
         // Build URL: {endpoint}/models/{model}:generateContent
         let base = provider.endpoint.path.hasSuffix("/")
             ? provider.endpoint
@@ -68,7 +59,7 @@ struct GeminiProvider: LLMProvider {
             request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
         }
 
-        let body = try buildRequestBody(messages: messages, tools: tools, toolChoice: toolChoice, maxOutputTokensOverride: maxOutputTokensOverride, temperatureOverride: temperatureOverride, topPOverride: topPOverride, stopSequencesOverride: stopSequencesOverride, frequencyPenaltyOverride: frequencyPenaltyOverride, presencePenaltyOverride: presencePenaltyOverride)
+        let body = try buildRequestBody(messages: messages, tools: tools, overrides: overrides)
         // .sortedKeys keeps wire bytes stable across requests for any
         // downstream prefix-caching the provider applies.
         let requestData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
@@ -99,17 +90,31 @@ struct GeminiProvider: LLMProvider {
 
     // MARK: - Request building
 
+    /// Convenience overload for tests that only care about a couple of knobs.
     func buildRequestBody(
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
-        toolChoice: LLMToolChoice? = nil,
-        maxOutputTokensOverride: Int? = nil,
-        temperatureOverride: Double? = nil,
-        topPOverride: Double? = nil,
-        stopSequencesOverride: [String]? = nil,
-        frequencyPenaltyOverride: Double? = nil,
-        presencePenaltyOverride: Double? = nil
+        toolChoice: LLMToolChoice? = nil
     ) throws -> [String: Any] {
+        try buildRequestBody(
+            messages: messages,
+            tools: tools,
+            overrides: LLMCallOverrides(toolChoice: toolChoice)
+        )
+    }
+
+    func buildRequestBody(
+        messages: [LLMMessage],
+        tools: [LLMToolDefinition],
+        overrides: LLMCallOverrides
+    ) throws -> [String: Any] {
+        let toolChoice = overrides.toolChoice
+        let maxOutputTokensOverride = overrides.maxOutputTokens
+        let temperatureOverride = overrides.temperature
+        let topPOverride = overrides.topP
+        let stopSequencesOverride = overrides.stopSequences
+        let frequencyPenaltyOverride = overrides.frequencyPenalty
+        let presencePenaltyOverride = overrides.presencePenalty
         var systemParts: [String] = []
         var conversationMessages: [LLMMessage] = []
 
