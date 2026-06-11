@@ -813,11 +813,24 @@ public final class LLMKitManager {
     /// - Returns: A fully configured `LLMProvider` ready to send messages.
     /// - Throws: `SwiftLLMKitError` if the configuration or provider cannot be found.
     public func makeProvider(for configurationID: UUID) throws -> any LLMProvider {
-        guard let config = configurations.first(where: { $0.id == configurationID }) else {
+        guard var config = configurations.first(where: { $0.id == configurationID }) else {
             throw SwiftLLMKitError.configurationNotFound(id: configurationID)
         }
         guard let modelProvider = providers.first(where: { $0.id == config.providerID }) else {
             throw SwiftLLMKitError.providerNotFound(id: config.providerID)
+        }
+
+        // Clamp the requested output-token cap to the model's known maximum so we never
+        // build a provider that will send a request the backend rejects with
+        // "max_tokens (X) exceeds model's maximum output tokens (Y)". The known max comes
+        // from the catalog (LiteLLM) OR a learned user override, so a limit discovered at
+        // runtime and saved as an override automatically clamps every future provider.
+        // min-semantics: clamping (never raising) means a later increase to the known limit
+        // — an upstream metadata refresh or a raised override — takes effect immediately,
+        // while a user-configured value below the limit is left untouched.
+        if let modelMax = modelInfo(providerID: modelProvider.id, modelID: config.modelID)?.maxOutputTokens,
+           config.maxOutputTokens > modelMax {
+            config.maxOutputTokens = modelMax
         }
 
         let providerID = modelProvider.id
