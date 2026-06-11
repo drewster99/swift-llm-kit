@@ -860,6 +860,30 @@ public final class LLMKitManager {
                 behaviorFlags: flags
             )
         case .ollama:
+            // Ollama Cloud (ollama.com) proxies to upstream model backends that enforce
+            // strict OpenAI-style tool_call/tool_result pairing and natively support the
+            // `tool` role + tool_call_id. OllamaProvider's message normalization (textualizing
+            // tool results into user text while leaving the assistant's tool_calls structured)
+            // produces an unmatched call/response count that ollama.com rejects with HTTP 400
+            // "Not the same number of function calls and responses". It also drops tool_call IDs,
+            // which the cloud backends require for pairing. Route cloud through the OpenAI-
+            // compatible provider against Ollama's documented `/v1` surface so the whole
+            // exchange — request encoding AND response parsing — stays structured and paired.
+            // Local Ollama keeps OllamaProvider: its weaker chat templates (e.g. gemma3's strict
+            // user/assistant alternation with no tool role) need the textual rewrite.
+            if let openAIEndpoint = Self.ollamaCloudOpenAIEndpoint(for: modelProvider.endpoint) {
+                let supportsParallel = modelInfo(providerID: modelProvider.id, modelID: config.modelID)?
+                    .capabilities.parallelToolCalls ?? false
+                let enableParallel = supportsParallel || flags.forceParallelToolCalls
+                var cloudProvider = modelProvider
+                cloudProvider.endpoint = openAIEndpoint
+                return OpenAICompatibleProvider(
+                    configuration: config, provider: cloudProvider,
+                    readAPIKey: readAPIKey, verboseLogging: verbose,
+                    parallelToolCalls: enableParallel,
+                    behaviorFlags: flags
+                )
+            }
             return OllamaProvider(
                 configuration: config, provider: modelProvider,
                 readAPIKey: readAPIKey, verboseLogging: verbose,
@@ -871,6 +895,24 @@ public final class LLMKitManager {
                 readAPIKey: readAPIKey, verboseLogging: verbose
             )
         }
+    }
+
+    /// Maps an Ollama Cloud base endpoint (e.g. `https://ollama.com/api`) to its
+    /// OpenAI-compatible surface (`https://ollama.com/v1`, which `OpenAICompatibleProvider`
+    /// turns into `/v1/chat/completions`). Returns `nil` for local or self-hosted Ollama
+    /// endpoints — those keep the native `OllamaProvider` path. Host match is exact on
+    /// `ollama.com` (and subdomains) so a local box named to contain "ollama" isn't misrouted.
+    private static func ollamaCloudOpenAIEndpoint(for endpoint: URL) -> URL? {
+        guard let host = endpoint.host?.lowercased(),
+              host == "ollama.com" || host.hasSuffix(".ollama.com") else {
+            return nil
+        }
+        var components = URLComponents()
+        components.scheme = endpoint.scheme ?? "https"
+        components.host = endpoint.host
+        components.port = endpoint.port
+        components.path = "/v1"
+        return components.url
     }
 
     /// Returns the merged `BehaviorFlags` for a given `(providerID, modelID)`. If the
