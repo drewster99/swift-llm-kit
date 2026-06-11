@@ -151,6 +151,18 @@ struct OllamaProvider: LLMProvider {
         let stopSequencesOverride = overrides.stopSequences
         let effectiveMaxTokens = maxOutputTokensOverride ?? configuration.maxTokens
         var options: [String: Any] = ["num_predict": effectiveMaxTokens]
+        // Tell Ollama how large a context window to load the model with. Without `num_ctx`,
+        // Ollama ignores the configured context size entirely and loads the model at its
+        // Modelfile default (frequently far smaller), so the client's `contextWindowSize`
+        // never reaches the server. A large `num_predict` reservation then overflows the real
+        // window and Ollama returns "The number of tokens to keep from the initial prompt is
+        // greater than the context length". Sending `num_ctx` makes the configured context
+        // window actually take effect. NOTE: this raises the model's memory footprint to match
+        // the requested window — callers are responsible for configuring a context size their
+        // Ollama host can serve.
+        if configuration.contextWindowSize > 0 {
+            options["num_ctx"] = configuration.contextWindowSize
+        }
         if let temperature = temperatureOverride ?? configuration.temperature {
             options["temperature"] = temperature
         }
