@@ -362,7 +362,9 @@ struct OpenAICompatibleProvider: LLMProvider {
         }
 
         var text = message["content"] as? String
-        let reasoningContent = message["reasoning_content"] as? String
+        // DeepSeek-style hosts emit the reasoning channel as `reasoning_content`;
+        // others (ollama.com's glm-5.x, some vLLM builds) use `reasoning`.
+        let reasoningContent = (message["reasoning_content"] as? String) ?? (message["reasoning"] as? String)
         let toolCallsRaw = message["tool_calls"] as? [[String: Any]]
 
         var toolCalls: [LLMToolCall] = []
@@ -414,6 +416,20 @@ struct OpenAICompatibleProvider: LLMProvider {
             }
             let cleaned = GLMTemplateSalvage.strip(raw)
             text = cleaned.isEmpty ? nil : cleaned
+        }
+
+        // Salvage: reasoning models occasionally emit their ENTIRE answer in the
+        // reasoning channel and leave content empty with finish_reason=stop (observed
+        // 2026-07-10: glm-5.2 via ollama.com put a complete security verdict in
+        // `reasoning`, content "" — the caller saw an empty response and burned
+        // retries). An empty text response is always an error path for callers, so
+        // when there is no content AND no tool calls, the reasoning text is strictly
+        // more useful than nothing.
+        if (text?.isEmpty ?? true), toolCalls.isEmpty,
+           let reasoningContent,
+           !reasoningContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            logger.notice("Empty content with non-empty reasoning — salvaging reasoning as response text (\(reasoningContent.count) chars)")
+            text = reasoningContent
         }
 
         // Parse token usage.
