@@ -233,6 +233,53 @@ struct TemperatureOptionalTests {
         let body = try p.buildRequestBody(messages: [.user("hi")], tools: [])
         #expect(body["temperature"] as? Double == 1.0)
     }
+
+    // MARK: - mustNeverSendTemperatureParam (0.0.41)
+
+    /// Reasoning models (OpenAI o-series, GPT-5 family) reject `temperature` outright.
+    /// The flag omits it even when a value is configured.
+    @Test func openAIProvider_mustNeverSendTemperature_omitsEvenWhenConfigured() throws {
+        let p = OpenAICompatibleProvider(
+            configuration: Self.config(temperature: 0.3),
+            provider: try Self.provider(.openAICompatible, endpoint: "https://api.openai.com/v1"),
+            readAPIKey: Self.dummyKey,
+            behaviorFlags: BehaviorFlags(mustNeverSendTemperatureParam: true)
+        )
+        let body = p.buildRequestBody(messages: [.user("hi")], tools: [])
+        #expect(body["temperature"] == nil, "a flagged reasoning model must never send temperature")
+    }
+
+    @Test func anthropicProvider_mustNeverSendTemperature_omitsEvenWhenConfigured() throws {
+        let p = try AnthropicProvider(
+            configuration: Self.config(temperature: 0.5),
+            provider: Self.provider(.anthropic, endpoint: "https://api.anthropic.com/v1"),
+            readAPIKey: Self.dummyKey,
+            behaviorFlags: BehaviorFlags(mustNeverSendTemperatureParam: true)
+        )
+        let body = try p.buildRequestBody(messages: [.user("hi")], tools: [])
+        #expect(body["temperature"] == nil)
+    }
+
+    @Test func ollamaProvider_mustNeverSendTemperature_omitsEvenWhenConfigured() {
+        let p = OllamaProvider(
+            configuration: Self.config(temperature: 0.9),
+            provider: (try? Self.provider(.ollama, endpoint: "http://localhost:11434/api"))!,
+            readAPIKey: Self.dummyKey,
+            behaviorFlags: BehaviorFlags(mustNeverSendTemperatureParam: true)
+        )
+        let body = p.buildRequestBody(messages: [.user("hi")], tools: [])
+        #expect((body["options"] as? [String: Any])?["temperature"] == nil)
+    }
+
+    @Test func behaviorFlags_mustNeverSendTemperature_roundTrips() throws {
+        let flags = BehaviorFlags(mustNeverSendTemperatureParam: true)
+        let data = try JSONEncoder().encode(flags)
+        #expect(String(data: data, encoding: .utf8)?.contains("mustNeverSendTemperatureParam") == true)
+        let decoded = try JSONDecoder().decode(BehaviorFlags.self, from: data)
+        #expect(decoded.mustNeverSendTemperatureParam)
+        // Default stays false and encodes to nothing.
+        #expect(!BehaviorFlags().mustNeverSendTemperatureParam)
+    }
 }
 
 // MARK: - Bridge helpers (isolate the deprecation warning to these wrappers)

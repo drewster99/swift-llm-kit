@@ -163,7 +163,8 @@ struct OllamaProvider: LLMProvider {
         if configuration.contextWindowSize > 0 {
             options["num_ctx"] = configuration.contextWindowSize
         }
-        if let temperature = temperatureOverride ?? configuration.temperature {
+        if !behaviorFlags.mustNeverSendTemperatureParam,
+           let temperature = temperatureOverride ?? configuration.temperature {
             options["temperature"] = temperature
         }
         if let topP = topPOverride {

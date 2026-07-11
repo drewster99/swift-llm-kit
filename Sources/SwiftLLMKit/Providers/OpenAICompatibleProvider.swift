@@ -170,7 +170,10 @@ struct OpenAICompatibleProvider: LLMProvider {
             tokenLimitKey: maxOutputTokensOverride ?? configuration.maxTokens,
             "messages": orderedMessages
         ]
-        if let temperature = temperatureOverride ?? configuration.temperature {
+        // Reasoning models (o-series, GPT-5 family) reject `temperature` outright — omit it
+        // entirely when the model is flagged, regardless of override or configured value.
+        if !behaviorFlags.mustNeverSendTemperatureParam,
+           let temperature = temperatureOverride ?? configuration.temperature {
             body["temperature"] = temperature
         }
         if let topP = topPOverride {

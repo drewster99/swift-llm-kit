@@ -91,6 +91,14 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
     /// at the top level of the request body. Default false.
     public var supportsReasoningEffort: Bool = false
 
+    /// Models that reject the `temperature` request parameter entirely — sending ANY value
+    /// (including 0) fails with HTTP 400. OpenAI's o-series (o1, o3, o4-mini) and the GPT-5
+    /// reasoning family accept only their fixed internal default. When true, every provider
+    /// OMITS temperature from the request — both the per-call override AND the configured
+    /// value are dropped. Default false: temperature is sent as usual. Named for the action
+    /// it forces so the meaning and the default (false = send normally) are both unambiguous.
+    public var mustNeverSendTemperatureParam: Bool = false
+
     /// Free-form key/value bag for one-off provider tweaks that haven't earned
     /// a typed field yet. Promoted fields must always have a Codable default
     /// so older persisted state still decodes cleanly.
@@ -107,6 +115,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         supportsDeveloperRole: Bool = false,
         requiresAdaptiveThinking: Bool = false,
         supportsReasoningEffort: Bool = false,
+        mustNeverSendTemperatureParam: Bool = false,
         extras: [String: String] = [:]
     ) {
         self.glmTemplateSalvage = glmTemplateSalvage
@@ -116,6 +125,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         self.supportsDeveloperRole = supportsDeveloperRole
         self.requiresAdaptiveThinking = requiresAdaptiveThinking
         self.supportsReasoningEffort = supportsReasoningEffort
+        self.mustNeverSendTemperatureParam = mustNeverSendTemperatureParam
         self.extras = extras
     }
 
@@ -129,6 +139,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
             && !supportsDeveloperRole
             && !requiresAdaptiveThinking
             && !supportsReasoningEffort
+            && !mustNeverSendTemperatureParam
             && extras.isEmpty
     }
 
@@ -144,6 +155,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         if supportsDeveloperRole { out.append("developer role") }
         if requiresAdaptiveThinking { out.append("adaptive thinking") }
         if supportsReasoningEffort { out.append("reasoning_effort") }
+        if mustNeverSendTemperatureParam { out.append("no temperature") }
         for key in extras.keys.sorted() {
             out.append("*\(key)")
         }
@@ -153,7 +165,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
     // MARK: - Codable (backward-compatible)
 
     private enum CodingKeys: String, CodingKey {
-        case glmTemplateSalvage, useMaxCompletionTokens, forceParallelToolCalls, replayReasoningContent, supportsDeveloperRole, requiresAdaptiveThinking, supportsReasoningEffort, extras
+        case glmTemplateSalvage, useMaxCompletionTokens, forceParallelToolCalls, replayReasoningContent, supportsDeveloperRole, requiresAdaptiveThinking, supportsReasoningEffort, mustNeverSendTemperatureParam, extras
     }
 
     public init(from decoder: Decoder) throws {
@@ -165,6 +177,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         supportsDeveloperRole = try c.decodeIfPresent(Bool.self, forKey: .supportsDeveloperRole) ?? false
         requiresAdaptiveThinking = try c.decodeIfPresent(Bool.self, forKey: .requiresAdaptiveThinking) ?? false
         supportsReasoningEffort = try c.decodeIfPresent(Bool.self, forKey: .supportsReasoningEffort) ?? false
+        mustNeverSendTemperatureParam = try c.decodeIfPresent(Bool.self, forKey: .mustNeverSendTemperatureParam) ?? false
         extras = try c.decodeIfPresent([String: String].self, forKey: .extras) ?? [:]
     }
 
@@ -179,6 +192,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         if supportsDeveloperRole { try c.encode(supportsDeveloperRole, forKey: .supportsDeveloperRole) }
         if requiresAdaptiveThinking { try c.encode(requiresAdaptiveThinking, forKey: .requiresAdaptiveThinking) }
         if supportsReasoningEffort { try c.encode(supportsReasoningEffort, forKey: .supportsReasoningEffort) }
+        if mustNeverSendTemperatureParam { try c.encode(mustNeverSendTemperatureParam, forKey: .mustNeverSendTemperatureParam) }
         if !extras.isEmpty { try c.encode(extras, forKey: .extras) }
     }
 }
@@ -199,6 +213,7 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
     public var supportsDeveloperRole: Bool?
     public var requiresAdaptiveThinking: Bool?
     public var supportsReasoningEffort: Bool?
+    public var mustNeverSendTemperatureParam: Bool?
     public var extras: [String: String]?
 
     public init(
@@ -209,6 +224,7 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
         supportsDeveloperRole: Bool? = nil,
         requiresAdaptiveThinking: Bool? = nil,
         supportsReasoningEffort: Bool? = nil,
+        mustNeverSendTemperatureParam: Bool? = nil,
         extras: [String: String]? = nil
     ) {
         self.glmTemplateSalvage = glmTemplateSalvage
@@ -218,6 +234,7 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
         self.supportsDeveloperRole = supportsDeveloperRole
         self.requiresAdaptiveThinking = requiresAdaptiveThinking
         self.supportsReasoningEffort = supportsReasoningEffort
+        self.mustNeverSendTemperatureParam = mustNeverSendTemperatureParam
         self.extras = extras
     }
 
@@ -229,6 +246,7 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
         if let v = supportsDeveloperRole, (forceReplace || v) { flags.supportsDeveloperRole = v }
         if let v = requiresAdaptiveThinking, (forceReplace || v) { flags.requiresAdaptiveThinking = v }
         if let v = supportsReasoningEffort, (forceReplace || v) { flags.supportsReasoningEffort = v }
+        if let v = mustNeverSendTemperatureParam, (forceReplace || v) { flags.mustNeverSendTemperatureParam = v }
         if let extrasPatch = extras {
             if forceReplace {
                 flags.extras = extrasPatch
@@ -250,6 +268,7 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
             && supportsDeveloperRole == nil
             && requiresAdaptiveThinking == nil
             && supportsReasoningEffort == nil
+            && mustNeverSendTemperatureParam == nil
             && (extras?.isEmpty ?? true)
     }
 }

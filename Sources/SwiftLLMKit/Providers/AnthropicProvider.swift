@@ -166,7 +166,8 @@ struct AnthropicProvider: LLMProvider {
         // (but NOT over the thinking-on constraint, which is API-enforced).
         if thinkingEnabled {
             body["temperature"] = 1.0
-        } else if let temperature = temperatureOverride ?? configuration.temperature {
+        } else if !behaviorFlags.mustNeverSendTemperatureParam,
+                  let temperature = temperatureOverride ?? configuration.temperature {
             body["temperature"] = temperature
         }
 

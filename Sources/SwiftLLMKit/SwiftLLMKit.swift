@@ -725,12 +725,15 @@ public final class LLMKitManager {
             "model": config.modelID,
             "stream": config.streaming
         ]
-        if let temperature = config.temperature {
-            body["temperature"] = temperature
-        }
 
         // Resolve behavior flags once — used by multiple per-apiType branches below.
         let prepFlags = behaviorFlags(forProviderID: provider.id, modelID: config.modelID)
+
+        // Reasoning models (o-series, GPT-5 family) reject `temperature` outright — omit it
+        // when the model is flagged.
+        if !prepFlags.mustNeverSendTemperatureParam, let temperature = config.temperature {
+            body["temperature"] = temperature
+        }
 
         switch provider.apiType {
         case .anthropic:
@@ -788,7 +791,7 @@ public final class LLMKitManager {
             body["options"] = ["num_predict": config.maxOutputTokens] as [String: Any]
         case .gemini:
             var genConfig: [String: Any] = ["maxOutputTokens": config.maxOutputTokens]
-            if let temperature = config.temperature {
+            if !prepFlags.mustNeverSendTemperatureParam, let temperature = config.temperature {
                 genConfig["temperature"] = temperature
             }
             body["generationConfig"] = genConfig
