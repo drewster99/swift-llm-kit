@@ -271,6 +271,22 @@ struct TemperatureOptionalTests {
         #expect((body["options"] as? [String: Any])?["temperature"] == nil)
     }
 
+    /// End-to-end through the REAL bundled metadata: the reasoning models resolve the flag,
+    /// and an ordinary chat model does not. Guards the JSON entries + Override decode + apply.
+    @Test func bundledMetadata_reasoningModels_resolveMustNeverSendTemperature() {
+        let registry = BundledModelMetadataRegistry.load()
+        func resolvedFlag(_ apiType: String, _ modelID: String) -> Bool {
+            var flags = BehaviorFlags()
+            registry.override(providerAPIType: apiType, modelID: modelID)?
+                .behaviorFlags?.apply(to: &flags, forceReplace: false)
+            return flags.mustNeverSendTemperatureParam
+        }
+        for model in ["o1", "o1-mini", "o3", "o3-mini", "o4-mini", "gpt-5", "gpt-5-mini", "gpt-5-pro"] {
+            #expect(resolvedFlag("openAICompatible", model), "\(model) must be flagged to omit temperature")
+        }
+        #expect(!resolvedFlag("openAICompatible", "gpt-4o"), "an ordinary chat model must keep temperature")
+    }
+
     @Test func behaviorFlags_mustNeverSendTemperature_roundTrips() throws {
         let flags = BehaviorFlags(mustNeverSendTemperatureParam: true)
         let data = try JSONEncoder().encode(flags)
