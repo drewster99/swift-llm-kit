@@ -82,7 +82,7 @@ struct GeminiProvider: LLMProvider {
         guard (200...299).contains(httpResponse.statusCode) else {
             let responseBody = String(data: data, encoding: .utf8) ?? "unknown"
             logger.error("HTTP \(httpResponse.statusCode, privacy: .public) from \(url.absoluteString, privacy: .public) body=\(responseBody, privacy: .public)")
-            throw LLMProviderError.httpError(statusCode: httpResponse.statusCode, body: responseBody, url: url)
+            throw LLMProviderError.httpError(statusCode: httpResponse.statusCode, body: responseBody, url: url, retryAfter: LLMProviderError.parseRetryAfter(httpResponse.value(forHTTPHeaderField: "Retry-After")))
         }
 
         return try parseResponse(data: data)
