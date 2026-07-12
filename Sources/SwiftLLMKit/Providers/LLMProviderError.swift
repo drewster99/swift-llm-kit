@@ -39,12 +39,28 @@ public enum LLMProviderError: Error, LocalizedError {
         // Delta-seconds: a non-negative number. A negative value is malformed — return nil so
         // the caller falls back to its own backoff rather than retrying immediately.
         if let seconds = TimeInterval(raw) { return seconds >= 0 ? seconds : nil }
+        if let date = httpDate(raw) { return max(0, date.timeIntervalSince(now)) }
+        return nil
+    }
+
+    /// RFC 7231 HTTP-date, all three forms recipients must accept: the preferred IMF-fixdate
+    /// plus the obsolete RFC 850 and ANSI C `asctime` formats.
+    private static let httpDateFormats = [
+        "EEE, dd MMM yyyy HH:mm:ss zzz",   // IMF-fixdate  — Sun, 06 Nov 1994 08:49:37 GMT
+        "EEEE, dd-MMM-yy HH:mm:ss zzz",    // RFC 850      — Sunday, 06-Nov-94 08:49:37 GMT
+        "EEE MMM d HH:mm:ss yyyy"          // asctime      — Sun Nov  6 08:49:37 1994
+    ]
+
+    private static func httpDate(_ raw: String) -> Date? {
+        // asctime space-pads a single-digit day ("Nov  6"); collapse runs of spaces so one
+        // format string matches both single- and double-digit days.
+        let normalized = raw.replacingOccurrences(of: " +", with: " ", options: .regularExpression)
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(identifier: "GMT")
-        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
-        if let date = formatter.date(from: raw) {
-            return max(0, date.timeIntervalSince(now))
+        for format in httpDateFormats {
+            formatter.dateFormat = format
+            if let date = formatter.date(from: normalized) { return date }
         }
         return nil
     }

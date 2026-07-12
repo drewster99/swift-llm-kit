@@ -26,6 +26,20 @@ struct RetryAfterParsingTests {
         #expect(LLMProviderError.parseRetryAfter(past, now: now) == 0)
     }
 
+    @Test("obsolete RFC 850 and asctime HTTP-date forms are accepted")
+    func legacyHTTPDateForms() {
+        // now = Sun, 06 Nov 1994 08:49:07 GMT → each target is +30s.
+        let now = Date(timeIntervalSince1970: 784_111_747)
+        let imf = "Sun, 06 Nov 1994 08:49:37 GMT"
+        let rfc850 = "Sunday, 06-Nov-94 08:49:37 GMT"
+        let asctime = "Sun Nov  6 08:49:37 1994"
+        for form in [imf, rfc850, asctime] {
+            let delay = LLMProviderError.parseRetryAfter(form, now: now)
+            #expect(delay != nil, "should parse: \(form)")
+            if let delay { #expect(abs(delay - 30) < 1, "\(form) → \(delay)") }
+        }
+    }
+
     @Test("absent or unparseable values return nil")
     func unparseable() {
         #expect(LLMProviderError.parseRetryAfter(nil) == nil)
