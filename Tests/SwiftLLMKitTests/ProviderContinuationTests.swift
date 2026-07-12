@@ -338,7 +338,10 @@ struct ProviderContinuationTests {
     func gemini_buildRequestBody_partialSignaturesOnlyAttachToKnownIndexes() throws {
         // Half the parts in the response had signatures (e.g. only some
         // functionCalls were "thoughts" parts). The encoder must attach
-        // signatures only at the indexes that had them; other parts go bare.
+        // captured signatures only at the indexes that had them. The FIRST
+        // functionCall part is the exception: Gemini 3 rejects a step whose
+        // first functionCall lacks a thought_signature, so a bare first part
+        // gets the documented dummy; remaining bare parts stay bare.
         let provider = try gemini()
         let toolCalls = [
             LLMToolCall(id: "id-A", name: "tool_a", arguments: "{}"),
@@ -364,7 +367,7 @@ struct ProviderContinuationTests {
         let modelTurn = try #require(contents.first { ($0["role"] as? String) == "model" })
         let parts = try #require(modelTurn["parts"] as? [[String: Any]])
         #expect(parts.count == 3)
-        #expect(parts[0]["thoughtSignature"] == nil)
+        #expect(parts[0]["thoughtSignature"] as? String == GeminiProvider.functionCallDummySignature)
         #expect(parts[1]["thoughtSignature"] as? String == "sig-only-on-B")
         #expect(parts[2]["thoughtSignature"] == nil)
     }

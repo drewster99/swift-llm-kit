@@ -245,7 +245,14 @@ struct GeminiProvider: LLMProvider {
         // signatures). Faithful replay is the goal.
         if message.role == .assistant,
            let parts = message.continuation?.geminiResponseParts {
-            return ["role": "model", "parts": parts.map(encodeSavedPart)]
+            // Signing the first functionCall even here protects rotation from
+            // an older Gemini that omitted signatures (2.5 treats them as
+            // optional) into a strict Gemini 3 model. Real captured
+            // signatures are never overwritten.
+            return [
+                "role": "model",
+                "parts": ensuringFirstFunctionCallSigned(parts.map(encodeSavedPart))
+            ]
         }
 
         // Legacy 0.0.24/0.0.25 path: if a saved conversation has the older
@@ -288,7 +295,7 @@ struct GeminiProvider: LLMProvider {
                 ]
             }
             parts = parts.enumerated().map { attachLegacySig($1, at: $0) }
-            return ["role": "model", "parts": parts]
+            return ["role": "model", "parts": ensuringFirstFunctionCallSigned(parts)]
 
         case .mixed(let text, let calls):
             var parts: [[String: Any]] = [["text": text]]
@@ -301,7 +308,7 @@ struct GeminiProvider: LLMProvider {
                 ])
             }
             parts = parts.enumerated().map { attachLegacySig($1, at: $0) }
-            return ["role": "model", "parts": parts]
+            return ["role": "model", "parts": ensuringFirstFunctionCallSigned(parts)]
 
         case .toolResult(let toolCallID, let content):
             // Gemini uses `functionResponse.name` (NOT toolCallID — IDs aren't
@@ -329,6 +336,41 @@ struct GeminiProvider: LLMProvider {
                 ]
             ]
         }
+    }
+
+    /// Google's documented validation-bypass signature for `functionCall`
+    /// parts that carry no real captured signature — cross-model history
+    /// transfer, manually injected calls, or Gemini 2.5-era captures
+    /// recorded before signatures were emitted. Gemini 3 rejects requests
+    /// with 400 INVALID_ARGUMENT when the first `functionCall` part of an
+    /// assistant step lacks a `thoughtSignature`; Gemini 2.5 treats the
+    /// field as optional and ignores it.
+    ///
+    /// Docs:
+    /// - Thought signatures: https://ai.google.dev/gemini-api/docs/thought-signatures
+    /// - Validation bypass for injected / cross-model function calls
+    ///   ("skip_thought_signature_validator", "context_engineering_is_the_way_to_go"):
+    ///   https://ai.google.dev/gemini-api/docs/generate-content/thought-signatures
+    static let functionCallDummySignature = "skip_thought_signature_validator"
+
+    /// Returns `parts` with the first `functionCall` part guaranteed to carry
+    /// a `thoughtSignature`, attaching the documented validation-bypass dummy
+    /// whenever that part is bare — even if other parts in the same step
+    /// carry real captured signatures. Real signatures are never overwritten;
+    /// turns without function calls are returned unchanged.
+    ///
+    /// Gemini's rule ("the first `functionCall` part in each step of the
+    /// current turn must include its `thought_signature`") and the bypass
+    /// values are documented at
+    /// https://ai.google.dev/gemini-api/docs/generate-content/thought-signatures
+    private func ensuringFirstFunctionCallSigned(_ parts: [[String: Any]]) -> [[String: Any]] {
+        guard let index = parts.firstIndex(where: { $0["functionCall"] != nil }) else {
+            return parts
+        }
+        guard parts[index]["thoughtSignature"] == nil else { return parts }
+        var signed = parts
+        signed[index]["thoughtSignature"] = Self.functionCallDummySignature
+        return signed
     }
 
     /// Serializes a saved `GeminiResponsePart` back to the wire shape. The
