@@ -8,13 +8,13 @@ SwiftLLMKit is a Swift Package (library, no executable) targeting macOS 15+ with
 
 ## Commands
 
-This is a Swift Package that ships compiled resources (`Resources/*.json`). Per the parent CLAUDE.md, **always build via xcode-mcp-server, never `swift build` or `xcodebuild` directly.**
+This is a Swift Package that ships compiled resources (`Resources/*.json`). Per the parent CLAUDE.md, **always build via drews-xcode-mcp, never `swift build` or `xcodebuild` directly.**
 
 ```
 # Build / test the package
-mcp__xcode-mcp-server__get_project_schemes --project_path /Users/andrew/cursor/swift-llm-kit
-mcp__xcode-mcp-server__build_project        --project_path /Users/andrew/cursor/swift-llm-kit
-mcp__xcode-mcp-server__run_project_tests    --project_path /Users/andrew/cursor/swift-llm-kit
+mcp__drews-xcode-mcp__get_project_schemes --project_path /Users/andrew/cursor/swift-llm-kit
+mcp__drews-xcode-mcp__build_project        --project_path /Users/andrew/cursor/swift-llm-kit
+mcp__drews-xcode-mcp__run_project_tests    --project_path /Users/andrew/cursor/swift-llm-kit
 ```
 
 Tests use the Swift Testing framework (`import Testing`, `@Test` / `#expect`), not XCTest. The test suite is currently minimal — see ROADMAP.md for the planned test coverage list.
