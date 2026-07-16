@@ -1002,6 +1002,25 @@ public final class LLMKitManager {
 
     // MARK: - Built-in Provider Seeding
 
+    /// The form a stored built-in row should take at seed time: the preset's fixed fields, but
+    /// preserving a stored `liteLLMProviderName`.
+    ///
+    /// Seeding exists to force renamed/moved presets back onto their canonical values, which is
+    /// why it overwrites. `liteLLMProviderName` is the one field the user may legitimately edit
+    /// on a built-in, so overwriting it would revert their mapping on the very next launch — and
+    /// the mapping editor tells them to restart. A stored `nil` means the row predates the field,
+    /// so the preset seeds it and existing installs self-heal.
+    ///
+    /// Consequence worth knowing: once a row carries a non-nil value, a corrected preset mapping
+    /// no longer reaches it automatically; that user re-picks in Settings → Metadata.
+    nonisolated static func canonicalBuiltIn(preset: BuiltInProviderPreset, existing: ModelProvider?) -> ModelProvider {
+        var canonical = ModelProvider(builtIn: preset)
+        if let stored = existing?.liteLLMProviderName {
+            canonical.liteLLMProviderName = stored
+        }
+        return canonical
+    }
+
     /// Ensures every preset in `BuiltInProviders.all` is represented in `providers`.
     ///
     /// For each preset, in order:
@@ -1028,7 +1047,7 @@ public final class LLMKitManager {
         for preset in BuiltInProviders.all {
             if let existingIndex = providers.firstIndex(where: { $0.id == preset.id }) {
                 // Already present — refresh fixed fields from the preset.
-                let canonical = ModelProvider(builtIn: preset)
+                let canonical = Self.canonicalBuiltIn(preset: preset, existing: providers[existingIndex])
                 if providers[existingIndex] != canonical {
                     providers[existingIndex] = canonical
                     didMutate = true

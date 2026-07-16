@@ -215,3 +215,48 @@ struct BuiltInProviderMappingTests {
         #expect(provider.liteLLMProviderName == nil)
     }
 }
+
+// MARK: - Seeding preserves user mappings
+
+/// Seeding forces built-in rows back onto their preset values on every launch. `liteLLMProviderName`
+/// is the one field a user may edit on a built-in, so it must survive that — otherwise the restart
+/// the mapping editor asks for would itself revert the edit.
+@Suite("Built-in seeding preserves the LiteLLM mapping")
+struct BuiltInSeedingTests {
+
+    private var anthropicPreset: BuiltInProviderPreset {
+        get throws { try #require(BuiltInProviders.preset(id: "builtin.anthropic")) }
+    }
+
+    @Test("A user's override survives seeding")
+    func userOverrideSurvives() throws {
+        var stored = ModelProvider(builtIn: try anthropicPreset)
+        stored.liteLLMProviderName = "bedrock_converse"   // user re-pointed it
+        let canonical = LLMKitManager.canonicalBuiltIn(preset: try anthropicPreset, existing: stored)
+        #expect(canonical.liteLLMProviderName == "bedrock_converse")
+    }
+
+    @Test("A row predating the field is seeded from the preset (existing installs self-heal)")
+    func nilIsSeededFromPreset() throws {
+        let legacy = ModelProvider(id: "builtin.anthropic", name: "Anthropic",
+                                   apiType: .anthropic, endpoint: URL(string: "https://api.anthropic.com")!,
+                                   liteLLMProviderName: nil)
+        let canonical = LLMKitManager.canonicalBuiltIn(preset: try anthropicPreset, existing: legacy)
+        #expect(canonical.liteLLMProviderName == "anthropic")
+    }
+
+    @Test("A brand-new row takes the preset value")
+    func newRowTakesPreset() throws {
+        #expect(LLMKitManager.canonicalBuiltIn(preset: try anthropicPreset, existing: nil).liteLLMProviderName == "anthropic")
+    }
+
+    @Test("The fixed fields are still forced back to the preset")
+    func fixedFieldsStillReset() throws {
+        var tampered = ModelProvider(builtIn: try anthropicPreset)
+        tampered.name = "Renamed"
+        tampered.endpoint = URL(string: "https://evil.test")!
+        let canonical = LLMKitManager.canonicalBuiltIn(preset: try anthropicPreset, existing: tampered)
+        #expect(canonical.name == "Anthropic")
+        #expect(canonical.endpoint == URL(string: "https://api.anthropic.com"))
+    }
+}
