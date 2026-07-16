@@ -270,8 +270,10 @@ struct OpenAICompatibleProvider: LLMProvider {
         switch message.content {
         case .text(let text):
             let outgoing = sanitizeAssistantText(text, role: message.role)
-            // If there are images, encode as content parts array (multimodal)
-            if let images = message.images, !images.isEmpty {
+            // If there are images and/or documents, encode as a content-parts array (multimodal).
+            let images = message.images ?? []
+            let documents = message.documents ?? []
+            if !images.isEmpty || !documents.isEmpty {
                 var parts: [[String: Any]] = images.map { image in
                     [
                         "type": "image_url",
@@ -279,6 +281,13 @@ struct OpenAICompatibleProvider: LLMProvider {
                             "url": "data:\(image.mimeType);base64,\(image.data.base64EncodedString())"
                         ]
                     ] as [String: Any]
+                }
+                for document in documents {
+                    var file: [String: Any] = [
+                        "file_data": "data:\(document.mimeType);base64,\(document.data.base64EncodedString())"
+                    ]
+                    if let filename = document.filename { file["filename"] = filename }
+                    parts.append(["type": "file", "file": file])
                 }
                 parts.append(["type": "text", "text": outgoing])
                 result["content"] = parts

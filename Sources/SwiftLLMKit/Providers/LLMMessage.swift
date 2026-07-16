@@ -11,6 +11,23 @@ public struct LLMImageContent: Sendable, Equatable {
     }
 }
 
+/// Document data (e.g. a PDF) for multimodal LLM messages. Serialized natively by providers
+/// that accept documents (Anthropic `document` blocks, Gemini `inlineData`, OpenAI `file`
+/// parts); providers without document support omit it. Like `LLMImageContent`, this is a
+/// runtime-only field — not persisted through `Codable`. An optional `filename` is used where a
+/// provider requires or benefits from one (OpenAI's `file` part).
+public struct LLMDocumentContent: Sendable, Equatable {
+    public var data: Data
+    public var mimeType: String
+    public var filename: String?
+
+    public init(data: Data, mimeType: String, filename: String? = nil) {
+        self.data = data
+        self.mimeType = mimeType
+        self.filename = filename
+    }
+}
+
 /// A single message in an LLM conversation.
 public struct LLMMessage: Codable, Sendable, Equatable {
     public enum Role: String, Codable, Sendable {
@@ -98,6 +115,9 @@ public struct LLMMessage: Codable, Sendable, Equatable {
     public var content: Content
     /// Image/media data for multimodal messages. Not included in Codable.
     public var images: [LLMImageContent]?
+    /// Document data (e.g. PDFs) for multimodal messages. Not included in Codable. Providers that
+    /// accept documents serialize these natively; others omit them.
+    public var documents: [LLMDocumentContent]?
     /// Reasoning / thinking content the model produced for this turn, if any.
     /// Captured from `reasoning_content` (OpenAI-compatible) or `thinking`
     /// blocks (Anthropic). Whether it's emitted back on the next request is
@@ -129,6 +149,7 @@ public struct LLMMessage: Codable, Sendable, Equatable {
         self.role = role
         self.content = content
         self.images = images
+        self.documents = nil
         self.reasoning = reasoning
         self.continuation = continuation
     }
@@ -142,6 +163,7 @@ public struct LLMMessage: Codable, Sendable, Equatable {
         self.role = role
         self.content = .text(text)
         self.images = images
+        self.documents = nil
         self.reasoning = reasoning
         self.continuation = nil
     }
@@ -152,12 +174,14 @@ public struct LLMMessage: Codable, Sendable, Equatable {
         _role: Role,
         _content: Content,
         _images: [LLMImageContent]? = nil,
+        _documents: [LLMDocumentContent]? = nil,
         _reasoning: String? = nil,
         _continuation: ProviderContinuation? = nil
     ) {
         self.role = _role
         self.content = _content
         self.images = _images
+        self.documents = _documents
         self.reasoning = _reasoning
         self.continuation = _continuation
     }
@@ -179,6 +203,7 @@ public struct LLMMessage: Codable, Sendable, Equatable {
         role = try container.decode(Role.self, forKey: .role)
         content = try container.decode(Content.self, forKey: .content)
         images = nil
+        documents = nil
         reasoning = try container.decodeIfPresent(String.self, forKey: .reasoning)
         continuation = try container.decodeIfPresent(ProviderContinuation.self, forKey: .continuation)
     }
@@ -198,6 +223,17 @@ public struct LLMMessage: Codable, Sendable, Equatable {
     /// User multimodal message — text plus one or more images.
     public static func user(_ text: String, images: [LLMImageContent]) -> LLMMessage {
         LLMMessage(_role: .user, _content: .text(text), _images: images)
+    }
+
+    /// User multimodal message — text plus images and/or documents (e.g. PDFs). Pass empty
+    /// arrays for whichever isn't present; nil-out empties so providers see no stray keys.
+    public static func user(_ text: String, images: [LLMImageContent], documents: [LLMDocumentContent]) -> LLMMessage {
+        LLMMessage(
+            _role: .user,
+            _content: .text(text),
+            _images: images.isEmpty ? nil : images,
+            _documents: documents.isEmpty ? nil : documents
+        )
     }
 
     /// System prompt.

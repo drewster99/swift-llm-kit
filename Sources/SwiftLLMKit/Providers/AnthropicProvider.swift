@@ -311,7 +311,7 @@ struct AnthropicProvider: LLMProvider {
             // If there are images OR thinking blocks to prepend, encode as
             // a content-blocks array. Empty text blocks are silently skipped
             // — Anthropic rejects `{"type":"text","text":""}` entries.
-            if !thinkingBlocks.isEmpty || !(message.images ?? []).isEmpty {
+            if !thinkingBlocks.isEmpty || !(message.images ?? []).isEmpty || !(message.documents ?? []).isEmpty {
                 var blocks: [[String: Any]] = thinkingBlocks
                 if let images = message.images, !images.isEmpty {
                     blocks.append(contentsOf: images.map { image in
@@ -321,6 +321,18 @@ struct AnthropicProvider: LLMProvider {
                                 "type": "base64",
                                 "media_type": image.mimeType,
                                 "data": image.data.base64EncodedString()
+                            ]
+                        ] as [String: Any]
+                    })
+                }
+                if let documents = message.documents, !documents.isEmpty {
+                    blocks.append(contentsOf: documents.map { document in
+                        [
+                            "type": "document",
+                            "source": [
+                                "type": "base64",
+                                "media_type": document.mimeType,
+                                "data": document.data.base64EncodedString()
                             ]
                         ] as [String: Any]
                     })

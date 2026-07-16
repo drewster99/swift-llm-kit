@@ -281,6 +281,16 @@ struct GeminiProvider: LLMProvider {
                     ])
                 }
             }
+            if let documents = message.documents, !documents.isEmpty {
+                for document in documents {
+                    parts.append([
+                        "inlineData": [
+                            "mimeType": document.mimeType,
+                            "data": document.data.base64EncodedString()
+                        ]
+                    ])
+                }
+            }
             parts.append(["text": text])
             parts = parts.enumerated().map { attachLegacySig($1, at: $0) }
             return ["role": role, "parts": parts]
