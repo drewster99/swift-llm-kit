@@ -21,6 +21,9 @@ public struct BuiltInProviderPreset: Codable, Sendable, Equatable {
     public let endpoint: URL
     /// Whether this provider should be shown in the default ("popular") view.
     public let popular: Bool
+    /// The `litellm_provider` value this provider's models are catalogued under, or `nil` when
+    /// LiteLLM has no entries for it. See ``ModelProvider/liteLLMProviderName``.
+    public let liteLLMProviderName: String?
 }
 
 /// Loader and registry for the bundled built-in provider list.
@@ -106,7 +109,8 @@ public extension ModelProvider {
             id: preset.id,
             name: preset.displayName,
             apiType: preset.apiType,
-            endpoint: preset.endpoint
+            endpoint: preset.endpoint,
+            liteLLMProviderName: preset.liteLLMProviderName
         )
     }
 }

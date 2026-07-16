@@ -1,0 +1,217 @@
+import Testing
+import Foundation
+@testable import SwiftLLMKit
+
+// MARK: - Model-name derivation
+
+/// LiteLLM entries are matched on the `litellm_provider` FIELD plus a model name derived from the
+/// key. These cover the derivation rule, whose whole job is to reduce every key shape LiteLLM uses
+/// down to exactly what a provider's `/models` endpoint reports — and to refuse to do so when the
+/// key's first segment isn't actually the provider.
+@Suite("LiteLLM model-name derivation")
+struct LiteLLMModelNameTests {
+
+    @Test("A bare key passes through untouched")
+    func bareKeyPassesThrough() {
+        // All 23 real Anthropic entries are bare — there are zero `anthropic/` keys upstream.
+        #expect(ModelMetadataService.modelName(fromKey: "claude-fable-5", provider: "anthropic") == "claude-fable-5")
+        #expect(ModelMetadataService.modelName(fromKey: "gpt-4o", provider: "openai") == "gpt-4o")
+    }
+
+    @Test("The entry's own provider prefix is stripped")
+    func ownPrefixIsStripped() {
+        #expect(ModelMetadataService.modelName(fromKey: "mistral/codestral-latest", provider: "mistral") == "codestral-latest")
+        #expect(ModelMetadataService.modelName(fromKey: "zai/glm-4.6", provider: "zai") == "glm-4.6")
+        #expect(ModelMetadataService.modelName(fromKey: "ollama/codegemma", provider: "ollama") == "codegemma")
+    }
+
+    @Test("Only the FIRST segment goes — an author segment survives, matching what the API reports")
+    func authorSegmentSurvives() {
+        // OpenRouter's API reports "anthropic/claude-3-haiku", so that is what must remain.
+        #expect(ModelMetadataService.modelName(fromKey: "openrouter/anthropic/claude-3-haiku", provider: "openrouter")
+                == "anthropic/claude-3-haiku")
+        #expect(ModelMetadataService.modelName(fromKey: "deepinfra/meta-llama/Llama-3.2-11B-Vision-Instruct", provider: "deepinfra")
+                == "meta-llama/llama-3.2-11b-vision-instruct")
+    }
+
+    /// The safety property that makes a fallback-free matcher viable: LiteLLM keys frequently lead
+    /// with something that is NOT a provider (an image size, a quality tier). Because only the
+    /// entry's own provider prefix is eligible for stripping, those keys keep their junk segment
+    /// and are therefore unreachable by a query for the bare model name.
+    @Test("A first segment that isn't the provider is NOT stripped, so junk keys self-reject")
+    func nonProviderPrefixIsNotStripped() {
+        // Real upstream entries: both are litellm_provider "openai".
+        #expect(ModelMetadataService.modelName(fromKey: "1024-x-1024/dall-e-2", provider: "openai") == "1024-x-1024/dall-e-2")
+        #expect(ModelMetadataService.modelName(fromKey: "high/1536-x-1024/gpt-image-1.5", provider: "openai")
+                == "high/1536-x-1024/gpt-image-1.5")
+        // Crucially, neither can ever satisfy a lookup for the plain model name.
+        #expect(ModelMetadataService.modelName(fromKey: "1024-x-1024/dall-e-2", provider: "openai")
+                != ModelMetadataService.normalize("dall-e-2"))
+    }
+
+    /// Bedrock model IDs embed the model VENDOR ("anthropic") in the key while carrying
+    /// litellm_provider "bedrock"/"bedrock_converse". They must never be reachable as Anthropic.
+    @Test("Bedrock inference-profile keys keep their vendor segment and stay under Bedrock")
+    func bedrockProfileKeysAreNotAnthropic() {
+        for key in ["anthropic.claude-fable-5",
+                    "global.anthropic.claude-fable-5",
+                    "us.anthropic.claude-fable-5",
+                    "eu.anthropic.claude-fable-5"] {
+            let name = ModelMetadataService.modelName(fromKey: key, provider: "bedrock_converse")
+            // Dotted vendor prefixes aren't slash-separated, so nothing is stripped at all.
+            #expect(name == ModelMetadataService.normalize(key))
+            // And they never collapse onto the real Anthropic model name.
+            #expect(name != ModelMetadataService.normalize("claude-fable-5"))
+        }
+    }
+
+    @Test("Names are case-folded on both sides")
+    func namesAreCaseFolded() {
+        #expect(ModelMetadataService.normalize("Llama-3.2-11B-Vision-Instruct") == "llama-3.2-11b-vision-instruct")
+        #expect(ModelMetadataService.modelName(fromKey: "crusoe/Qwen/Qwen3-235B-A22B-Instruct-2507", provider: "crusoe")
+                == "qwen/qwen3-235b-a22b-instruct-2507")
+    }
+}
+
+// MARK: - Lookup + resolution
+
+@Suite("LiteLLM lookup and resolution")
+struct LiteLLMResolutionTests {
+
+    /// Mirrors the upstream shapes: a bare Anthropic entry, a prefixed Mistral entry, and a
+    /// Bedrock entry whose key mentions "anthropic".
+    private static let sampleJSON = """
+    {
+      "sample_spec": { "note": "not a model" },
+      "claude-fable-5": { "litellm_provider": "anthropic", "max_input_tokens": 200000, "supports_vision": true },
+      "mistral/codestral-latest": { "litellm_provider": "mistral", "max_input_tokens": 32000 },
+      "global.anthropic.claude-fable-5": { "litellm_provider": "bedrock_converse", "max_input_tokens": 200000 },
+      "1024-x-1024/dall-e-2": { "litellm_provider": "openai" },
+      "no-provider-model": { "max_input_tokens": 123 }
+    }
+    """
+
+    private func makeService() async -> ModelMetadataService {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("litellm-tests-\(UUID().uuidString)")
+        let service = ModelMetadataService(storageDirectory: dir, userDefaultsSuiteName: "litellm-tests-\(UUID().uuidString)")
+        await service.ingestForTesting(Data(Self.sampleJSON.utf8))
+        return service
+    }
+
+    @Test("A bare-keyed Anthropic model resolves via the litellm_provider field")
+    func anthropicResolves() async {
+        let service = await makeService()
+        let entry = await service.metadata(for: "claude-fable-5", liteLLMProviderName: "anthropic")
+        #expect(entry?.maxInputTokens == 200000)
+        #expect(entry?.supportsVision == true)
+        #expect(await service.resolution(forModelID: "claude-fable-5", liteLLMProviderName: "anthropic") == .resolved)
+    }
+
+    @Test("A prefixed model resolves by its bare name, as the provider API reports it")
+    func mistralResolves() async {
+        let service = await makeService()
+        #expect(await service.metadata(for: "codestral-latest", liteLLMProviderName: "mistral")?.maxInputTokens == 32000)
+        // Case-insensitively, too.
+        #expect(await service.metadata(for: "CODESTRAL-LATEST", liteLLMProviderName: "mistral") != nil)
+    }
+
+    @Test("Bedrock's anthropic-named entry is NOT reachable as Anthropic")
+    func bedrockEntryIsNotAnthropic() async {
+        let service = await makeService()
+        // The Bedrock key mentions "anthropic" but belongs to bedrock_converse.
+        #expect(await service.metadata(for: "global.anthropic.claude-fable-5", liteLLMProviderName: "anthropic") == nil)
+        #expect(await service.metadata(for: "global.anthropic.claude-fable-5", liteLLMProviderName: "bedrock_converse") != nil)
+    }
+
+    @Test("An unmapped provider is reported distinctly from a missing one")
+    func resolutionDistinguishesFailureLevels() async {
+        let service = await makeService()
+        // No mapping at all (e.g. LM Studio / Hugging Face).
+        #expect(await service.resolution(forModelID: "anything", liteLLMProviderName: nil) == .providerNotMapped)
+        // Mapped to a name LiteLLM doesn't know.
+        #expect(await service.resolution(forModelID: "anything", liteLLMProviderName: "not-a-real-provider") == .providerNotFound)
+        // Provider known, model absent.
+        #expect(await service.resolution(forModelID: "no-such-model", liteLLMProviderName: "anthropic") == .modelNotFound)
+    }
+
+    @Test("There are no fallbacks — a wrong provider mapping simply misses")
+    func noFallbacks() async {
+        let service = await makeService()
+        // Previously the bare-ID fallback would have found this; now the mapping must be right.
+        #expect(await service.metadata(for: "claude-fable-5", liteLLMProviderName: "mistral") == nil)
+        // And the junk image-size key never matches the plain model name.
+        #expect(await service.metadata(for: "dall-e-2", liteLLMProviderName: "openai") == nil)
+    }
+
+    @Test("Entries with no litellm_provider are dropped as unroutable")
+    func entriesWithoutProviderAreDropped() async {
+        let service = await makeService()
+        let names = await service.allLiteLLMProviderNames().map(\.name)
+        #expect(names == ["anthropic", "bedrock_converse", "mistral", "openai"])
+        // sample_spec must not become a provider.
+        #expect(!names.contains("sample_spec"))
+    }
+
+    @Test("Discovery lists every provider carrying a given model name")
+    func discoveryFindsProvidersForModel() async {
+        let service = await makeService()
+        #expect(await service.liteLLMProviderNames(matchingModelID: "claude-fable-5") == ["anthropic"])
+        #expect(await service.liteLLMProviderNames(matchingModelID: "codestral-latest") == ["mistral"])
+        #expect(await service.liteLLMProviderNames(matchingModelID: "nothing-here").isEmpty)
+    }
+}
+
+// MARK: - Built-in preset mapping
+
+/// `BuiltInProviders.loadFromBundle()` fails SILENTLY — a decode error logs and yields an empty
+/// list, which would erase every built-in provider. These assert the bundled JSON still decodes
+/// and that each preset carries the `litellm_provider` value its models are actually catalogued
+/// under upstream.
+@Suite("Built-in provider LiteLLM mapping")
+struct BuiltInProviderMappingTests {
+
+    @Test("The bundled provider JSON decodes (guards the silent-empty failure mode)")
+    func bundledJSONDecodes() {
+        #expect(BuiltInProviders.all.count == 13)
+    }
+
+    @Test("Every built-in maps to the litellm_provider value its models actually use")
+    func mappingsMatchUpstream() {
+        let expected: [String: String?] = [
+            "builtin.anthropic": "anthropic",       // 23 bare claude-* entries; zero "anthropic/" keys
+            "builtin.openai": "openai",
+            "builtin.gemini": "gemini",
+            "builtin.xai": "xai",
+            "builtin.mistral": "mistral",
+            "builtin.zai": "zai",
+            "builtin.ollama": "ollama",
+            "builtin.ollama-cloud": "ollama",
+            "builtin.openrouter": "openrouter",
+            "builtin.alibabacloud": "dashscope",    // Alibaba's API is DashScope
+            "builtin.metallama": "meta_llama",      // underscore is the upstream wire value
+            "builtin.huggingface": nil,             // LiteLLM catalogues none
+            "builtin.lmstudio": nil                 // local, arbitrary models
+        ]
+        for (id, want) in expected {
+            let preset = BuiltInProviders.preset(id: id)
+            #expect(preset != nil, "missing preset \(id)")
+            #expect(preset?.liteLLMProviderName == want, "\(id) mapped to \(preset?.liteLLMProviderName ?? "nil")")
+        }
+    }
+
+    @Test("The mapping survives into the constructed ModelProvider")
+    func mappingReachesModelProvider() throws {
+        let preset = try #require(BuiltInProviders.preset(id: "builtin.anthropic"))
+        #expect(ModelProvider(builtIn: preset).liteLLMProviderName == "anthropic")
+    }
+
+    /// Old providers.json predates the field; a missing key must decode to nil rather than throw
+    /// (which would take the whole provider list with it).
+    @Test("A stored provider without the field decodes to nil")
+    func legacyProviderDecodes() throws {
+        let json = #"{"id":"custom-1","name":"Mine","apiType":"openAICompatible","endpoint":"https://x.test/v1"}"#
+        let provider = try JSONDecoder().decode(ModelProvider.self, from: Data(json.utf8))
+        #expect(provider.liteLLMProviderName == nil)
+    }
+}

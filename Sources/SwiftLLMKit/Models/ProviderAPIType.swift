@@ -15,25 +15,6 @@ public enum ProviderAPIType: String, Codable, Sendable, CaseIterable, Equatable 
     case alibabaCloud
     case openRouter
 
-    /// The prefix LiteLLM uses for this provider's models (e.g. "mistral/" for `mistral/mistral-large-2512`).
-    /// Returns `nil` for local-only providers that have no LiteLLM pricing data.
-    public var liteLLMPrefix: String? {
-        switch self {
-        case .anthropic: return "anthropic"
-        case .openAICompatible: return "openai"
-        case .ollama: return "ollama"
-        case .mistral: return "mistral"
-        case .gemini: return "gemini"
-        case .huggingFace: return nil
-        case .lmStudio: return nil
-        case .xAI: return "xai"
-        case .zAI: return nil
-        case .metaLlama: return "meta-llama"
-        case .alibabaCloud: return nil
-        case .openRouter: return "openrouter"
-        }
-    }
-
     /// Human-readable name for display.
     public var displayName: String {
         switch self {

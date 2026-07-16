@@ -1,96 +1,110 @@
 {
-  "version": 1,
+  "version": 2,
+  "_comment": "liteLLMProviderName matches the `litellm_provider` FIELD in LiteLLM's model_prices_and_context_window.json — never a key prefix. null means LiteLLM catalogues no models for this provider.",
   "providers": [
     {
       "id": "builtin.anthropic",
       "displayName": "Anthropic",
       "apiType": "anthropic",
       "endpoint": "https://api.anthropic.com",
-      "popular": true
+      "popular": true,
+      "liteLLMProviderName": "anthropic"
     },
     {
       "id": "builtin.gemini",
       "displayName": "Gemini",
       "apiType": "gemini",
       "endpoint": "https://generativelanguage.googleapis.com/v1beta",
-      "popular": true
+      "popular": true,
+      "liteLLMProviderName": "gemini"
     },
     {
       "id": "builtin.openai",
       "displayName": "OpenAI",
       "apiType": "openAICompatible",
       "endpoint": "https://api.openai.com/v1",
-      "popular": true
+      "popular": true,
+      "liteLLMProviderName": "openai"
     },
     {
       "id": "builtin.openrouter",
       "displayName": "OpenRouter",
       "apiType": "openRouter",
       "endpoint": "https://openrouter.ai/api/v1",
-      "popular": true
+      "popular": true,
+      "liteLLMProviderName": "openrouter"
     },
     {
       "id": "builtin.xai",
       "displayName": "Grok",
       "apiType": "xAI",
       "endpoint": "https://api.x.ai/v1",
-      "popular": true
+      "popular": true,
+      "liteLLMProviderName": "xai"
     },
     {
       "id": "builtin.alibabacloud",
       "displayName": "Alibaba Cloud",
       "apiType": "alibabaCloud",
       "endpoint": "https://dashscope-us.aliyuncs.com/compatible-mode/v1",
-      "popular": false
+      "popular": false,
+      "liteLLMProviderName": "dashscope"
     },
     {
       "id": "builtin.huggingface",
       "displayName": "Hugging Face",
       "apiType": "huggingFace",
       "endpoint": "https://router.huggingface.co/v1",
-      "popular": false
+      "popular": false,
+      "liteLLMProviderName": null
     },
     {
       "id": "builtin.lmstudio",
       "displayName": "LM Studio",
       "apiType": "lmStudio",
       "endpoint": "http://localhost:1234/v1",
-      "popular": false
+      "popular": false,
+      "liteLLMProviderName": null
     },
     {
       "id": "builtin.metallama",
       "displayName": "Meta Llama",
       "apiType": "metaLlama",
       "endpoint": "https://api.llama.com/v1",
-      "popular": false
+      "popular": false,
+      "liteLLMProviderName": "meta_llama"
     },
     {
       "id": "builtin.mistral",
       "displayName": "Mistral",
       "apiType": "mistral",
       "endpoint": "https://api.mistral.ai/v1",
-      "popular": false
+      "popular": false,
+      "liteLLMProviderName": "mistral"
     },
     {
       "id": "builtin.ollama",
       "displayName": "Ollama (local)",
       "apiType": "ollama",
       "endpoint": "http://localhost:11434/api",
-      "popular": false
+      "popular": false,
+      "liteLLMProviderName": "ollama"
     },
     {
       "id": "builtin.ollama-cloud",
       "displayName": "Ollama (cloud)",
       "apiType": "ollama",
       "endpoint": "https://ollama.com/api",
-      "popular": false
+      "popular": false,
+      "liteLLMProviderName": "ollama"
     },
     {
       "id": "builtin.zai",
       "displayName": "z.ai",
       "apiType": "zAI",
       "endpoint": "https://api.z.ai/api/paas/v4",
-      "popular": false
+      "popular": false,
+      "liteLLMProviderName": "zai"
     }
   ]
 }

@@ -16,10 +16,14 @@ public actor ModelMetadataService {
     private let userDefaults: UserDefaults
     private let userDefaultsSuiteName: String
 
-    /// In-memory index: raw model ID → parsed metadata.
-    private var metadataIndex: [String: LiteLLMEntry] = [:]
-    /// Secondary index with provider prefixes stripped for fuzzy matching.
-    private var strippedIndex: [String: LiteLLMEntry] = [:]
+    /// In-memory index: `litellm_provider` → (normalized model name → parsed metadata).
+    ///
+    /// Keyed off the entry's `litellm_provider` FIELD rather than its key prefix, because the
+    /// prefix is not a provider: LiteLLM keys carry image sizes (`1024-x-1024/dall-e-2` is
+    /// `openai`), quality tiers (`high/1536-x-1024/gpt-image-1.5`), and AWS inference-profile
+    /// segments (`global.anthropic.claude-fable-5` is `bedrock_converse`, NOT `anthropic`).
+    /// See ``modelName(fromKey:provider:)`` for how the model name is derived.
+    private var providerIndex: [String: [String: LiteLLMEntry]] = [:]
 
     private static let liteLLMURL: URL = {
         guard let url = URL(string: "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json") else {
@@ -51,7 +55,7 @@ public actor ModelMetadataService {
     public func refreshIfNeeded() async {
         guard needsRefresh() else {
             // Load from disk if not in memory
-            if metadataIndex.isEmpty {
+            if providerIndex.isEmpty {
                 loadFromDisk()
             }
             return
@@ -71,79 +75,97 @@ public actor ModelMetadataService {
         } catch {
             logger.error("LiteLLM fetch failed: \(error.localizedDescription, privacy: .public)")
             // Fall back to cached data
-            if metadataIndex.isEmpty {
+            if providerIndex.isEmpty {
                 loadFromDisk()
             }
         }
         userDefaults.set(Self.todayString(), forKey: Self.lastRefreshKey)
     }
 
-    /// Looks up metadata for a model by its raw ID.
-    /// When a `providerType` is supplied, tries the provider's LiteLLM-prefixed key first
-    /// (e.g. `mistral/mistral-large-2512`), then falls back to exact match and stripped index.
-    public func metadata(for modelID: String, providerType: ProviderAPIType? = nil) -> LiteLLMEntry? {
-        // Try provider-prefixed key first (most precise)
-        if let prefix = providerType?.liteLLMPrefix {
-            if let entry = metadataIndex["\(prefix)/\(modelID)"] {
-                return entry
-            }
-        }
-        // Exact match on raw model ID
-        if let entry = metadataIndex[modelID] {
-            return entry
-        }
-        // Stripped index fallback
-        let stripped = Self.stripProviderPrefix(modelID)
-        if let entry = strippedIndex[stripped] {
-            return entry
-        }
-        // Alias resolution: "-latest" / "-latest-YYYY-MM-DD" suffixes don't appear in
-        // LiteLLM, which uses versioned names (e.g. "ministral-3-14b-2512" vs "ministral-14b-latest").
-        // Extract the base name from the alias and find the best match in the provider's entries.
-        if let prefix = providerType?.liteLLMPrefix {
-            if let entry = fuzzyMatchAlias(modelID, prefix: prefix) {
-                return entry
-            }
-        }
-        return fuzzyMatchAlias(modelID, prefix: nil)
+    /// Looks up a model's LiteLLM metadata, or `nil` when the provider is unmapped or the
+    /// provider has no entry under this exact model name.
+    ///
+    /// The match is exact and deliberately has NO fallbacks: `liteLLMProviderName` must equal the
+    /// entry's `litellm_provider`, and `modelID` must equal the entry's derived model name
+    /// (case-insensitively). A miss means "LiteLLM does not catalogue this model for this
+    /// provider" — a real, reportable answer that ``resolution(forModelID:liteLLMProviderName:)``
+    /// surfaces, rather than something to paper over with a guess.
+    ///
+    /// Known limitation: LiteLLM's own resolver treats some provider values as families
+    /// (`bedrock` ⊇ `bedrock_converse`, `vertex_ai` ⊇ `vertex_ai-*`, `fireworks_ai` ⊇
+    /// `fireworks_ai-*`). We do not, so a provider must be mapped to the exact value its models
+    /// carry. Every value present in the data is offered by ``allLiteLLMProviderNames()``.
+    public func metadata(for modelID: String, liteLLMProviderName: String?) -> LiteLLMEntry? {
+        guard let provider = liteLLMProviderName else { return nil }
+        return providerIndex[provider]?[Self.normalize(modelID)]
     }
 
-    /// Attempts to match a model alias (e.g. "ministral-14b-latest") against LiteLLM entries
-    /// by stripping the "-latest" suffix and finding a key whose base name contains the same stem.
-    private func fuzzyMatchAlias(_ modelID: String, prefix: String?) -> LiteLLMEntry? {
-        // Strip common alias suffixes
-        let aliasSuffixes = ["-latest"]
-        var stem = modelID
-        for suffix in aliasSuffixes {
-            if stem.hasSuffix(suffix) {
-                stem = String(stem.dropLast(suffix.count))
-                break
-            }
-        }
-        // Also strip date suffixes like "-20250301"
-        if let lastDash = stem.lastIndex(of: "-") {
-            let tail = stem[stem.index(after: lastDash)...]
-            if tail.count >= 8, tail.allSatisfy(\.isNumber) {
-                stem = String(stem[..<lastDash])
-            }
-        }
-        guard stem != modelID else { return nil } // No alias suffix was stripped
+    /// Populates the index directly from raw LiteLLM JSON, bypassing the network and disk cache.
+    /// Exists so the matching rules can be tested against fixed upstream key shapes.
+    func ingestForTesting(_ data: Data) {
+        parseMetadata(data)
+    }
 
-        // Search for a matching key in the index
-        let searchPrefix = prefix.map { "\($0)/" } ?? ""
-        var bestMatch: (key: String, entry: LiteLLMEntry)?
-        for (key, entry) in metadataIndex {
-            guard key.hasPrefix(searchPrefix) else { continue }
-            let keyBase = searchPrefix.isEmpty ? key : String(key.dropFirst(searchPrefix.count))
-            // Check if the key's base name contains the stem (handles "ministral-3-14b-2512" matching "ministral-14b")
-            if keyBase.contains(stem) || stem.contains(keyBase) {
-                // Prefer shorter keys (more specific match)
-                if bestMatch == nil || key.count < bestMatch!.key.count {
-                    bestMatch = (key, entry)
-                }
-            }
-        }
-        return bestMatch?.entry
+    /// Why a `(provider, model)` pair does or doesn't resolve to LiteLLM metadata. Distinguishes
+    /// the failure levels so the UI can say which one to fix.
+    public enum Resolution: Sendable, Equatable {
+        /// Metadata found.
+        case resolved
+        /// The provider has no `liteLLMProviderName` — nothing was attempted.
+        case providerNotMapped
+        /// The mapped name matches no `litellm_provider` value in the data.
+        case providerNotFound
+        /// The provider exists, but it catalogues no model under this name.
+        case modelNotFound
+    }
+
+    /// Classifies a `(provider, model)` pair — powers the coverage view's check/X and the
+    /// inspector's "missing metadata for this provider/model" distinction.
+    public func resolution(forModelID modelID: String, liteLLMProviderName: String?) -> Resolution {
+        guard let provider = liteLLMProviderName else { return .providerNotMapped }
+        guard let models = providerIndex[provider] else { return .providerNotFound }
+        return models[Self.normalize(modelID)] == nil ? .modelNotFound : .resolved
+    }
+
+    /// Every distinct `litellm_provider` value present in the data, sorted, with the number of
+    /// models each catalogues. This is the authoritative picker list — it comes from the data
+    /// itself, not from LiteLLM's `LlmProviders` enum, which the file does not conform to.
+    public func allLiteLLMProviderNames() -> [(name: String, modelCount: Int)] {
+        providerIndex
+            .map { (name: $0.key, modelCount: $0.value.count) }
+            .sorted { $0.name < $1.name }
+    }
+
+    /// The `litellm_provider` values that catalogue a model under this exact name — lets the
+    /// picker offer "providers that actually have this model" when a mapping is being fixed.
+    public func liteLLMProviderNames(matchingModelID modelID: String) -> [String] {
+        let name = Self.normalize(modelID)
+        return providerIndex
+            .filter { $0.value[name] != nil }
+            .map(\.key)
+            .sorted()
+    }
+
+    /// Derives the model name to index an entry under, by removing the entry's OWN provider
+    /// prefix when the key carries one.
+    ///
+    /// Only the entry's own prefix is stripped, which is what makes the junk keys self-reject:
+    /// `1024-x-1024/dall-e-2` is `openai`, so `1024-x-1024` ≠ `openai`, nothing is stripped, and
+    /// it can never match a query for `dall-e-2`. Meanwhile `mistral/codestral-latest` →
+    /// `codestral-latest` and `openrouter/anthropic/claude-3-haiku` →
+    /// `anthropic/claude-3-haiku` both reduce to exactly what the provider's API reports, and
+    /// bare keys (`claude-fable-5`) pass through untouched.
+    static func modelName(fromKey key: String, provider: String) -> String {
+        let prefix = "\(provider)/"
+        let name = key.hasPrefix(prefix) ? String(key.dropFirst(prefix.count)) : key
+        return normalize(name)
+    }
+
+    /// Case-folds a model name. LiteLLM and provider APIs disagree on casing for the same model
+    /// (`deepinfra/meta-llama/Llama-3.2-11B-Vision-Instruct` vs a lowercased API listing), and
+    /// that disagreement is never meaningful.
+    static func normalize(_ modelName: String) -> String {
+        modelName.lowercased()
     }
 
     // MARK: - Private
@@ -174,7 +196,7 @@ public actor ModelMetadataService {
 
         if http.statusCode == 304 {
             // Not modified — load from disk if needed
-            if metadataIndex.isEmpty {
+            if providerIndex.isEmpty {
                 loadFromDisk()
             }
             return false
@@ -211,7 +233,7 @@ public actor ModelMetadataService {
         do {
             let data = try Data(contentsOf: metadataURL)
             parseMetadata(data)
-            logger.debug("Loaded LiteLLM metadata from disk (\(self.metadataIndex.count) entries)")
+            logger.debug("Loaded LiteLLM metadata from disk (\(self.providerIndex.count) providers, \(self.providerIndex.values.reduce(0) { $0 + $1.count }) models)")
         } catch {
             logger.error("Failed to load cached LiteLLM metadata: \(error.localizedDescription, privacy: .public)")
         }
@@ -224,12 +246,15 @@ public actor ModelMetadataService {
                 return
             }
 
-            var index: [String: LiteLLMEntry] = [:]
-            var stripped: [String: LiteLLMEntry] = [:]
+            var index: [String: [String: LiteLLMEntry]] = [:]
 
             for (key, value) in rawDict {
                 // Skip the "sample_spec" key and any non-dict entries
                 guard let modelDict = value as? [String: Any] else { continue }
+                // The `litellm_provider` field is the only authoritative provider marker, so an
+                // entry without one is unroutable and is dropped. (Upstream, a nil provider means
+                // "no constraint"; we have no use for a wildcard entry.)
+                guard let provider = modelDict["litellm_provider"] as? String else { continue }
 
                 let entry = LiteLLMEntry(
                     maxInputTokens: modelDict["max_input_tokens"] as? Int,
@@ -254,15 +279,10 @@ public actor ModelMetadataService {
                     supportedEndpoints: modelDict["supported_endpoints"] as? [String]
                 )
 
-                index[key] = entry
-                let strippedKey = Self.stripProviderPrefix(key)
-                if strippedKey != key {
-                    stripped[strippedKey] = entry
-                }
+                index[provider, default: [:]][Self.modelName(fromKey: key, provider: provider)] = entry
             }
 
-            metadataIndex = index
-            strippedIndex = stripped
+            providerIndex = index
         } catch {
             logger.error("Failed to parse LiteLLM JSON: \(error.localizedDescription, privacy: .public)")
         }
@@ -397,20 +417,6 @@ public actor ModelMetadataService {
     }
 
     /// Strips common provider prefixes like "anthropic/", "openai/", "ollama/" from model IDs.
-    static func stripProviderPrefix(_ modelID: String) -> String {
-        let prefixes = [
-            "anthropic/", "openai/", "ollama/", "azure/", "bedrock/",
-            "vertex_ai/", "cohere/", "mistral/", "groq/", "deepseek/",
-            "together_ai/", "fireworks_ai/", "perplexity/", "anyscale/",
-            "gemini/", "huggingface/", "xai/"
-        ]
-        for prefix in prefixes {
-            if modelID.hasPrefix(prefix) {
-                return String(modelID.dropFirst(prefix.count))
-            }
-        }
-        return modelID
-    }
 }
 
 /// A parsed entry from the LiteLLM model cost/metadata map.

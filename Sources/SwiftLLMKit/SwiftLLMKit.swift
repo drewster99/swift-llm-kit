@@ -489,7 +489,7 @@ public final class LLMKitManager {
                 }
 
                 // Layer 2: LiteLLM (gap-fill, fills anything still nil after bundled)
-                if let litellm = await metadataService.metadata(for: modelID, providerType: provider.apiType) {
+                if let litellm = await metadataService.metadata(for: modelID, liteLLMProviderName: provider.liteLLMProviderName) {
                     let litellmOverride = ModelMetadataOverride(
                         maxInputTokens: litellm.maxInputTokens,
                         maxOutputTokens: litellm.maxOutputTokens,
