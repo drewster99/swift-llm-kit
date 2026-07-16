@@ -198,8 +198,13 @@ public final class LLMKitManager {
         }
 
         // Built-in providers refuse mutation of name/apiType/endpoint — clamp to the preset.
+        // `liteLLMProviderName` is exempt: it is user-editable on built-ins too, so it is taken
+        // from the incoming value verbatim (nil included — that's an explicit "not mapped", not
+        // an absent field). Clamping it here would silently discard the mapping editor's save.
         if let preset = BuiltInProviders.preset(id: provider.id) {
-            providers[index] = ModelProvider(builtIn: preset)
+            var clamped = ModelProvider(builtIn: preset)
+            clamped.liteLLMProviderName = provider.liteLLMProviderName
+            providers[index] = clamped
         } else {
             providers[index] = provider
         }
