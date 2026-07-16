@@ -225,11 +225,10 @@ struct OpenAICompatibleProvider: LLMProvider {
                     ] as [String: Any]
                 ] as [String: Any]
             }
+            // Sent by default (see the provider factory); a strict endpoint that rejects
+            // the field is opted out upstream via `disableParallelToolCalls`, which sets
+            // `parallelToolCalls == false` here so the key is omitted entirely.
             if parallelToolCalls {
-                body["parallel_tool_calls"] = true
-            }
-            // Alibaba Cloud defaults parallel_tool_calls to false; enable explicitly.
-            if provider.apiType == .alibabaCloud {
                 body["parallel_tool_calls"] = true
             }
 

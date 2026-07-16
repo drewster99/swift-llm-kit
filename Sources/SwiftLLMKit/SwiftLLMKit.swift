@@ -862,13 +862,12 @@ public final class LLMKitManager {
                 behaviorFlags: flags
             )
         case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaLlama, .alibabaCloud, .openRouter:
-            // `parallel_tool_calls` is enabled when the model's catalog capability says so
-            // OR when behavior flags force it on (used to be a hardcoded `apiType == .mistral`
-            // branch — now the bundled defaults JSON flags Mistral models with
-            // `forceParallelToolCalls: true` and the hardcode is gone).
-            let supportsParallel = modelInfo(providerID: modelProvider.id, modelID: config.modelID)?
-                .capabilities.parallelToolCalls ?? false
-            let enableParallel = supportsParallel || flags.forceParallelToolCalls
+            // `parallel_tool_calls: true` is sent by default for every OpenAI-compatible
+            // model — the agent loop pairs multi-call turns safely and most endpoints
+            // default the param to true anyway, so the (unreliable) per-model catalog
+            // capability isn't consulted. A strict endpoint that rejects the field can
+            // opt out with the `disableParallelToolCalls` behavior flag.
+            let enableParallel = !flags.disableParallelToolCalls
             return OpenAICompatibleProvider(
                 configuration: config, provider: modelProvider,
                 readAPIKey: readAPIKey, verboseLogging: verbose,
@@ -888,9 +887,7 @@ public final class LLMKitManager {
             // Local Ollama keeps OllamaProvider: its weaker chat templates (e.g. gemma3's strict
             // user/assistant alternation with no tool role) need the textual rewrite.
             if let openAIEndpoint = Self.ollamaCloudOpenAIEndpoint(for: modelProvider.endpoint) {
-                let supportsParallel = modelInfo(providerID: modelProvider.id, modelID: config.modelID)?
-                    .capabilities.parallelToolCalls ?? false
-                let enableParallel = supportsParallel || flags.forceParallelToolCalls
+                let enableParallel = !flags.disableParallelToolCalls
                 var cloudProvider = modelProvider
                 cloudProvider.endpoint = openAIEndpoint
                 return OpenAICompatibleProvider(

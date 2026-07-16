@@ -38,13 +38,17 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
     /// and the provider just reads this.
     public var useMaxCompletionTokens: Bool = false
 
-    /// Send `parallel_tool_calls: true` regardless of the model's catalog
-    /// `capabilities.parallelToolCalls` flag.
+    /// Opt a provider/model OUT of `parallel_tool_calls: true`.
     ///
-    /// Used by Mistral models (which support parallel calls but where LiteLLM
-    /// metadata doesn't flag the capability). Bundled defaults set this for the
-    /// affected models so the hardcoded apiType check can retire.
-    public var forceParallelToolCalls: Bool = false
+    /// The client sends `parallel_tool_calls: true` on every OpenAI-compatible
+    /// request by default: the agent loop pairs multi-call turns safely (matched
+    /// tool_call/result counts, even on truncation), and most endpoints default
+    /// the param to `true` anyway, so an unconditional send is a no-op there.
+    /// Set this only for the rare endpoint that STRICTLY validates the request
+    /// body and rejects the unknown `parallel_tool_calls` field with HTTP 400 —
+    /// then the client omits it and lets that endpoint's own default apply.
+    /// Default false (send it). This is the per-provider opt-out.
+    public var disableParallelToolCalls: Bool = false
 
     /// Replay each assistant message's `reasoning_content` on subsequent
     /// chat-completions requests.
@@ -110,7 +114,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
     public init(
         glmTemplateSalvage: Bool = false,
         useMaxCompletionTokens: Bool = false,
-        forceParallelToolCalls: Bool = false,
+        disableParallelToolCalls: Bool = false,
         replayReasoningContent: Bool = false,
         supportsDeveloperRole: Bool = false,
         requiresAdaptiveThinking: Bool = false,
@@ -120,7 +124,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
     ) {
         self.glmTemplateSalvage = glmTemplateSalvage
         self.useMaxCompletionTokens = useMaxCompletionTokens
-        self.forceParallelToolCalls = forceParallelToolCalls
+        self.disableParallelToolCalls = disableParallelToolCalls
         self.replayReasoningContent = replayReasoningContent
         self.supportsDeveloperRole = supportsDeveloperRole
         self.requiresAdaptiveThinking = requiresAdaptiveThinking
@@ -134,7 +138,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
     public var isAllDefault: Bool {
         !glmTemplateSalvage
             && !useMaxCompletionTokens
-            && !forceParallelToolCalls
+            && !disableParallelToolCalls
             && !replayReasoningContent
             && !supportsDeveloperRole
             && !requiresAdaptiveThinking
@@ -150,7 +154,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         var out: [String] = []
         if glmTemplateSalvage { out.append("GLM salvage") }
         if useMaxCompletionTokens { out.append("max_completion_tokens") }
-        if forceParallelToolCalls { out.append("parallel tools") }
+        if disableParallelToolCalls { out.append("no parallel tools") }
         if replayReasoningContent { out.append("replay reasoning") }
         if supportsDeveloperRole { out.append("developer role") }
         if requiresAdaptiveThinking { out.append("adaptive thinking") }
@@ -165,14 +169,14 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
     // MARK: - Codable (backward-compatible)
 
     private enum CodingKeys: String, CodingKey {
-        case glmTemplateSalvage, useMaxCompletionTokens, forceParallelToolCalls, replayReasoningContent, supportsDeveloperRole, requiresAdaptiveThinking, supportsReasoningEffort, mustNeverSendTemperatureParam, extras
+        case glmTemplateSalvage, useMaxCompletionTokens, disableParallelToolCalls, replayReasoningContent, supportsDeveloperRole, requiresAdaptiveThinking, supportsReasoningEffort, mustNeverSendTemperatureParam, extras
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         glmTemplateSalvage = try c.decodeIfPresent(Bool.self, forKey: .glmTemplateSalvage) ?? false
         useMaxCompletionTokens = try c.decodeIfPresent(Bool.self, forKey: .useMaxCompletionTokens) ?? false
-        forceParallelToolCalls = try c.decodeIfPresent(Bool.self, forKey: .forceParallelToolCalls) ?? false
+        disableParallelToolCalls = try c.decodeIfPresent(Bool.self, forKey: .disableParallelToolCalls) ?? false
         replayReasoningContent = try c.decodeIfPresent(Bool.self, forKey: .replayReasoningContent) ?? false
         supportsDeveloperRole = try c.decodeIfPresent(Bool.self, forKey: .supportsDeveloperRole) ?? false
         requiresAdaptiveThinking = try c.decodeIfPresent(Bool.self, forKey: .requiresAdaptiveThinking) ?? false
@@ -187,7 +191,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         // round-trips cleanly through older clients that don't know these keys.
         if glmTemplateSalvage { try c.encode(glmTemplateSalvage, forKey: .glmTemplateSalvage) }
         if useMaxCompletionTokens { try c.encode(useMaxCompletionTokens, forKey: .useMaxCompletionTokens) }
-        if forceParallelToolCalls { try c.encode(forceParallelToolCalls, forKey: .forceParallelToolCalls) }
+        if disableParallelToolCalls { try c.encode(disableParallelToolCalls, forKey: .disableParallelToolCalls) }
         if replayReasoningContent { try c.encode(replayReasoningContent, forKey: .replayReasoningContent) }
         if supportsDeveloperRole { try c.encode(supportsDeveloperRole, forKey: .supportsDeveloperRole) }
         if requiresAdaptiveThinking { try c.encode(requiresAdaptiveThinking, forKey: .requiresAdaptiveThinking) }
@@ -208,7 +212,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
 public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
     public var glmTemplateSalvage: Bool?
     public var useMaxCompletionTokens: Bool?
-    public var forceParallelToolCalls: Bool?
+    public var disableParallelToolCalls: Bool?
     public var replayReasoningContent: Bool?
     public var supportsDeveloperRole: Bool?
     public var requiresAdaptiveThinking: Bool?
@@ -219,7 +223,7 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
     public init(
         glmTemplateSalvage: Bool? = nil,
         useMaxCompletionTokens: Bool? = nil,
-        forceParallelToolCalls: Bool? = nil,
+        disableParallelToolCalls: Bool? = nil,
         replayReasoningContent: Bool? = nil,
         supportsDeveloperRole: Bool? = nil,
         requiresAdaptiveThinking: Bool? = nil,
@@ -229,7 +233,7 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
     ) {
         self.glmTemplateSalvage = glmTemplateSalvage
         self.useMaxCompletionTokens = useMaxCompletionTokens
-        self.forceParallelToolCalls = forceParallelToolCalls
+        self.disableParallelToolCalls = disableParallelToolCalls
         self.replayReasoningContent = replayReasoningContent
         self.supportsDeveloperRole = supportsDeveloperRole
         self.requiresAdaptiveThinking = requiresAdaptiveThinking
@@ -241,7 +245,7 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
     public func apply(to flags: inout BehaviorFlags, forceReplace: Bool) {
         if let v = glmTemplateSalvage, (forceReplace || v) { flags.glmTemplateSalvage = v }
         if let v = useMaxCompletionTokens, (forceReplace || v) { flags.useMaxCompletionTokens = v }
-        if let v = forceParallelToolCalls, (forceReplace || v) { flags.forceParallelToolCalls = v }
+        if let v = disableParallelToolCalls, (forceReplace || v) { flags.disableParallelToolCalls = v }
         if let v = replayReasoningContent, (forceReplace || v) { flags.replayReasoningContent = v }
         if let v = supportsDeveloperRole, (forceReplace || v) { flags.supportsDeveloperRole = v }
         if let v = requiresAdaptiveThinking, (forceReplace || v) { flags.requiresAdaptiveThinking = v }
@@ -263,7 +267,7 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
     public var isEmpty: Bool {
         glmTemplateSalvage == nil
             && useMaxCompletionTokens == nil
-            && forceParallelToolCalls == nil
+            && disableParallelToolCalls == nil
             && replayReasoningContent == nil
             && supportsDeveloperRole == nil
             && requiresAdaptiveThinking == nil

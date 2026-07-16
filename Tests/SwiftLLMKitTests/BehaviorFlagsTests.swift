@@ -25,7 +25,7 @@ struct BehaviorFlagsCodableTests {
         #expect(json["glmTemplateSalvage"] as? Bool == true)
         #expect(json["useMaxCompletionTokens"] == nil,
                 "False fields shouldn't appear in JSON")
-        #expect(json["forceParallelToolCalls"] == nil)
+        #expect(json["disableParallelToolCalls"] == nil)
         #expect(json["extras"] == nil)
     }
 
@@ -34,7 +34,7 @@ struct BehaviorFlagsCodableTests {
         let original = BehaviorFlags(
             glmTemplateSalvage: true,
             useMaxCompletionTokens: true,
-            forceParallelToolCalls: true,
+            disableParallelToolCalls: true,
             extras: ["responseFormat": "json_object", "bypassReasoning": "true"]
         )
         let data = try JSONEncoder().encode(original)
@@ -70,7 +70,7 @@ struct BehaviorFlagsCodableTests {
         #expect(BehaviorFlags().isAllDefault)
         #expect(!BehaviorFlags(glmTemplateSalvage: true).isAllDefault)
         #expect(!BehaviorFlags(useMaxCompletionTokens: true).isAllDefault)
-        #expect(!BehaviorFlags(forceParallelToolCalls: true).isAllDefault)
+        #expect(!BehaviorFlags(disableParallelToolCalls: true).isAllDefault)
         #expect(!BehaviorFlags(extras: ["k": "v"]).isAllDefault)
     }
 }
@@ -86,12 +86,12 @@ struct BehaviorFlagsOverrideTests {
         let patch = BehaviorFlagsOverride(
             glmTemplateSalvage: true,
             useMaxCompletionTokens: true,
-            forceParallelToolCalls: true
+            disableParallelToolCalls: true
         )
         patch.apply(to: &flags, forceReplace: false)
         #expect(flags.glmTemplateSalvage)
         #expect(flags.useMaxCompletionTokens)
-        #expect(flags.forceParallelToolCalls)
+        #expect(flags.disableParallelToolCalls)
     }
 
     @Test("gap-fill does NOT downgrade true→false")
@@ -123,12 +123,12 @@ struct BehaviorFlagsOverrideTests {
 
     @Test("nil patch fields leave the existing flag unchanged")
     func nilPatchSkipsField() {
-        var flags = BehaviorFlags(glmTemplateSalvage: true, forceParallelToolCalls: true)
+        var flags = BehaviorFlags(glmTemplateSalvage: true, disableParallelToolCalls: true)
         let patch = BehaviorFlagsOverride(useMaxCompletionTokens: true)
         patch.apply(to: &flags, forceReplace: true)
         #expect(flags.glmTemplateSalvage)
         #expect(flags.useMaxCompletionTokens)
-        #expect(flags.forceParallelToolCalls)
+        #expect(flags.disableParallelToolCalls)
     }
 
     @Test("extras gap-fill: only fills keys not already present")
@@ -320,11 +320,9 @@ struct BundledModelMetadataRegistrySchemaTests {
     func shippedJSONLoads() {
         let registry = BundledModelMetadataRegistry.load()
         // We don't assert exact count here — entries can grow as new GLM models are added —
-        // just that the file loaded and the GLM/OpenAI/Mistral defaults landed somewhere.
+        // just that the file loaded and the GLM/OpenAI defaults landed somewhere.
         #expect(registry.providerDefaults["builtin.openai"]?.behaviorFlags?.useMaxCompletionTokens == true,
                 "OpenAI provider-wide default for useMaxCompletionTokens should be present")
-        #expect(registry.providerDefaults["builtin.mistral"]?.behaviorFlags?.forceParallelToolCalls == true,
-                "Mistral provider-wide default for forceParallelToolCalls should be present")
         let hasZAIGLM = registry.entries.keys.contains(where: { $0.hasPrefix("zAI/glm-") })
         #expect(hasZAIGLM, "Bundled entries should include z.ai's GLM models with glmTemplateSalvage")
     }
@@ -382,12 +380,12 @@ struct LayeredResolutionTests {
         let flags = resolve(
             providerDefaults: BehaviorFlagsOverride(useMaxCompletionTokens: true),
             providerEntry: BehaviorFlagsOverride(glmTemplateSalvage: true),
-            apiTypeEntry: BehaviorFlagsOverride(forceParallelToolCalls: true),
+            apiTypeEntry: BehaviorFlagsOverride(disableParallelToolCalls: true),
             userOverride: nil
         )
         #expect(flags.useMaxCompletionTokens)
         #expect(flags.glmTemplateSalvage)
-        #expect(flags.forceParallelToolCalls)
+        #expect(flags.disableParallelToolCalls)
     }
 
     @Test("user can selectively disable one bundled flag without affecting others")

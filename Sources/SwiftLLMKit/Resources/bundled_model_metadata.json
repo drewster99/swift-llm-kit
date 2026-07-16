@@ -148,9 +148,6 @@
     "providerDefaults": {
         "builtin.openai": {
             "behaviorFlags": { "useMaxCompletionTokens": true }
-        },
-        "builtin.mistral": {
-            "behaviorFlags": { "forceParallelToolCalls": true }
         }
     }
 }
