@@ -283,10 +283,12 @@ struct OpenAICompatibleProvider: LLMProvider {
                     ] as [String: Any]
                 }
                 for document in documents {
-                    var file: [String: Any] = [
-                        "file_data": "data:\(document.mimeType);base64,\(document.data.base64EncodedString())"
+                    // OpenAI Chat Completions REQUIRES `filename` alongside `file_data` — omitting it
+                    // is a hard 400. Synthesize a fallback when the caller didn't supply one.
+                    let file: [String: Any] = [
+                        "file_data": "data:\(document.mimeType);base64,\(document.data.base64EncodedString())",
+                        "filename": document.filename ?? "document.pdf"
                     ]
-                    if let filename = document.filename { file["filename"] = filename }
                     parts.append(["type": "file", "file": file])
                 }
                 parts.append(["type": "text", "text": outgoing])

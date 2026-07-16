@@ -54,6 +54,22 @@ struct DocumentContentTests {
         #expect(fileObj["filename"] as? String == "doc.pdf")
     }
 
+    @Test func openAI_synthesizesFilenameWhenMissing() throws {
+        // OpenAI requires `filename` alongside `file_data`; a nil filename must not omit the key.
+        let p = OpenAICompatibleProvider(
+            configuration: Self.config("builtin.openai"),
+            provider: try Self.provider("builtin.openai", type: .openAICompatible, endpoint: "https://api.openai.com/v1"),
+            readAPIKey: Self.dummyKey
+        )
+        let namelessPDF = LLMDocumentContent(data: Data("%PDF-1.4".utf8), mimeType: "application/pdf")
+        let body = p.buildRequestBody(messages: [.user("read this", images: [], documents: [namelessPDF])], tools: [])
+        let messages = try #require(body["messages"] as? [[String: Any]])
+        let content = try #require(messages.first?["content"] as? [[String: Any]])
+        let file = try #require(content.first { $0["type"] as? String == "file" })
+        let fileObj = try #require(file["file"] as? [String: Any])
+        #expect(fileObj["filename"] as? String == "document.pdf")
+    }
+
     @Test func gemini_emitsInlineData() throws {
         let p = GeminiProvider(
             configuration: Self.config("builtin.gemini"),
