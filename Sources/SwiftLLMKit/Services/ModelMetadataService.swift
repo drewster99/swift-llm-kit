@@ -455,9 +455,42 @@ public struct LiteLLMEntry: Sendable {
     public let supportedEndpoints: [String]?
 
     /// Whether this model supports the standard chat completions endpoint.
+    ///
+    /// Answers only "will `/v1/chat/completions` accept this model", NOT "is this a model an
+    /// agent can drive" — see ``isConversational`` for that. The two genuinely differ: Gemini
+    /// generates images *through* the chat endpoint, so `gemini-3-pro-image` belongs here and
+    /// still isn't something Brown can run.
+    ///
+    /// Precedence:
+    /// 1. `supported_endpoints` when present — an explicit list outranks `mode`, which names a
+    ///    model's *primary* use rather than its only one (`o3-deep-research` is
+    ///    `mode: "responses"` yet lists `/v1/chat/completions`). Only ~560 of 2968 carry it.
+    /// 2. `mode` otherwise — set on 2959 of 2968, so it covers nearly everything else.
+    /// 3. Fail open when neither is known.
     public var supportsChatCompletions: Bool {
-        guard let endpoints = supportedEndpoints else { return true }
-        return endpoints.contains("/v1/chat/completions")
+        if let endpoints = supportedEndpoints { return endpoints.contains("/v1/chat/completions") }
+        if let mode { return mode == "chat" }
+        return true
+    }
+
+    /// Model kinds that are definitively not conversational text generation, and so can never
+    /// back an agent no matter what endpoint they answer on.
+    ///
+    /// `chat` and `responses` are both text-generation kinds and are deliberately absent: a
+    /// `responses` model may still be chat-reachable, so it is left to ``supportsChatCompletions``
+    /// rather than disqualified here.
+    private static let nonConversationalModes: Set<String> = [
+        "embedding", "image_generation", "video_generation", "audio_speech",
+        "audio_transcription", "moderation", "ocr", "rerank"
+    ]
+
+    /// Whether this is a conversational text model — the kind an agent can actually drive.
+    ///
+    /// Unknown (`mode == nil`) reports `true`: an unrecognised model must stay usable, since a
+    /// missing mode is the norm for the endpoints LiteLLM doesn't catalogue at all.
+    public var isConversational: Bool {
+        guard let mode else { return true }
+        return !Self.nonConversationalModes.contains(mode)
     }
 
     /// Merges this LiteLLM entry's capabilities into an existing ``ModelCapabilities``,

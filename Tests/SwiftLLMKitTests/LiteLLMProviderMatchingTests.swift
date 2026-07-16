@@ -260,3 +260,87 @@ struct BuiltInSeedingTests {
         #expect(canonical.endpoint == URL(string: "https://api.anthropic.com"))
     }
 }
+
+// MARK: - Chat-endpoint vs conversational
+
+/// Two different questions that look like one: whether `/v1/chat/completions` accepts a model,
+/// and whether the model is something an agent can drive. Gemini generates images *through* the
+/// chat endpoint, so conflating them either disqualifies a working model or admits an image
+/// generator as an agent.
+@Suite("Chat endpoint vs conversational model")
+struct ChatAndConversationalTests {
+
+    private func entry(mode: String?, endpoints: [String]?) -> LiteLLMEntry {
+        LiteLLMEntry(
+            maxInputTokens: nil, maxOutputTokens: nil, pricing: nil,
+            supportsToolUse: false, supportsVision: false, supportsReasoning: false,
+            supportsPromptCaching: false, supportsComputerUse: false, supportsAudioInput: false,
+            supportsAudioOutput: false, supportsVideoInput: false, supportsResponseSchema: false,
+            supportsParallelToolCalls: false, supportsPdfInput: false, supportsWebSearch: false,
+            supportsSystemMessages: false, supportsAssistantPrefill: false, supportsToolChoice: false,
+            mode: mode, supportedEndpoints: endpoints
+        )
+    }
+
+    /// The trap: reading `mode` before `supported_endpoints` disqualifies this real model, which
+    /// is mode "responses" yet explicitly advertises the chat endpoint.
+    @Test("An explicit endpoint list outranks mode")
+    func endpointsOutrankMode() {
+        let deepResearch = entry(mode: "responses",
+                                 endpoints: ["/v1/chat/completions", "/v1/batch", "/v1/responses"])
+        #expect(deepResearch.supportsChatCompletions)
+        // responses-only, no chat endpoint -> genuinely unreachable for us
+        #expect(!entry(mode: "responses", endpoints: ["/v1/responses", "/v1/batch"]).supportsChatCompletions)
+    }
+
+    @Test("mode decides when no endpoint list is given (the ~80% case)")
+    func modeIsTheFallback() {
+        #expect(entry(mode: "chat", endpoints: nil).supportsChatCompletions)
+        #expect(!entry(mode: "embedding", endpoints: nil).supportsChatCompletions)
+        #expect(!entry(mode: "moderation", endpoints: nil).supportsChatCompletions)
+    }
+
+    @Test("Unknown on both counts fails open — an unrecognised model stays usable")
+    func unknownFailsOpen() {
+        #expect(entry(mode: nil, endpoints: nil).supportsChatCompletions)
+        #expect(entry(mode: nil, endpoints: nil).isConversational)
+    }
+
+    /// The real shape of gemini-3-pro-image: image generation, reachable over chat.
+    @Test("A chat-reachable image model is NOT conversational")
+    func chatReachableImageModelIsNotConversational() {
+        let geminiImage = entry(mode: "image_generation",
+                                endpoints: ["/v1/chat/completions", "/v1/completions", "/v1/batch"])
+        #expect(geminiImage.supportsChatCompletions)   // the endpoint genuinely accepts it
+        #expect(!geminiImage.isConversational)         // ...and it still can't back an agent
+    }
+
+    @Test("Text-generation kinds stay conversational; media/vector kinds do not")
+    func conversationalByKind() {
+        for good in ["chat", "responses"] {
+            #expect(entry(mode: good, endpoints: nil).isConversational, "\(good) should be conversational")
+        }
+        for bad in ["embedding", "image_generation", "video_generation", "audio_speech",
+                    "audio_transcription", "moderation", "ocr", "rerank"] {
+            #expect(!entry(mode: bad, endpoints: nil).isConversational, "\(bad) should not be conversational")
+        }
+    }
+
+    @Test("ModelInfo carries the kind through, and an unknown kind stays usable")
+    func modelInfoExposesConversational() {
+        #expect(ModelInfo(providerID: "p", modelID: "m", mode: "chat").isConversational)
+        #expect(!ModelInfo(providerID: "p", modelID: "m", mode: "embedding").isConversational)
+        #expect(ModelInfo(providerID: "p", modelID: "m", mode: nil).isConversational)
+    }
+
+    @Test("mode survives a Codable round-trip")
+    func modeRoundTrips() throws {
+        let info = ModelInfo(providerID: "p", modelID: "m", mode: "image_generation")
+        let back = try JSONDecoder().decode(ModelInfo.self, from: JSONEncoder().encode(info))
+        #expect(back.mode == "image_generation")
+        #expect(!back.isConversational)
+        // A record written before the field existed decodes to unknown, not to a bogus kind.
+        let legacy = #"{"providerID":"p","modelID":"m"}"#
+        #expect(try JSONDecoder().decode(ModelInfo.self, from: Data(legacy.utf8)).mode == nil)
+    }
+}

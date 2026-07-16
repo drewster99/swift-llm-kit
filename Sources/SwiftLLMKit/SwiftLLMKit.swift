@@ -554,6 +554,10 @@ public final class LLMKitManager {
                         supportsChatCompletions: litellm.supportsChatCompletions ? nil : false
                     )
                     litellmOverride.apply(to: &providerModels[i], forceReplace: false)
+                    // Assigned rather than layered: `mode` is purely LiteLLM's classification of
+                    // the model's kind. No provider API reports it and nothing overrides it, so
+                    // there is nothing to merge against.
+                    providerModels[i].mode = litellm.mode
                 }
 
                 // Layer 3: Provider API data is already the base (providerModels[i]).
@@ -662,6 +666,15 @@ public final class LLMKitManager {
             if !modelInfo.supportsChatCompletions {
                 configurations[index].isValid = false
                 configurations[index].validationError = "Model '\(config.modelID)' does not support the chat completions endpoint"
+                return
+            }
+
+            // Reachable on the endpoint but not a conversational model — Gemini's image models
+            // answer on /v1/chat/completions and would otherwise sail through the check above.
+            // An unknown kind passes, so the ~63% of the catalog LiteLLM doesn't cover stays usable.
+            if !modelInfo.isConversational {
+                configurations[index].isValid = false
+                configurations[index].validationError = "Model '\(config.modelID)' is \(modelInfo.mode.map { "a '\($0)' model" } ?? "not a chat model") — agents need a conversational model"
                 return
             }
 
