@@ -314,6 +314,41 @@ public final class LLMKitManager {
         models.first { $0.providerID == providerID && $0.modelID == modelID }
     }
 
+    // MARK: - LiteLLM Coverage
+
+    /// Whether a `(provider, model)` pair resolves to LiteLLM metadata, and if not, which level
+    /// failed — the provider's mapping or the model itself.
+    public func liteLLMResolution(providerID: String, modelID: String) async -> ModelMetadataService.Resolution {
+        let name = providers.first(where: { $0.id == providerID })?.liteLLMProviderName
+        return await metadataService.resolution(forModelID: modelID, liteLLMProviderName: name)
+    }
+
+    /// Classifies every model this provider lists, in one actor hop.
+    public func liteLLMResolutions(forProviderID providerID: String) async -> [String: ModelMetadataService.Resolution] {
+        let name = providers.first(where: { $0.id == providerID })?.liteLLMProviderName
+        let modelIDs = models(for: providerID).map(\.modelID)
+        return await metadataService.resolutions(forModelIDs: modelIDs, liteLLMProviderName: name)
+    }
+
+    /// Whether a provider's mapping names a `litellm_provider` that LiteLLM actually has data
+    /// for. `nil` (unmapped) is reported as `false`.
+    public func liteLLMProviderIsKnown(_ liteLLMProviderName: String?) async -> Bool {
+        guard let liteLLMProviderName else { return false }
+        return await metadataService.allLiteLLMProviderNames().contains { $0.name == liteLLMProviderName }
+    }
+
+    /// Every distinct `litellm_provider` value LiteLLM's data actually contains, with model
+    /// counts — the authoritative choice list for mapping a provider.
+    public func allLiteLLMProviderNames() async -> [(name: String, modelCount: Int)] {
+        await metadataService.allLiteLLMProviderNames()
+    }
+
+    /// The `litellm_provider` values that catalogue this exact model name — lets a mapping fix
+    /// offer "providers that actually have this model" rather than the full list.
+    public func liteLLMProviderNames(matchingModelID modelID: String) async -> [String] {
+        await metadataService.liteLLMProviderNames(matchingModelID: modelID)
+    }
+
     // MARK: - Refresh
 
     /// Refreshes model lists if the YYYYMMDD gate allows, and additionally fills in

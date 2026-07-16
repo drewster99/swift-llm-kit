@@ -127,6 +127,16 @@ public actor ModelMetadataService {
         return models[Self.normalize(modelID)] == nil ? .modelNotFound : .resolved
     }
 
+    /// Classifies many models against one provider in a single actor hop — the coverage view
+    /// asks about every model a provider lists, and a hop per model would be hundreds.
+    public func resolutions(forModelIDs modelIDs: [String], liteLLMProviderName: String?) -> [String: Resolution] {
+        var result: [String: Resolution] = [:]
+        for modelID in modelIDs {
+            result[modelID] = resolution(forModelID: modelID, liteLLMProviderName: liteLLMProviderName)
+        }
+        return result
+    }
+
     /// Every distinct `litellm_provider` value present in the data, sorted, with the number of
     /// models each catalogues. This is the authoritative picker list — it comes from the data
     /// itself, not from LiteLLM's `LlmProviders` enum, which the file does not conform to.
