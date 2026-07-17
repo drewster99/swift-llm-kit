@@ -24,110 +24,178 @@ private let logger = Logger(subsystem: "SwiftLLMKit", category: "ModelProber")
 /// checked on its own without one.
 public enum ModelProber {
 
-    /// Facts the caller already established by decoding the provider payload, so the driver skips
-    /// probing them. Everything absent from the set is probed.
-    public struct Skip: OptionSet, Sendable {
-        public let rawValue: Int
-        public init(rawValue: Int) { self.rawValue = rawValue }
-        public static let chat            = Skip(rawValue: 1 << 0)
-        public static let vision          = Skip(rawValue: 1 << 1)
-        public static let pdfInput        = Skip(rawValue: 1 << 2)
-        public static let maxOutputTokens = Skip(rawValue: 1 << 3)
-        public static let effort          = Skip(rawValue: 1 << 4)
+    /// Builds a profile pre-filled with everything the provider's `/models` payload already told
+    /// us, so the driver only spends calls on the gaps.
+    ///
+    /// **Feed this the freshly-decoded `ModelInfo` from `ModelFetchService.fetchModels`, never the
+    /// merged catalog** — the catalog has LiteLLM's third-party claims layered in, and seeding
+    /// from it would let those claims wear a `decoded` badge. The rule this whole system runs on
+    /// is: the vendor's payload is gospel, everything else gets probed.
+    ///
+    /// Seeding is deliberately per-apiType and conservative, because most decoders leave
+    /// `capabilities` at its all-false default and false-meaning-unknown must never seed a
+    /// `decoded(false)`:
+    /// - every apiType: `displayName`, `createdAt`, limits when present, `validEffortLevels`
+    ///   (each level as `decoded(true)`)
+    /// - `.anthropic`: `vision`/`pdfInput` (its capabilities block states them explicitly, both
+    ///   directions), and `chat` from `supportsChatCompletions`
+    /// - `.ollama`: `toolCalling` when the tags payload lists `tools`
+    /// - `.gemini`: `chat` from `supportedGenerationMethods` (decoded into
+    ///   `supportsChatCompletions`)
+    public static func seedProfile(fromDecoded info: ModelInfo, apiType: ProviderAPIType) -> ModelProfile {
+        var profile = ModelProfile(providerID: info.providerID, modelID: info.modelID)
+        profile.displayName = info.displayName
+        profile.createdAt = info.createdAt
+        if let context = info.maxInputTokens {
+            profile.maxContextTokens = .decoded(context, "provider /models payload")
+        }
+        if let output = info.maxOutputTokens {
+            profile.maxOutputTokens = .decoded(output, "provider /models payload")
+        }
+        for level in info.validEffortLevels {
+            profile.effortLevels[level] = .decoded(true, "provider /models payload")
+        }
+
+        switch apiType {
+        case .anthropic:
+            // Anthropic's capabilities block states supported: true/false explicitly, so both
+            // directions are decodable — unlike decoders where false just means "didn't say".
+            profile.vision = .decoded(info.capabilities.vision, "capabilities.image_input")
+            profile.pdfInput = .decoded(info.capabilities.pdfInput, "capabilities.pdf_input")
+            profile.chat = .decoded(info.supportsChatCompletions, "provider /models payload")
+        case .ollama:
+            if info.capabilities.toolUse {
+                profile.toolCalling = .decoded(true, "tags payload lists 'tools'")
+            }
+        case .gemini:
+            profile.chat = .decoded(info.supportsChatCompletions, "supportedGenerationMethods")
+        default:
+            break
+        }
+        return profile
     }
 
-    /// Probes everything not in `skip` and returns a fully populated profile.
+    /// Probes every field of `seed` still `notAttempted` and returns the completed profile.
+    ///
+    /// The seed IS the skip logic: a field the payload already established (see
+    /// ``seedProfile(fromDecoded:apiType:)``) arrives `established` and is left alone, so "probe
+    /// only what we don't get for free" is structural rather than a flag the caller can forget.
+    /// Pass a bare `ModelProfile(providerID:modelID:)` to probe everything.
     ///
     /// - Parameters:
     ///   - llm: a provider already bound to the model under test. It exposes no capability data,
     ///     which is what keeps catalog claims out of a measurement of the truth.
-    ///   - effortLevelsToProbe: which named efforts to attempt. The caller passes the model's own
-    ///     list (decoded, for Anthropic) or a hand-authored one (OpenAI); the driver never guesses
-    ///     the universe of levels itself.
+    ///   - effortLevelsToProbe: named efforts to attempt beyond what the seed already settled.
+    ///     Only meaningful where the provider emits the field unconditionally (Anthropic); where
+    ///     emission is flag-gated (OpenAI-compatible), build per-level providers whose
+    ///     configuration forces the field via `extraJSONOverrides` and use
+    ///     ``probeParameterAcceptance`` instead.
     public static func probe(
         llm: any LLMProvider,
-        providerID: String,
-        modelID: String,
-        skip: Skip = [],
+        seed: ModelProfile,
         effortLevelsToProbe: [String] = []
     ) async -> ModelProfile {
         let started = Date()
         let calls = ProbeCallCounter()
-        var profile = ModelProfile(providerID: providerID, modelID: modelID)
+        var profile = seed
+        let modelID = profile.modelID
 
-        // 1. Chat is the floor, and temperature rides along in the same request — the chat probe
-        //    already sends a nonce echo, so setting temperature: 0 on it establishes both in one
-        //    call. Standalone `probeChat`/`probeTemperature` exist for individual use, but a full
-        //    sweep should not pay for two calls when one carries both facts. Only a temperature
-        //    rejection forces a second, temperature-free call to still get the chat answer.
-        //    If chat can't be reached at all, every later probe fails the same way — stop once.
-        if skip.contains(.chat) {
-            profile.chat = .established(true, "decoded from provider payload")
-        } else {
+        // 1. Chat is the floor, and temperature rides along in the same request — one nonce-echo
+        //    call with temperature: 0 settles both. Only a temperature rejection costs a second,
+        //    temperature-free call. If chat can't be reached at all, every later probe fails the
+        //    same way — stop once.
+        if profile.chat.status == .notAttempted {
             let combined = await probeChatAndTemperature(llm: llm, modelID: modelID, calls: calls)
             profile.chat = combined.chat
             profile.acceptsTemperature = combined.temperature
-            if profile.chat.status == .inconclusive {
-                logger.error("Probe \(modelID, privacy: .public): chat inconclusive — halting")
-                profile.callCount = calls.value
-                profile.duration = Date().timeIntervalSince(started)
-                return profile
-            }
-            if profile.chat.value == false {
-                // Not a chat model. Tool calling and the rest are meaningless.
-                profile.callCount = calls.value
-                profile.duration = Date().timeIntervalSince(started)
-                return profile
-            }
+        } else if profile.acceptsTemperature.status == .notAttempted {
+            // Chat came decoded; temperature still needs its own (cheap) probe.
+            profile.acceptsTemperature = await probeTemperature(llm: llm, modelID: modelID, calls: calls)
         }
-
+        if profile.chat.status == .inconclusive {
+            logger.error("Probe \(modelID, privacy: .public): chat inconclusive — halting")
+            return finish(&profile, calls: calls, started: started)
+        }
+        if profile.chat.value == false {
+            // Not a chat model. Tool calling and the rest are meaningless.
+            return finish(&profile, calls: calls, started: started)
+        }
 
         // 2. Tool calling, then the result round-trip. The reason the probe exists.
-        let toolResult = await CapabilityProbe.probeToolCalling(
-            llm: llm, providerID: providerID, modelID: modelID, calls: calls
-        )
-        profile.toolCalling = toolResult.toolUse
-            .map { ProbeFinding<Bool>.established($0, toolResult.errorDescription ?? toolResult.verdict.rawValue) }
-            ?? .inconclusive(toolResult.errorDescription ?? "no answer")
-        profile.toolResultRoundTrip = {
-            switch toolResult.verdict {
-            case .roundTripCompleted:    return .established(true, "returned the identifier")
-            case .toolCallOnly:          return .established(false, "called the tool but did not return the identifier")
-            case .noToolCall, .rejected: return .established(false, "no tool call")
-            case .inconclusive:          return .inconclusive(toolResult.errorDescription ?? "no answer")
+        if profile.toolCalling.status == .notAttempted || profile.toolResultRoundTrip.status == .notAttempted {
+            let toolResult = await CapabilityProbe.probeToolCalling(
+                llm: llm, providerID: profile.providerID, modelID: modelID, calls: calls
+            )
+            if profile.toolCalling.status == .notAttempted {
+                profile.toolCalling = toolResult.toolUse
+                    .map { ProbeFinding<Bool>.established($0, toolResult.errorDescription ?? toolResult.verdict.rawValue) }
+                    ?? .inconclusive(toolResult.errorDescription ?? "no answer")
             }
-        }()
+            profile.toolResultRoundTrip = {
+                switch toolResult.verdict {
+                case .roundTripCompleted:    return .established(true, "returned the identifier")
+                case .toolCallOnly:          return .established(false, "called the tool but did not return the identifier")
+                case .noToolCall, .rejected: return .established(false, "no tool call")
+                case .inconclusive:          return .inconclusive(toolResult.errorDescription ?? "no answer")
+                }
+            }()
+        }
 
-        // 3. Vision + PDF — only where the payload didn't already tell us.
-        if skip.contains(.vision) {
-            profile.vision = .established(true, "decoded from provider payload")
-        } else {
+        // 3. Vision + PDF — only where the payload didn't already say.
+        if profile.vision.status == .notAttempted {
             profile.vision = await probeVision(llm: llm, modelID: modelID, calls: calls)
         }
-        if skip.contains(.pdfInput) {
-            profile.pdfInput = .established(true, "decoded from provider payload")
-        } else {
+        if profile.pdfInput.status == .notAttempted {
             profile.pdfInput = await probePDFInput(llm: llm, modelID: modelID, calls: calls)
         }
 
         // 4. Max output — one call, learned from the endpoint's own rejection.
-        if !skip.contains(.maxOutputTokens) {
+        if profile.maxOutputTokens.status == .notAttempted {
             profile.maxOutputTokens = await probeMaxOutputTokens(llm: llm, modelID: modelID, calls: calls)
         }
 
-        // 5. Effort levels — attempt each caller-supplied level. Only meaningful where the
-        //    provider emits the field unconditionally (Anthropic); where emission is gated on a
-        //    behavior flag (OpenAI-compatible), a level we haven't flagged is silently dropped, so
-        //    a "no error" result there is confirmation, not discovery.
-        if !skip.contains(.effort) {
-            for level in effortLevelsToProbe {
-                profile.effortLevels[level] = await probeEffortLevel(level, llm: llm, modelID: modelID, calls: calls)
-            }
+        // 5. Effort levels the seed didn't settle.
+        for level in effortLevelsToProbe where profile.effortLevels[level] == nil {
+            profile.effortLevels[level] = await probeEffortLevel(level, llm: llm, modelID: modelID, calls: calls)
         }
 
-        profile.callCount = calls.value
-        profile.duration = Date().timeIntervalSince(started)
+        return finish(&profile, calls: calls, started: started)
+    }
+
+    private static func finish(_ profile: inout ModelProfile, calls: ProbeCallCounter, started: Date) -> ModelProfile {
+        profile.callCount += calls.value
+        profile.duration += Date().timeIntervalSince(started)
         return profile
+    }
+
+    /// Whether the endpoint accepts a request at all in this shape — for parameters the normal
+    /// provider path won't emit unless a behavior flag says to (OpenAI's `reasoning_effort`). The
+    /// caller builds an `LLMProvider` whose configuration forces the parameter into the body via
+    /// `extraJSONOverrides` — which merges last and unconditionally, bypassing the flag gate —
+    /// and this just sends and grades.
+    ///
+    /// `established(false)` only when the refusal names one of `rejectionKeywords`; an unrelated
+    /// 4xx stays inconclusive, per the rule that a refusal we provoked is not evidence.
+    public static func probeParameterAcceptance(
+        llm: any LLMProvider,
+        parameterDescription: String,
+        rejectionKeywords: [String],
+        calls: ProbeCallCounter? = nil
+    ) async -> ProbeFinding<Bool> {
+        let started = Date()
+        calls?.increment()
+        do {
+            _ = try await llm.send(messages: [.user("Reply with the single word: ok")], tools: [])
+            return .established(true, "accepted \(parameterDescription)", duration: Date().timeIntervalSince(started))
+        } catch {
+            let detail = CapabilityProbe.rejectionDetail(error)
+            let lowered = detail.lowercased()
+            if CapabilityProbe.classifyFailure(error) != .noAnswer,
+               rejectionKeywords.contains(where: { lowered.contains($0.lowercased()) }) {
+                return .established(false, detail, duration: Date().timeIntervalSince(started))
+            }
+            return .inconclusive(detail, duration: Date().timeIntervalSince(started))
+        }
     }
 
     // MARK: - Combined probe (efficiency)

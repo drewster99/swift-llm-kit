@@ -15,6 +15,15 @@ public struct ModelProfile: Sendable, Codable, Equatable {
     public let modelID: String
     public let probedAt: Date
 
+    /// Identity as the provider reports it — decoded, never probed.
+    public var displayName: String?
+    public var createdAt: Date?
+
+    /// The model's context window. Decoded-only today (Anthropic's `max_input_tokens`, Gemini's
+    /// `inputTokenLimit`): probing it means actually sending a window's worth of tokens, which at
+    /// 1M-context prices is deferred until everything else is finished and proven.
+    public var maxContextTokens: ProbeFinding<Int>
+
     /// Does the chat endpoint accept this model and answer coherently.
     public var chat: ProbeFinding<Bool>
     /// Does it emit a well-formed tool call. The one hard requirement no vendor publishes
@@ -45,6 +54,9 @@ public struct ModelProfile: Sendable, Codable, Equatable {
         providerID: String,
         modelID: String,
         probedAt: Date = Date(),
+        displayName: String? = nil,
+        createdAt: Date? = nil,
+        maxContextTokens: ProbeFinding<Int> = .notAttempted,
         chat: ProbeFinding<Bool> = .notAttempted,
         toolCalling: ProbeFinding<Bool> = .notAttempted,
         toolResultRoundTrip: ProbeFinding<Bool> = .notAttempted,
@@ -59,6 +71,9 @@ public struct ModelProfile: Sendable, Codable, Equatable {
         self.providerID = providerID
         self.modelID = modelID
         self.probedAt = probedAt
+        self.displayName = displayName
+        self.createdAt = createdAt
+        self.maxContextTokens = maxContextTokens
         self.chat = chat
         self.toolCalling = toolCalling
         self.toolResultRoundTrip = toolResultRoundTrip
@@ -96,12 +111,19 @@ public final class ProbeCallCounter: @unchecked Sendable {
 
 // MARK: - Findings
 
-/// One probed fact, with its provenance.
+/// One established (or not-established) fact, with its provenance.
 ///
-/// The distinction that earns this type: **"we asked and it said no" and "we never got an answer"
-/// are different facts**, and a plain `Bool` cannot tell them apart. Collapsing a timeout into
-/// `false` writes a fabricated measurement into data we intend to trust, and nothing downstream
-/// can spot it. So `value` is `nil` unless `status == .established`, and reads as `Bool?`.
+/// Two distinctions earn this type. First: **"we asked and it said no" and "we never got an
+/// answer" are different facts**, and a plain `Bool` cannot tell them apart — collapsing a
+/// timeout into `false` writes a fabricated measurement into data we intend to trust. So `value`
+/// is `nil` unless `status == .established`.
+///
+/// Second: **how we know matters as much as what we know.** A fact decoded from the vendor's own
+/// `/models` payload and a fact established by calling the model are both trustworthy, but they
+/// age differently (decoded facts refresh with the payload; probed facts go stale) and they
+/// disagree differently (a probe contradicting a payload is a finding, not noise). `source`
+/// records which one this is, so a profile can be a complete model record — the decoded facts
+/// carried in for free, probes spent only on the gaps — without flattening the two into one.
 public struct ProbeFinding<Value: Codable & Sendable & Equatable>: Sendable, Codable, Equatable {
     public enum Status: String, Sendable, Codable {
         /// We know. `value` is trustworthy.
@@ -113,6 +135,15 @@ public struct ProbeFinding<Value: Codable & Sendable & Equatable>: Sendable, Cod
         case notAttempted
     }
 
+    /// How the fact was established.
+    public enum Source: String, Sendable, Codable {
+        /// By calling the model and grading what came back.
+        case probed
+        /// Read from the provider's own `/models` payload — the vendor describing its own model,
+        /// believed as given per the governing rule (decode what's published; probe the rest).
+        case decoded
+    }
+
     public var status: Status
     /// Non-nil only when `status == .established`.
     public var value: Value?
@@ -120,16 +151,22 @@ public struct ProbeFinding<Value: Codable & Sendable & Equatable>: Sendable, Cod
     /// supported" and one saying "unknown parameter 'temperature'" are entirely different
     /// findings, and the status code alone loses that.
     public var evidence: String?
+    public var source: Source?
     public var duration: TimeInterval?
 
     public static var notAttempted: Self { .init(status: .notAttempted, value: nil) }
 
     public static func established(_ value: Value, _ evidence: String? = nil, duration: TimeInterval? = nil) -> Self {
-        .init(status: .established, value: value, evidence: evidence, duration: duration)
+        .init(status: .established, value: value, evidence: evidence, source: .probed, duration: duration)
+    }
+
+    /// A fact read out of the provider's `/models` payload rather than established by a call.
+    public static func decoded(_ value: Value, _ evidence: String? = nil) -> Self {
+        .init(status: .established, value: value, evidence: evidence, source: .decoded)
     }
 
     public static func inconclusive(_ reason: String, duration: TimeInterval? = nil) -> Self {
-        .init(status: .inconclusive, value: nil, evidence: reason, duration: duration)
+        .init(status: .inconclusive, value: nil, evidence: reason, source: .probed, duration: duration)
     }
 }
 
