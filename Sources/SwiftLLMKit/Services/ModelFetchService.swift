@@ -101,7 +101,11 @@ public struct ModelFetchService: Sendable {
             decoded = try decodeOllamaModels(from: data, providerID: provider.id)
         case .anthropic:
             decoded = try decodeAnthropicModels(from: data, providerID: provider.id)
-        case .openAICompatible, .lmStudio, .huggingFace, .xAI, .zAI, .metaLlama, .alibabaCloud, .openRouter:
+        case .xAI:
+            decoded = try decodeXAIModels(from: data, providerID: provider.id)
+        case .openRouter:
+            decoded = try decodeOpenRouterModels(from: data, providerID: provider.id)
+        case .openAICompatible, .lmStudio, .huggingFace, .zAI, .metaLlama, .alibabaCloud:
             decoded = try decodeOpenAIModels(from: data, providerID: provider.id)
         case .mistral:
             decoded = try decodeMistralModels(from: data, providerID: provider.id)
@@ -203,9 +207,8 @@ public struct ModelFetchService: Sendable {
             .sorted { $0.modelID < $1.modelID }
     }
 
-    // MARK: - OpenAI Compatible
+    // MARK: - OpenAI Compatible (plain)
 
-    /// Test seam for the shared OpenAI-compatible decoder (xAI routes through it).
     func decodeOpenAIModelsForTesting(from data: Data, providerID: String) throws -> [ModelInfo] {
         try decodeOpenAIModels(from: data, providerID: providerID)
     }
@@ -214,20 +217,141 @@ public struct ModelFetchService: Sendable {
         let decoded = try JSONDecoder().decode(OpenAIModelsResponse.self, from: data)
         return decoded.data
             .map { model in
-                // xAI states these; plain OpenAI-compatible endpoints leave them nil and are
-                // unaffected. A positive image-token price means the model prices — and therefore
-                // accepts — image input, so it's a vendor-stated vision signal, not a LiteLLM
-                // guess. Only set vision to true from it; its absence isn't proof of no vision.
+                ModelInfo(
+                    providerID: providerID,
+                    modelID: model.id,
+                    createdAt: model.created.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+                )
+            }
+            .sorted { $0.modelID < $1.modelID }
+    }
+
+    // MARK: - xAI
+
+    func decodeXAIModelsForTesting(from data: Data, providerID: String) throws -> [ModelInfo] {
+        try decodeXAIModels(from: data, providerID: providerID)
+    }
+
+    /// xAI's `/models` is richer than OpenAI's: a context length, an image-token price (which
+    /// implies vision), and per-token prices. Token prices are in xAI's documented unit — "USD
+    /// cents per 100 million tokens" — so USD-per-token = value / 1e10. See
+    /// https://docs.x.ai/developers/cost-tracking (which also documents `cost_in_usd_ticks`, where
+    /// 1 USD = 1e10 ticks). Prices >= 0 only; xAI uses no sentinel, but guard anyway.
+    private func decodeXAIModels(from data: Data, providerID: String) throws -> [ModelInfo] {
+        // "USD cents per 100 million tokens" -> USD per single token.
+        // Per https://docs.x.ai/developers/cost-tracking.
+        func usdPerToken(_ centsPer100M: Int?) -> Double? {
+            guard let v = centsPer100M, v >= 0 else { return nil }
+            return Double(v) / 1e10
+        }
+
+        let decoded = try JSONDecoder().decode(XAIModelsResponse.self, from: data)
+        return decoded.data
+            .map { model in
+                // A positive image-token price means the model prices — and therefore accepts —
+                // image input: a vendor-stated vision signal, not a LiteLLM guess. Only set true;
+                // absence isn't proof of no vision.
                 var caps = ModelCapabilities()
                 if let imagePrice = model.promptImageTokenPrice, imagePrice > 0 {
                     caps.vision = true
                 }
+
+                var pricing: ModelPricing?
+                let base = PricingTier(
+                    input: usdPerToken(model.promptTextTokenPrice),
+                    output: usdPerToken(model.completionTextTokenPrice),
+                    cacheRead: usdPerToken(model.cachedPromptTextTokenPrice)
+                )
+                if base.hasAnyRate {
+                    var tiers: [TokenThresholdTier] = []
+                    // xAI charges higher rates once the request exceeds long_context_threshold.
+                    if let threshold = model.longContextThreshold {
+                        let longRates = PricingTier(
+                            input: usdPerToken(model.promptTextTokenPriceLongContext),
+                            output: usdPerToken(model.completionTextTokenPriceLongContext),
+                            cacheRead: usdPerToken(model.cachedPromptTextTokenPriceLongContext)
+                        )
+                        if longRates.hasAnyRate {
+                            tiers.append(TokenThresholdTier(tokenThreshold: threshold, rates: longRates))
+                        }
+                    }
+                    pricing = ModelPricing(base: base, tokenThresholdTiers: tiers)
+                }
+
                 return ModelInfo(
                     providerID: providerID,
                     modelID: model.id,
                     createdAt: model.created.map { Date(timeIntervalSince1970: TimeInterval($0)) },
                     maxInputTokens: model.contextLength,
-                    capabilities: caps
+                    capabilities: caps,
+                    pricing: pricing
+                )
+            }
+            .sorted { $0.modelID < $1.modelID }
+    }
+
+    // MARK: - OpenRouter
+
+    func decodeOpenRouterModelsForTesting(from data: Data, providerID: String) throws -> [ModelInfo] {
+        try decodeOpenRouterModels(from: data, providerID: providerID)
+    }
+
+    /// OpenRouter's `/models` is the richest of the OpenAI-compatible family: it states input
+    /// modalities, the parameters each model supports, per-provider limits, and per-token prices.
+    /// All of it is decoded from the vendor rather than guessed. Schema:
+    /// https://openrouter.ai/docs/api-reference/list-available-models
+    private func decodeOpenRouterModels(from data: Data, providerID: String) throws -> [ModelInfo] {
+        let decoded = try JSONDecoder().decode(OpenRouterModelsResponse.self, from: data)
+        return decoded.data
+            .map { model in
+                var caps = ModelCapabilities()
+
+                // input_modalities is an explicit list, so both directions are decodable.
+                let inputs = Set(model.architecture?.inputModalities ?? [])
+                if !inputs.isEmpty {
+                    caps.vision = inputs.contains("image")
+                    caps.pdfInput = inputs.contains("file")
+                    caps.audioInput = inputs.contains("audio")
+                    caps.videoInput = inputs.contains("video")
+                }
+                let outputs = Set(model.architecture?.outputModalities ?? [])
+                if !outputs.isEmpty {
+                    caps.audioOutput = outputs.contains("audio")
+                }
+
+                // supported_parameters names the knobs the model honors.
+                let params = Set(model.supportedParameters ?? [])
+                if !params.isEmpty {
+                    caps.toolUse = params.contains("tools")
+                    caps.toolChoice = params.contains("tool_choice")
+                    caps.parallelToolCalls = params.contains("parallel_tool_calls")
+                    caps.reasoning = params.contains("reasoning") || params.contains("reasoning_effort") || params.contains("include_reasoning")
+                    caps.responseSchema = params.contains("structured_outputs") || params.contains("response_format")
+                    caps.webSearch = params.contains("web_search_options")
+                }
+
+                // pricing: decimal USD-per-token strings ("0.000002"); "-1" marks a variable/auto
+                // route (the auto-router), which has no fixed price.
+                func rate(_ s: String?) -> Double? {
+                    guard let s, let v = Double(s), v >= 0 else { return nil }
+                    return v
+                }
+                var pricing: ModelPricing?
+                if let p = model.pricing {
+                    let base = PricingTier(input: rate(p.prompt), output: rate(p.completion),
+                                           cacheRead: rate(p.inputCacheRead), cacheWrite: rate(p.inputCacheWrite))
+                    if base.hasAnyRate { pricing = ModelPricing(base: base) }
+                }
+
+                return ModelInfo(
+                    providerID: providerID,
+                    modelID: model.id,
+                    displayName: model.name ?? model.id,
+                    createdAt: model.created.map { Date(timeIntervalSince1970: TimeInterval($0)) },
+                    maxInputTokens: model.contextLength,
+                    maxOutputTokens: model.topProvider?.maxCompletionTokens,
+                    capabilities: caps,
+                    pricing: pricing
                 )
             }
             .sorted { $0.modelID < $1.modelID }
@@ -466,17 +590,93 @@ private struct OpenAIModelsResponse: Decodable {
         let id: String
         let created: Int?
         let ownedBy: String?
-        // xAI's /models is richer than OpenAI's and shares this decoder (apiType .xAI routes here).
-        // These are optional so every other OpenAI-compatible provider, which omits them, decodes
-        // unchanged. Prices are left to LiteLLM (verified, and xAI's are in an undocumented "tick"
-        // unit); what's decoded here is what the vendor states unambiguously.
-        let contextLength: Int?
-        let promptImageTokenPrice: Int?
         enum CodingKeys: String, CodingKey {
             case id, created
             case ownedBy = "owned_by"
+        }
+    }
+    let data: [ModelEntry]
+}
+
+/// xAI's `/models` extends the OpenAI shape with a context length, an image-token price (which
+/// implies vision), and per-token prices. Token prices are in xAI's documented unit — "USD cents
+/// per 100 million tokens" — so USD-per-token = value / 1e10. See
+/// https://docs.x.ai/developers/cost-tracking (which also states 1 USD = 1e10 of the
+/// `cost_in_usd_ticks` the API reports per request).
+private struct XAIModelsResponse: Decodable {
+    struct ModelEntry: Decodable {
+        let id: String
+        let created: Int?
+        let contextLength: Int?
+        let promptImageTokenPrice: Int?
+        let promptTextTokenPrice: Int?
+        let completionTextTokenPrice: Int?
+        let cachedPromptTextTokenPrice: Int?
+        let promptTextTokenPriceLongContext: Int?
+        let completionTextTokenPriceLongContext: Int?
+        let cachedPromptTextTokenPriceLongContext: Int?
+        let longContextThreshold: Int?
+        enum CodingKeys: String, CodingKey {
+            case id, created
             case contextLength = "context_length"
             case promptImageTokenPrice = "prompt_image_token_price"
+            case promptTextTokenPrice = "prompt_text_token_price"
+            case completionTextTokenPrice = "completion_text_token_price"
+            case cachedPromptTextTokenPrice = "cached_prompt_text_token_price"
+            case promptTextTokenPriceLongContext = "prompt_text_token_price_long_context"
+            case completionTextTokenPriceLongContext = "completion_text_token_price_long_context"
+            case cachedPromptTextTokenPriceLongContext = "cached_prompt_text_token_price_long_context"
+            case longContextThreshold = "long_context_threshold"
+        }
+    }
+    let data: [ModelEntry]
+}
+
+/// OpenRouter's `/models` states input/output modalities, the parameters each model supports,
+/// per-provider limits, and per-token prices (decimal USD-per-token strings; "-1" = variable).
+/// Schema: https://openrouter.ai/docs/api-reference/list-available-models
+private struct OpenRouterModelsResponse: Decodable {
+    struct Architecture: Decodable {
+        let inputModalities: [String]?
+        let outputModalities: [String]?
+        let modality: String?
+        enum CodingKeys: String, CodingKey {
+            case inputModalities = "input_modalities"
+            case outputModalities = "output_modalities"
+            case modality
+        }
+    }
+    struct Pricing: Decodable {
+        let prompt: String?
+        let completion: String?
+        let inputCacheRead: String?
+        let inputCacheWrite: String?
+        enum CodingKeys: String, CodingKey {
+            case prompt, completion
+            case inputCacheRead = "input_cache_read"
+            case inputCacheWrite = "input_cache_write"
+        }
+    }
+    struct TopProvider: Decodable {
+        let maxCompletionTokens: Int?
+        enum CodingKeys: String, CodingKey {
+            case maxCompletionTokens = "max_completion_tokens"
+        }
+    }
+    struct ModelEntry: Decodable {
+        let id: String
+        let name: String?
+        let created: Int?
+        let contextLength: Int?
+        let architecture: Architecture?
+        let pricing: Pricing?
+        let topProvider: TopProvider?
+        let supportedParameters: [String]?
+        enum CodingKeys: String, CodingKey {
+            case id, name, created, architecture, pricing
+            case contextLength = "context_length"
+            case topProvider = "top_provider"
+            case supportedParameters = "supported_parameters"
         }
     }
     let data: [ModelEntry]

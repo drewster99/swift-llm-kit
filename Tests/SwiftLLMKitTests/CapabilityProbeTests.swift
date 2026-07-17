@@ -510,26 +510,74 @@ struct LimitHintTests {
     }
 }
 
-/// xAI's /models is richer than OpenAI's and shares the same decoder. These pin the two fields we
-/// decode from it, against the real grok-4.5 payload shape (captured 2026-07-17). Other
-/// OpenAI-compatible providers omit them and must decode unchanged.
+/// xAI's /models is richer than OpenAI's and has a dedicated decoder. These pin the fields we
+/// decode from it, against the real grok-4.5 payload shape (captured 2026-07-17).
 @Suite("xAI models decoding")
 struct XAIDecodeTests {
     @Test("context_length becomes maxInputTokens; prompt_image_token_price implies vision")
     func richFieldsDecoded() throws {
         let body = #"{"data":[{"id":"grok-4.5","created":1782691200,"owned_by":"xai","context_length":500000,"prompt_image_token_price":20000,"completion_text_token_price":60000}]}"#
-        let models = try ModelFetchService().decodeOpenAIModelsForTesting(from: Data(body.utf8), providerID: "builtin.xai")
+        let models = try ModelFetchService().decodeXAIModelsForTesting(from: Data(body.utf8), providerID: "builtin.xai")
         let grok = try #require(models.first)
         #expect(grok.maxInputTokens == 500000)
         #expect(grok.capabilities.vision == true)
     }
 
-    @Test("A plain OpenAI payload (no rich fields) decodes unchanged")
+    @Test("Per-token prices decode from the 'USD cents per 100M tokens' unit (value / 1e10)")
+    func pricingDecoded() throws {
+        // 20000 cents-per-100M-tokens -> $0.000002 / token; 60000 -> $0.000006 / token.
+        let body = #"{"data":[{"id":"grok-4.5","context_length":500000,"prompt_text_token_price":20000,"completion_text_token_price":60000,"cached_prompt_text_token_price":5000,"prompt_text_token_price_long_context":30000,"completion_text_token_price_long_context":90000,"long_context_threshold":200000}]}"#
+        let models = try ModelFetchService().decodeXAIModelsForTesting(from: Data(body.utf8), providerID: "builtin.xai")
+        let grok = try #require(models.first)
+        let pricing = try #require(grok.pricing)
+        #expect(pricing.base.input == 0.000002)
+        #expect(pricing.base.output == 0.000006)
+        #expect(pricing.base.cacheRead == 0.0000005)
+        let longTier = try #require(pricing.tokenThresholdTiers.first)
+        #expect(longTier.tokenThreshold == 200000)
+        #expect(longTier.rates.input == 0.000003)
+        #expect(longTier.rates.output == 0.000009)
+    }
+
+    @Test("A plain OpenAI payload decodes with no rich fields")
     func plainOpenAIUnaffected() throws {
         let body = #"{"data":[{"id":"gpt-4o","created":1700000000,"owned_by":"openai"}]}"#
         let models = try ModelFetchService().decodeOpenAIModelsForTesting(from: Data(body.utf8), providerID: "builtin.openai")
         let m = try #require(models.first)
         #expect(m.maxInputTokens == nil)
         #expect(m.capabilities.vision == false)
+    }
+}
+
+/// OpenRouter's /models states modalities, supported params, limits, and pricing. Pinned against
+/// the real payload shape (captured 2026-07-17).
+@Suite("OpenRouter models decoding")
+struct OpenRouterDecodeTests {
+    @Test("Modalities and supported params map onto capabilities")
+    func modalitiesAndParams() throws {
+        let body = #"{"data":[{"id":"anthropic/claude-opus-4.8","name":"Claude Opus 4.8","context_length":2000000,"architecture":{"input_modalities":["text","image","file"],"output_modalities":["text"],"modality":"text+image->text"},"supported_parameters":["tools","tool_choice","reasoning","structured_outputs"],"top_provider":{"max_completion_tokens":128000},"pricing":{"prompt":"0.000005","completion":"0.000025"}}]}"#
+        let models = try ModelFetchService().decodeOpenRouterModelsForTesting(from: Data(body.utf8), providerID: "builtin.openrouter")
+        let m = try #require(models.first)
+        #expect(m.displayName == "Claude Opus 4.8")
+        #expect(m.maxInputTokens == 2000000)
+        #expect(m.maxOutputTokens == 128000)
+        #expect(m.capabilities.vision == true)
+        #expect(m.capabilities.pdfInput == true)
+        #expect(m.capabilities.audioInput == false)
+        #expect(m.capabilities.toolUse == true)
+        #expect(m.capabilities.toolChoice == true)
+        #expect(m.capabilities.reasoning == true)
+        #expect(m.capabilities.responseSchema == true)
+        let pricing = try #require(m.pricing)
+        #expect(pricing.base.input == 0.000005)
+        #expect(pricing.base.output == 0.000025)
+    }
+
+    @Test("Variable pricing ('-1') yields no pricing")
+    func variablePricingSkipped() throws {
+        let body = #"{"data":[{"id":"openrouter/auto","context_length":2000000,"pricing":{"prompt":"-1","completion":"-1"}}]}"#
+        let models = try ModelFetchService().decodeOpenRouterModelsForTesting(from: Data(body.utf8), providerID: "builtin.openrouter")
+        let m = try #require(models.first)
+        #expect(m.pricing == nil)
     }
 }
