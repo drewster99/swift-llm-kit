@@ -82,7 +82,7 @@ public enum ModelProber {
         }
 
 
-        // 3. Tool calling, then the result round-trip. The reason the probe exists.
+        // 2. Tool calling, then the result round-trip. The reason the probe exists.
         let toolResult = await CapabilityProbe.probeToolCalling(
             llm: llm, providerID: providerID, modelID: modelID, calls: calls
         )
@@ -98,7 +98,7 @@ public enum ModelProber {
             }
         }()
 
-        // 4. Vision + PDF — only where the payload didn't already tell us.
+        // 3. Vision + PDF — only where the payload didn't already tell us.
         if skip.contains(.vision) {
             profile.vision = .established(true, "decoded from provider payload")
         } else {
@@ -110,12 +110,12 @@ public enum ModelProber {
             profile.pdfInput = await probePDFInput(llm: llm, modelID: modelID, calls: calls)
         }
 
-        // 5. Max output — one call, learned from the endpoint's own rejection.
+        // 4. Max output — one call, learned from the endpoint's own rejection.
         if !skip.contains(.maxOutputTokens) {
             profile.maxOutputTokens = await probeMaxOutputTokens(llm: llm, modelID: modelID, calls: calls)
         }
 
-        // 6. Effort levels — attempt each caller-supplied level. Only meaningful where the
+        // 5. Effort levels — attempt each caller-supplied level. Only meaningful where the
         //    provider emits the field unconditionally (Anthropic); where emission is gated on a
         //    behavior flag (OpenAI-compatible), a level we haven't flagged is silently dropped, so
         //    a "no error" result there is confirmation, not discovery.
@@ -162,7 +162,7 @@ public enum ModelProber {
             guard detail.lowercased().contains("temperature") else {
                 // Not a temperature problem — chat failed for some other reason, and we learned
                 // nothing about temperature.
-                return (finding(fromError: error, capabilityKeyword: nil, started: started),
+                return (finding(fromError: error, capabilityKeywords: [], started: started),
                         .inconclusive(detail, duration: Date().timeIntervalSince(started)))
             }
             // Temperature is the culprit: settle it false, then re-probe chat without it so the
@@ -188,7 +188,7 @@ public enum ModelProber {
             ], tools: [])
             return chatFinding(response.text, nonce: nonce, started: started)
         } catch {
-            return finding(fromError: error, capabilityKeyword: nil, started: started)
+            return finding(fromError: error, capabilityKeywords: [], started: started)
         }
     }
 
@@ -257,7 +257,7 @@ public enum ModelProber {
             let got = [sawColor ? "colour✓" : "colour✗", sawShape ? "shape✓" : "shape✗"].joined(separator: " ")
             return .established(false, "expected '\(color.name) \(shape.rawValue)' — \(got); said '\(text.prefix(50))'", duration: dur)
         } catch {
-            return finding(fromError: error, capabilityKeyword: "image", started: started)
+            return finding(fromError: error, capabilityKeywords: ["image", "vision"], started: started)
         }
     }
 
@@ -281,7 +281,7 @@ public enum ModelProber {
             }
             return .established(false, "expected '\(code)', said '\(text.prefix(40))'", duration: dur)
         } catch {
-            return finding(fromError: error, capabilityKeyword: "pdf", started: started)
+            return finding(fromError: error, capabilityKeywords: ["pdf", "document", "file content"], started: started)
         }
     }
 
@@ -337,23 +337,21 @@ public enum ModelProber {
     /// capability is a "no", and any other failure is `inconclusive`. The keyword is what lets us
     /// tell "this model can't take images" (a fact) from "our request was malformed" or "the
     /// network dropped" (not facts).
-    private static func finding(fromError error: any Error, capabilityKeyword: String?, started: Date) -> ProbeFinding<Bool> {
+    private static func finding(fromError error: any Error, capabilityKeywords: [String], started: Date) -> ProbeFinding<Bool> {
         let dur = Date().timeIntervalSince(started)
         let detail = CapabilityProbe.rejectionDetail(error)
         switch CapabilityProbe.classifyFailure(error) {
         case .noAnswer:
             return .inconclusive(detail, duration: dur)
         case .refusedTools, .refusedOurRequest:
-            guard let keyword = capabilityKeyword else {
-                // Chat: any 4xx that got this far is the endpoint declining a plain request, which
-                // for chat means "not a usable chat endpoint".
-                return CapabilityProbe.classifyFailure(error) == .noAnswer
-                    ? .inconclusive(detail, duration: dur)
-                    : .established(false, detail, duration: dur)
-            }
-            // A 400 that names the capability ("image", "pdf") is the endpoint saying it can't. A
-            // 400 about something else says nothing about the capability under test.
-            return detail.lowercased().contains(keyword)
+            // Chat (no keywords): any 4xx that got here is the endpoint declining a plain request,
+            // which for chat means "not a usable chat endpoint".
+            guard !capabilityKeywords.isEmpty else { return .established(false, detail, duration: dur) }
+            // A 400 whose text names the capability ("image", "pdf", "file content is not
+            // supported") is the endpoint saying it can't. A 400 about something else says
+            // nothing about the capability under test, so it stays inconclusive.
+            let lowered = detail.lowercased()
+            return capabilityKeywords.contains(where: { lowered.contains($0) })
                 ? .established(false, detail, duration: dur)
                 : .inconclusive(detail, duration: dur)
         }

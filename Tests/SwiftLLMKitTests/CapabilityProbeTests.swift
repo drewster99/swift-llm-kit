@@ -259,3 +259,29 @@ struct ModelProfileTests {
         }
     }
 }
+
+/// The max-output probe reads the true ceiling out of the endpoint's own 400. The two vendors
+/// phrase it oppositely — the number after the phrase (OpenAI) vs before it (Anthropic) — and the
+/// original parser silently missed every Anthropic 400, which is how the probe first reported an
+/// inconclusive max-output for Claude.
+@Suite("Reported max-output-token parsing")
+struct MaxOutputParsingTests {
+
+    @Test("Anthropic phrases the limit BEFORE the word 'maximum'")
+    func anthropicFormat() {
+        let body = #"{"error":{"message":"max_tokens: 100000000 > 64000, which is the maximum allowed number of output tokens for claude-haiku-4-5-20251001"}}"#
+        #expect(LLMProviderError.reportedMaxOutputTokenLimit(inBody: body) == 64000)
+    }
+
+    @Test("OpenAI-style phrases it after")
+    func openAIFormat() {
+        #expect(LLMProviderError.reportedMaxOutputTokenLimit(inBody: "max_tokens exceeds the maximum output tokens (131072)") == 131072)
+        #expect(LLMProviderError.reportedMaxOutputTokenLimit(inBody: "maximum output tokens is 8192") == 8192)
+    }
+
+    @Test("A body that reports no limit yields nil")
+    func noLimit() {
+        #expect(LLMProviderError.reportedMaxOutputTokenLimit(inBody: "rate limit exceeded") == nil)
+        #expect(LLMProviderError.reportedMaxOutputTokenLimit(inBody: "invalid api key") == nil)
+    }
+}

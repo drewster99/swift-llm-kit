@@ -78,25 +78,29 @@ public enum LLMProviderError: Error, LocalizedError {
         return Self.reportedMaxOutputTokenLimit(inBody: body)
     }
 
-    /// Extracts the model's maximum output-token limit from a backend error body, if the
-    /// body reports one. Exposed for callers that hold the raw body rather than an
-    /// `LLMProviderError`. Matches "maximum output tokens (N)" and "maximum output tokens
-    /// is N" (case-insensitive), returning the first such N.
+    /// Extracts the model's maximum output-token limit from a backend error body, if the body
+    /// reports one. Exposed for callers that hold the raw body rather than an `LLMProviderError`.
+    ///
+    /// Providers phrase this two ways, and both are matched (case-insensitive), first hit wins:
+    /// - number AFTER the phrase — OpenAI-style "maximum output tokens (131072)" / "... is 131072";
+    /// - number BEFORE it — Anthropic-style "max_tokens: 100000000 > 64000, which is the maximum
+    ///   allowed number of output tokens for <model>". The earlier regex required the number to
+    ///   follow "maximum output tokens" and so silently missed every Anthropic 400.
     public static func reportedMaxOutputTokenLimit(inBody body: String) -> Int? {
-        guard body.range(of: "maximum output tokens", options: .caseInsensitive) != nil else {
-            return nil
-        }
-        // "... maximum output tokens (131072)" or "... maximum output tokens is 131072"
-        let pattern = "maximum output tokens(?:\\s+is)?\\s*\\(?\\s*(\\d+)"
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
-            return nil
-        }
+        let patterns = [
+            // Anthropic: "... > 64000, which is the maximum allowed number of output tokens ..."
+            "> *(\\d+),? *which is the maximum",
+            // OpenAI-style: "... maximum output tokens (131072)" / "... maximum output tokens is 131072"
+            "maximum(?: allowed(?: number of)?)? output tokens(?: is)? *\\(? *(\\d+)"
+        ]
         let range = NSRange(body.startIndex..<body.endIndex, in: body)
-        guard let match = regex.firstMatch(in: body, options: [], range: range),
-              match.numberOfRanges >= 2,
-              let captureRange = Range(match.range(at: 1), in: body) else {
-            return nil
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+                  let match = regex.firstMatch(in: body, options: [], range: range),
+                  match.numberOfRanges >= 2,
+                  let captureRange = Range(match.range(at: 1), in: body) else { continue }
+            return Int(body[captureRange])
         }
-        return Int(body[captureRange])
+        return nil
     }
 }
