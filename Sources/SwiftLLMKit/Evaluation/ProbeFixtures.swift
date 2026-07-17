@@ -119,6 +119,18 @@ enum ProbeFixtures {
     /// is real vision, not luck. Solid colour alone is too guessable and too easy to fake.
     static let namedShapes: [Shape] = Shape.allCases
 
+    /// The words that count as correctly naming a shape — the shape itself plus the synonyms a
+    /// sighted model legitimately uses. A square filled solid is a rectangle; a circle is round / a
+    /// disc / a dot. Accepting these prevents a fabricated `vision=false` for a model that clearly
+    /// saw the shape but phrased it differently. Matched as whole words, so no substring surprises.
+    static func shapeSynonyms(for shape: Shape) -> Set<String> {
+        switch shape {
+        case .triangle: return ["triangle", "triangular"]
+        case .square:   return ["square", "rectangle", "rectangular", "box"]
+        case .circle:   return ["circle", "circular", "round", "disc", "disk", "dot", "sphere", "ball"]
+        }
+    }
+
     /// A `shape` filled in `color` on a white background. Rasterised with plain pixel tests — no
     /// drawing framework — so the probe carries no CoreGraphics/AppKit dependency.
     static func makeShapePNG(shape: Shape, red: UInt8, green: UInt8, blue: UInt8, size: Int = 128) -> Data {

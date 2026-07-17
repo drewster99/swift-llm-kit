@@ -237,11 +237,13 @@ public enum CapabilityProbe {
     /// about a flagship model, produced entirely by our own request.
     ///
     /// 429 is `noAnswer` too: rate limiting means the endpoint is busy, not that the model is
-    /// incapable.
+    /// incapable. 404 likewise: a "not found" is a missing model or wrong endpoint (gone /
+    /// Responses-only), never the model answering "I can't do that" — that's a 400. Grading a 404
+    /// as a capability `false` would fabricate a "no" for a model that simply isn't reachable here.
     static func classifyFailure(_ error: any Error) -> FailureKind {
         guard let providerError = error as? LLMProviderError,
               case .httpError(let statusCode, let body, _, _) = providerError,
-              (400..<500).contains(statusCode), statusCode != 429 else {
+              (400..<500).contains(statusCode), statusCode != 429, statusCode != 404 else {
             return .noAnswer
         }
         let lowered = body.lowercased()

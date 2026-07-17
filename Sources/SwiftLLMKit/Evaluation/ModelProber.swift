@@ -119,6 +119,7 @@ public enum ModelProber {
         //    call with temperature: 0 settles both. Only a temperature rejection costs a second,
         //    temperature-free call. If chat can't be reached at all, every later probe fails the
         //    same way — stop once.
+        let callsBeforeStep1 = calls.value
         if profile.chat.status == .notAttempted {
             let combined = await probeChatAndTemperature(llm: llm, modelID: modelID, calls: calls)
             profile.chat = combined.chat
@@ -127,19 +128,25 @@ public enum ModelProber {
             // Chat came decoded; temperature still needs its own (cheap) probe.
             profile.acceptsTemperature = await probeTemperature(llm: llm, modelID: modelID, calls: calls)
         }
+        let madeLiveCall = calls.value > callsBeforeStep1
+
         // Reachability gate. A decoded chat=true is a claim, not proof: a model can be retired while
         // still listed (Gemini keeps returning gemini-2.0-flash-lite in /models long after every
         // call 404s "no longer available"), or listed but not enabled for this account (Alibaba
-        // Cloud's Model.AccessDenied). Step 1 just made a live call — if it, or the chat reading,
-        // reports either, mark the specific reason and stop. Otherwise everything downstream would
-        // grade an unreachable model and write fabricated `false`s.
-        let step1Evidence = [profile.chat, profile.acceptsTemperature].compactMap(\.evidence)
-        if let gone = step1Evidence.first(where: CapabilityProbe.textIndicatesModelGone) {
+        // Cloud's Model.AccessDenied). Scan ONLY the evidence of FAILED (inconclusive) step-1
+        // findings: a successful chat reply is echoed back into its evidence string, and a rambling
+        // model that says "does not exist" / "model access" in that reply must not be read as gone/
+        // denied — the call succeeded, so the model is reachable. Error bodies are the only place
+        // these phrases mean what they say.
+        let failedEvidence = [profile.chat, profile.acceptsTemperature]
+            .filter { $0.status == .inconclusive }
+            .compactMap(\.evidence)
+        if let gone = failedEvidence.first(where: CapabilityProbe.textIndicatesModelGone) {
             profile.isAvailable = .established(false, gone)
             logger.error("Probe \(modelID, privacy: .public): model unavailable — halting")
             return finish(&profile, calls: calls, started: started)
         }
-        if let denied = step1Evidence.first(where: CapabilityProbe.textIndicatesAccessDenied) {
+        if let denied = failedEvidence.first(where: CapabilityProbe.textIndicatesAccessDenied) {
             profile.isAccessDenied = .established(true, denied)
             logger.error("Probe \(modelID, privacy: .public): access denied — halting")
             return finish(&profile, calls: calls, started: started)
@@ -152,10 +159,12 @@ public enum ModelProber {
             // Not a chat model. Tool calling and the rest are meaningless.
             return finish(&profile, calls: calls, started: started)
         }
-        // The model answered a live call and is reachable — record it available and access-granted,
-        // upgrading the decoded "listed in /models" presumption to probed facts.
-        profile.isAvailable = .established(true, "responded to a live call")
-        profile.isAccessDenied = .established(false, "responded to a live call")
+        // The model is reachable. Only claim "responded to a live call" when we actually made one —
+        // a fully pre-seeded profile reaches here without any request, so don't fabricate evidence.
+        if madeLiveCall {
+            profile.isAvailable = .established(true, "responded to a live call")
+            profile.isAccessDenied = .established(false, "responded to a live call")
+        }
 
         // 2. Tool calling, then the result round-trip. The reason the probe exists.
         if profile.toolCalling.status == .notAttempted || profile.toolResultRoundTrip.status == .notAttempted {
@@ -360,8 +369,7 @@ public enum ModelProber {
             ], tools: [])
             let text = (response.text ?? "").lowercased()
             let dur = Date().timeIntervalSince(started)
-            let sawColor = text.contains(color.name)
-            let sawShape = text.contains(shape.rawValue)
+            let (sawColor, sawShape) = gradeVisionAnswer(text, colorName: color.name, shape: shape)
             if sawColor && sawShape {
                 return .established(true, "named '\(color.name) \(shape.rawValue)'", duration: dur)
             }
@@ -373,6 +381,15 @@ public enum ModelProber {
         } catch {
             return attachmentRejection(error, attachment: "image", started: started)
         }
+    }
+
+    /// Grades a vision answer by WHOLE WORDS, not substrings. "red" must not match "colo(red)", and
+    /// a shape named with a legitimate synonym ("box"/"rectangle" for a square, "round"/"disc" for a
+    /// circle) still counts as seen — otherwise a sighted model that phrases it differently would be
+    /// recorded `vision=false`, a fabricated negative. Exposed for testing.
+    static func gradeVisionAnswer(_ text: String, colorName: String, shape: ProbeFixtures.Shape) -> (sawColor: Bool, sawShape: Bool) {
+        let words = Set(text.lowercased().split { !$0.isLetter }.map(String.init))
+        return (words.contains(colorName), !words.isDisjoint(with: ProbeFixtures.shapeSynonyms(for: shape)))
     }
 
     /// Whether the model reads a PDF. Sends a one-page document showing a random code and asks for
@@ -515,6 +532,21 @@ public enum ModelProber {
             } catch {
                 return CapabilityProbe.classifyFailure(error) == .noAnswer ? nil : false
             }
+        }
+
+        // Verify the assumed floor before trusting it. Every value the search later reports is one
+        // it saw accepted — EXCEPT this initial `low`, which no midpoint ever re-tests (mid is always
+        // > low). If the model's real ceiling is below `knownGood`, returning `low` would be a value
+        // ABOVE the true ceiling — the one thing a clamp must never do (it 400s in production). So if
+        // the floor itself is rejected, we have no verified-accepted value and report inconclusive.
+        switch await accepts(low) {
+        case .some(true): break
+        case .some(false):
+            return .inconclusive("rejected even the floor max_tokens=\(low); ceiling is below it, not established",
+                                 duration: Date().timeIntervalSince(started))
+        case .none:
+            return .inconclusive("transport failure verifying the floor max_tokens=\(low)",
+                                 duration: Date().timeIntervalSince(started))
         }
 
         // "Close enough" once the remaining gap is under ~0.5% of the live floor (min 2), since the

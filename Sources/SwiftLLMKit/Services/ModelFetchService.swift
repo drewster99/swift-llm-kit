@@ -262,9 +262,9 @@ public struct ModelFetchService: Sendable {
     private func decodeXAIModels(from data: Data, providerID: String) throws -> [ModelInfo] {
         // "USD cents per 100 million tokens" -> USD per single token.
         // Per https://docs.x.ai/developers/cost-tracking.
-        func usdPerToken(_ centsPer100M: Int?) -> Double? {
+        func usdPerToken(_ centsPer100M: Double?) -> Double? {
             guard let v = centsPer100M, v >= 0 else { return nil }
-            return Double(v) / 1e10
+            return v / 1e10
         }
 
         let decoded = try JSONDecoder().decode(XAIModelsResponse.self, from: data)
@@ -525,8 +525,10 @@ public struct ModelFetchService: Sendable {
                     ? String(model.name.dropFirst("models/".count))
                     : model.name
 
-                let methods = model.supportedGenerationMethods ?? []
-                let supportsChat = methods.contains("generateContent")
+                // When the methods list is present, "generateContent" distinguishes chat models
+                // from embedding/image ones. When it's ABSENT we don't know, so fall back to the
+                // codebase's true-by-default convention rather than silently hiding the model.
+                let supportsChat = model.supportedGenerationMethods.map { $0.contains("generateContent") } ?? true
 
                 var caps = ModelCapabilities()
                 caps.reasoning = model.thinking ?? false
@@ -751,13 +753,16 @@ private struct XAIModelsResponse: Decodable {
         let id: String
         let created: Int?
         let contextLength: Int?
-        let promptImageTokenPrice: Int?
-        let promptTextTokenPrice: Int?
-        let completionTextTokenPrice: Int?
-        let cachedPromptTextTokenPrice: Int?
-        let promptTextTokenPriceLongContext: Int?
-        let completionTextTokenPriceLongContext: Int?
-        let cachedPromptTextTokenPriceLongContext: Int?
+        // Prices typed Double, not Int: xAI currently emits integer "cents per 100M tokens", but a
+        // single fractional value would otherwise throw and fail the ENTIRE catalog fetch. Double
+        // costs nothing (they feed a Double conversion anyway) and is strictly safer.
+        let promptImageTokenPrice: Double?
+        let promptTextTokenPrice: Double?
+        let completionTextTokenPrice: Double?
+        let cachedPromptTextTokenPrice: Double?
+        let promptTextTokenPriceLongContext: Double?
+        let completionTextTokenPriceLongContext: Double?
+        let cachedPromptTextTokenPriceLongContext: Double?
         let longContextThreshold: Int?
         enum CodingKeys: String, CodingKey {
             case id, created

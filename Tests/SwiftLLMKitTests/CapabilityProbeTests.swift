@@ -53,7 +53,15 @@ struct CapabilityProbeGradingTests {
             httpError(400, #"{"error":{"message":"`temperature` is deprecated for this model."}}"#))
             == .refusedOurRequest)
         #expect(CapabilityProbe.classifyFailure(httpError(401, "invalid x-api-key")) == .refusedOurRequest)
-        #expect(CapabilityProbe.classifyFailure(httpError(404, "model not found")) == .refusedOurRequest)
+    }
+
+    /// A 404 is "model missing / wrong endpoint", never the model answering "I can't" (that's a
+    /// 400). Grading it as a capability answer would fabricate a `false` for a model that simply
+    /// isn't reachable here (retired, or Responses-API-only).
+    @Test("404 is noAnswer, not a capability answer")
+    func notFoundIsNoAnswer() {
+        #expect(CapabilityProbe.classifyFailure(httpError(404, "model not found")) == .noAnswer)
+        #expect(CapabilityProbe.classifyFailure(httpError(404, "")) == .noAnswer)
     }
 
     /// Rate limiting says the endpoint is busy, not that the model is incapable. Reading it as a
@@ -465,19 +473,33 @@ struct MaxOutputBinarySearchTests {
         #expect(finding.value == nil)
     }
 
-    @Test("A rate-limit one step from convergence salvages the latest success as established")
+    @Test("A rate-limit one step from convergence salvages the latest CONFIRMED success")
     func salvagesNearConvergence() async {
-        // Always 429s. With the interval already narrow (gap 1000 < max(500, low/100)=1300), the
-        // interruption should NOT throw away the latest known-good value — it reports it established.
-        struct RateLimited: LLMProvider {
+        // Accepts up to 130_200, then 429s above it (a rate-limit as the search closes in). The floor
+        // (130_000) is confirmed accepted; the next probe (130_500) 429s while the gap is already
+        // narrow, so the latest confirmed-good value is salvaged rather than discarded.
+        struct RateLimitedAboveCeiling: LLMProvider {
             func send(messages: [LLMMessage], tools: [LLMToolDefinition], overrides: LLMCallOverrides) async throws -> LLMResponse {
-                throw LLMProviderError.httpError(statusCode: 429, body: "rate limited", url: nil, retryAfter: nil)
+                if (overrides.maxOutputTokens ?? 0) > 130_200 {
+                    throw LLMProviderError.httpError(statusCode: 429, body: "rate limited", url: nil, retryAfter: nil)
+                }
+                return LLMResponse(text: "ok", toolCalls: [], reasoning: nil, usage: nil, continuation: nil)
             }
         }
         let finding = await ModelProber.binarySearchMaxOutput(
-            llm: RateLimited(), knownGood: 130_000, knownBad: 131_000, calls: nil, started: Date())
+            llm: RateLimitedAboveCeiling(), knownGood: 130_000, knownBad: 131_000, calls: nil, started: Date())
         #expect(finding.status == .established)
-        #expect(finding.value == 130_000)
+        #expect(finding.value == 130_000)   // the confirmed floor, salvaged on the 429
+    }
+
+    @Test("If the model rejects even the floor, the ceiling is NOT reported (never above true)")
+    func rejectsFloorStaysInconclusive() async {
+        // Real cap is 300 — below the assumed 512 floor. The search must not report 512 (that would
+        // be a value above the true ceiling, causing production 400s); it reports inconclusive.
+        let finding = await ModelProber.binarySearchMaxOutput(
+            llm: CeilingProvider(ceiling: 300), knownGood: 512, knownBad: 100_000_000, calls: nil, started: Date())
+        #expect(finding.status == .inconclusive)
+        #expect(finding.value == nil)
     }
 
     @Test("A rate-limit while still far from convergence stays inconclusive")
@@ -847,5 +869,28 @@ struct OllamaDecodeTests {
         let m = try #require(try ModelFetchService().decodeOllamaModelsForTesting(from: Data(body.utf8), providerID: "builtin.ollama-cloud").first)
         #expect(m.maxInputTokens == nil)          // cloud omits context
         #expect(m.sizeLabel != nil)               // byte-size fallback
+    }
+}
+
+/// Vision grading matches whole words and accepts shape synonyms — closing the "colored"⊃"red"
+/// false positive and the "square"→"box" false negative the review found.
+@Suite("Vision answer grading")
+struct VisionGradingTests {
+    @Test("'colored' does not count as 'red'; a real 'red square' does")
+    func wholeWordColor() {
+        // "a colored square" — 'red' is only a substring of 'colored', so colour must NOT match.
+        let miss = ModelProber.gradeVisionAnswer("a colored square", colorName: "red", shape: .square)
+        #expect(miss.sawColor == false)
+        let hit = ModelProber.gradeVisionAnswer("a red square", colorName: "red", shape: .square)
+        #expect(hit.sawColor && hit.sawShape)
+    }
+
+    @Test("Shape synonyms count as seeing the shape")
+    func shapeSynonyms() {
+        #expect(ModelProber.gradeVisionAnswer("a blue box", colorName: "blue", shape: .square).sawShape)
+        #expect(ModelProber.gradeVisionAnswer("a round green thing", colorName: "green", shape: .circle).sawShape)
+        #expect(ModelProber.gradeVisionAnswer("a yellow rectangle", colorName: "yellow", shape: .square).sawShape)
+        // A wrong shape word is still a miss.
+        #expect(ModelProber.gradeVisionAnswer("a red circle", colorName: "red", shape: .triangle).sawShape == false)
     }
 }

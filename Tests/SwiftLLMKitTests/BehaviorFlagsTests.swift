@@ -231,6 +231,28 @@ struct ModelInfoBehaviorFlagsCodableTests {
                 "ModelInfo must skip encoding behaviorFlags when isAllDefault to keep on-disk JSON small")
     }
 
+    @Test("round-trip preserves every metadata-audit field")
+    func roundTripPreservesAllNewFields() throws {
+        let original = ModelInfo(
+            providerID: "p", modelID: "m", displayName: "M",
+            maxInputTokens: 200_000, maxOutputTokens: 64_000,
+            pricing: ModelPricing(base: PricingTier(input: 0.000005, output: 0.000025)),
+            validEffortLevels: ["low", "medium", "high"],
+            deprecatedOn: Date(timeIntervalSince1970: 1_788_177_600),
+            deprecationReplacement: "m2",
+            maxTemperature: 2,
+            modelDescription: "a model",
+            samplingDefaults: SamplingDefaults(temperature: 0.7, topP: 0.9, topK: 40, repetitionPenalty: 1.1),
+            isFree: false,
+            benchmarks: ModelBenchmarks(
+                artificialAnalysis: .init(intelligenceIndex: 57.1, codingIndex: 76.2, agenticIndex: 50.1),
+                designArena: [.init(arena: "agents", category: "gamedev", elo: 1200, rank: 7, winRate: 47.8)]),
+            huggingFaceID: "org/M"
+        )
+        let decoded = try JSONDecoder().decode(ModelInfo.self, from: JSONEncoder().encode(original))
+        #expect(decoded == original, "a full ModelInfo must survive an encode/decode round-trip unchanged")
+    }
+
     @Test("decoding ModelInfo without behaviorFlags falls back to defaults")
     func legacyJSONDecodesWithDefaults() throws {
         let legacyJSON = """

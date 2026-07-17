@@ -122,9 +122,12 @@ public struct ModelPricing: Codable, Sendable, Equatable {
     ) -> PricingTier {
         var resolved = base
 
-        // Apply the highest matching threshold tier.
+        // Apply the highest matching threshold tier. Sort here rather than trust stored order: the
+        // memberwise init sorts, but the *synthesized* Codable init does not, so a decoded pricing
+        // blob can carry tiers in any order — and this loop is last-wins, so an unsorted list would
+        // apply a lower threshold's rates last and misprice. Tiers are 0–2 entries; the sort is free.
         if let inputTokens = totalInputTokens {
-            for tier in tokenThresholdTiers where inputTokens > tier.tokenThreshold {
+            for tier in tokenThresholdTiers.sorted() where inputTokens > tier.tokenThreshold {
                 if let v = tier.rates.input { resolved.input = v }
                 if let v = tier.rates.output { resolved.output = v }
                 if let v = tier.rates.cacheRead { resolved.cacheRead = v }
