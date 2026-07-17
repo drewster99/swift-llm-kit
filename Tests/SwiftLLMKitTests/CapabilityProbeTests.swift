@@ -123,3 +123,31 @@ struct CapabilityProbeGradingTests {
         .httpError(statusCode: code, body: body, url: nil, retryAfter: nil)
     }
 }
+
+/// Behavior flags describe how to form a valid request. When one is missing the request is
+/// malformed, and a malformed request fails in ways that look exactly like a capability failure —
+/// which is how a probe came to record "claude-fable-5 cannot call tools".
+@Suite("Model request constraints")
+struct ModelRequestConstraintTests {
+
+    /// claude-fable-5 answers `temperature` with HTTP 400 ("deprecated for this model"), verified
+    /// live against api.anthropic.com. ModelConfiguration defaults temperature to 0.7 and
+    /// AnthropicProvider sends it unless this flag says not to, so without the flag EVERY request
+    /// to this model fails. Not a preference — the model is unusable without it.
+    @Test("claude-fable-5 must never be sent temperature")
+    func fableFiveRejectsTemperature() {
+        let registry = BundledModelMetadataRegistry.load()
+        let override = registry.override(providerAPIType: "anthropic", modelID: "claude-fable-5")
+        #expect(override?.behaviorFlags?.mustNeverSendTemperatureParam == true,
+                "claude-fable-5 needs mustNeverSendTemperatureParam or every request 400s")
+    }
+
+    /// Verified live in the same run: haiku accepted temperature: 0 and completed the round trip.
+    /// The flag is per-model precisely because it does not generalise across a vendor's lineup.
+    @Test("The constraint is per-model, not per-vendor")
+    func constraintIsPerModel() {
+        let registry = BundledModelMetadataRegistry.load()
+        let haiku = registry.override(providerAPIType: "anthropic", modelID: "claude-haiku-4-5-20251001")
+        #expect(haiku?.behaviorFlags?.mustNeverSendTemperatureParam != true)
+    }
+}

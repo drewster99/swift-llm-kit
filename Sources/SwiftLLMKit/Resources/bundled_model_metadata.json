@@ -50,6 +50,10 @@
         "anthropic/claude-opus-4-8": {
             "behaviorFlags": { "requiresAdaptiveThinking": true }
         },
+        "anthropic/claude-fable-5": {
+            "_evidence": "Live 400 from api.anthropic.com on 2026-07-16: '`temperature` is deprecated for this model.' Without this flag AnthropicProvider sends ModelConfiguration's default temperature (0.7) and EVERY request to this model fails. Both provider branches send temperature — the thinking-on branch sends 1.0 — so this flag is the only escape.",
+            "behaviorFlags": { "mustNeverSendTemperatureParam": true }
+        },
 
         "openAICompatible/o1": {
             "behaviorFlags": { "supportsReasoningEffort": true, "mustNeverSendTemperatureParam": true }
