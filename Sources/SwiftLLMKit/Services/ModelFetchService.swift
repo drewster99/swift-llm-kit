@@ -105,7 +105,9 @@ public struct ModelFetchService: Sendable {
             decoded = try decodeXAIModels(from: data, providerID: provider.id)
         case .openRouter:
             decoded = try decodeOpenRouterModels(from: data, providerID: provider.id)
-        case .openAICompatible, .lmStudio, .huggingFace, .zAI, .metaLlama, .alibabaCloud:
+        case .huggingFace:
+            decoded = try decodeHuggingFaceModels(from: data, providerID: provider.id)
+        case .openAICompatible, .lmStudio, .zAI, .metaLlama, .alibabaCloud:
             decoded = try decodeOpenAIModels(from: data, providerID: provider.id)
         case .mistral:
             decoded = try decodeMistralModels(from: data, providerID: provider.id)
@@ -217,10 +219,20 @@ public struct ModelFetchService: Sendable {
         let decoded = try JSONDecoder().decode(OpenAIModelsResponse.self, from: data)
         return decoded.data
             .map { model in
-                ModelInfo(
+                // `context_length` and `prompt_image_token_price` are common OpenAI-compatible
+                // extensions many providers emit and plain OpenAI omits. Decode them when present —
+                // a positive image-token price is a vendor-stated vision signal — and leave every
+                // provider that omits them decoding exactly as before (nil / false).
+                var caps = ModelCapabilities()
+                if let imagePrice = model.promptImageTokenPrice, imagePrice > 0 {
+                    caps.vision = true
+                }
+                return ModelInfo(
                     providerID: providerID,
                     modelID: model.id,
-                    createdAt: model.created.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+                    createdAt: model.created.map { Date(timeIntervalSince1970: TimeInterval($0)) },
+                    maxInputTokens: model.contextLength,
+                    capabilities: caps
                 )
             }
             .sorted { $0.modelID < $1.modelID }
@@ -353,6 +365,72 @@ public struct ModelFetchService: Sendable {
                     capabilities: caps,
                     pricing: pricing
                 )
+            }
+            .sorted { $0.modelID < $1.modelID }
+    }
+
+    // MARK: - HuggingFace
+
+    func decodeHuggingFaceModelsForTesting(from data: Data, providerID: String) throws -> [ModelInfo] {
+        try decodeHuggingFaceModels(from: data, providerID: providerID)
+    }
+
+    /// HuggingFace's router lists several concrete inference providers per model, each with its own
+    /// context length, tool/structured-output support, and pricing. Because those genuinely differ
+    /// per provider — and the meta-routers (`auto`/`cheapest`/`fastest`/`preferred`) aren't listed
+    /// and can change per request — we enumerate one model per concrete provider, keyed
+    /// `org/model:provider` (HF's documented routing suffix). Providers with no usable data are
+    /// skipped rather than given fabricated defaults, and no meta entry is synthesized.
+    /// Pricing is USD per million tokens, so USD-per-token = value / 1e6.
+    private func decodeHuggingFaceModels(from data: Data, providerID: String) throws -> [ModelInfo] {
+        // USD per million tokens -> USD per single token.
+        func usdPerToken(_ perMillion: Double?) -> Double? {
+            guard let v = perMillion, v >= 0 else { return nil }
+            return v / 1_000_000
+        }
+
+        let decoded = try JSONDecoder().decode(HuggingFaceModelsResponse.self, from: data)
+        return decoded.data
+            .flatMap { model -> [ModelInfo] in
+                // Modalities are stated at the model level and shared by every provider.
+                var modalityCaps = ModelCapabilities()
+                let inputs = Set(model.architecture?.inputModalities ?? [])
+                if !inputs.isEmpty {
+                    modalityCaps.vision = inputs.contains("image")
+                    modalityCaps.pdfInput = inputs.contains("file")
+                    modalityCaps.audioInput = inputs.contains("audio")
+                    modalityCaps.videoInput = inputs.contains("video")
+                }
+                let outputs = Set(model.architecture?.outputModalities ?? [])
+                if !outputs.isEmpty {
+                    modalityCaps.audioOutput = outputs.contains("audio")
+                }
+                let createdAt = model.created.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+
+                return (model.providers ?? [])
+                    .filter { $0.status == "live" && $0.hasUsableData }
+                    .map { entry in
+                        // Start from the shared modalities; layer this provider's own capabilities.
+                        var caps = modalityCaps
+                        if entry.supportsTools == true { caps.toolUse = true }
+                        if entry.supportsStructuredOutput == true { caps.responseSchema = true }
+
+                        var pricing: ModelPricing?
+                        if let p = entry.pricing {
+                            let base = PricingTier(input: usdPerToken(p.input), output: usdPerToken(p.output))
+                            if base.hasAnyRate { pricing = ModelPricing(base: base) }
+                        }
+
+                        return ModelInfo(
+                            providerID: providerID,
+                            modelID: "\(model.id):\(entry.provider)",
+                            displayName: "\(model.id) (\(entry.provider))",
+                            createdAt: createdAt,
+                            maxInputTokens: entry.contextLength,
+                            capabilities: caps,
+                            pricing: pricing
+                        )
+                    }
             }
             .sorted { $0.modelID < $1.modelID }
     }
@@ -590,9 +668,14 @@ private struct OpenAIModelsResponse: Decodable {
         let id: String
         let created: Int?
         let ownedBy: String?
+        // Common OpenAI-compatible extensions; nil for endpoints (incl. plain OpenAI) that omit them.
+        let contextLength: Int?
+        let promptImageTokenPrice: Int?
         enum CodingKeys: String, CodingKey {
             case id, created
             case ownedBy = "owned_by"
+            case contextLength = "context_length"
+            case promptImageTokenPrice = "prompt_image_token_price"
         }
     }
     let data: [ModelEntry]
@@ -678,6 +761,58 @@ private struct OpenRouterModelsResponse: Decodable {
             case topProvider = "top_provider"
             case supportedParameters = "supported_parameters"
         }
+    }
+    let data: [ModelEntry]
+}
+
+/// HuggingFace's router `/models` lists, per model, an array of concrete inference providers —
+/// each with its own context length, tool/structured-output support, and pricing. There is no
+/// single set of capabilities for a bare model ID: the same model varies 4× in context and flips
+/// tool/schema support across providers, and the meta-routers (`auto`/`cheapest`/`fastest`/
+/// `preferred`) aren't even listed here — you only learn which concrete provider served a request
+/// from the response after the fact, and being meta they can change between requests. So we
+/// enumerate each concrete provider as its own model (`org/model:provider`, HF's documented routing
+/// suffix) and never synthesize a meta entry. Pricing is USD per million tokens.
+/// Schema: https://huggingface.co/docs/inference-providers
+private struct HuggingFaceModelsResponse: Decodable {
+    struct Architecture: Decodable {
+        let inputModalities: [String]?
+        let outputModalities: [String]?
+        enum CodingKeys: String, CodingKey {
+            case inputModalities = "input_modalities"
+            case outputModalities = "output_modalities"
+        }
+    }
+    struct Pricing: Decodable {
+        let input: Double?
+        let output: Double?
+    }
+    struct Provider: Decodable {
+        let provider: String
+        let status: String?
+        let contextLength: Int?
+        let pricing: Pricing?
+        let supportsTools: Bool?
+        let supportsStructuredOutput: Bool?
+        enum CodingKeys: String, CodingKey {
+            case provider, status, pricing
+            case contextLength = "context_length"
+            case supportsTools = "supports_tools"
+            case supportsStructuredOutput = "supports_structured_output"
+        }
+
+        /// Whether this entry carries anything worth enumerating. A provider that lists only a
+        /// name and `is_free` tells us nothing about the model — skip it rather than fabricate
+        /// defaults for it.
+        var hasUsableData: Bool {
+            contextLength != nil || pricing != nil || supportsTools != nil || supportsStructuredOutput != nil
+        }
+    }
+    struct ModelEntry: Decodable {
+        let id: String
+        let created: Int?
+        let architecture: Architecture?
+        let providers: [Provider]?
     }
     let data: [ModelEntry]
 }

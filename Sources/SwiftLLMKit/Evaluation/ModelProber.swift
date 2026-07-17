@@ -141,6 +141,16 @@ public enum ModelProber {
             }()
         }
 
+        // Tool calling is the capability this whole system exists to establish, and a model that
+        // demonstrably can't call tools is one we will ultimately discard — so there's no value in
+        // spending the remaining calls (vision, PDF, max-output binary search, effort) on it. Stop
+        // as soon as tool calling is *established* false. Inconclusive keeps going: not knowing is
+        // not the same as a "no", and the later probes may still be worth their calls.
+        if profile.toolCalling.value == false {
+            logger.info("Probe \(modelID, privacy: .public): tool calling unsupported — skipping remaining probes")
+            return finish(&profile, calls: calls, started: started)
+        }
+
         // 3. Vision + PDF — only where the payload didn't already say.
         if profile.vision.status == .notAttempted {
             profile.vision = await probeVision(llm: llm, modelID: modelID, calls: calls)
@@ -466,13 +476,24 @@ public enum ModelProber {
 
         // "Close enough" once the remaining gap is under ~0.5% of the live floor (min 2), since the
         // result only clamps an output cap. Converges to the exact integer for small ceilings and
-        // stops a few calls early for large ones.
+        // stops a few calls early for large ones. This proportional rule also IS the "don't refine
+        // below ~500 tokens" behavior for large ceilings — low/200 ≥ 500 exactly once low ≥ 100k —
+        // so big models stop with ~500-token slack while small models still converge exactly.
         while high - low > max(2, low / 200) && steps < stepCap {
             let mid = low + (high - low) / 2
             switch await accepts(mid) {
             case .some(true):  low = mid          // ceiling ≥ mid → search the upper half
             case .some(false): high = mid         // ceiling < mid → search the lower half
             case .none:
+                // A transport failure (429/timeout) interrupted the next probe. If the search had
+                // already narrowed to within ~1% (or 500 tokens) of the ceiling, the latest
+                // accepted value is a usable answer — don't discard it as inconclusive just because
+                // the endpoint rate-limited us one step from done. A search still far from
+                // converging stays inconclusive.
+                if high - low <= max(500, low / 100) {
+                    return .established(low, "converged to \(low) before a transport interruption (\(steps) calls, gap \(high - low))",
+                                        duration: Date().timeIntervalSince(started))
+                }
                 return .inconclusive("binary search interrupted after \(steps) steps (narrowed to \(low)–\(high))",
                                      duration: Date().timeIntervalSince(started))
             }

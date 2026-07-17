@@ -464,6 +464,34 @@ struct MaxOutputBinarySearchTests {
         #expect(finding.status == .inconclusive)
         #expect(finding.value == nil)
     }
+
+    @Test("A rate-limit one step from convergence salvages the latest success as established")
+    func salvagesNearConvergence() async {
+        // Always 429s. With the interval already narrow (gap 1000 < max(500, low/100)=1300), the
+        // interruption should NOT throw away the latest known-good value — it reports it established.
+        struct RateLimited: LLMProvider {
+            func send(messages: [LLMMessage], tools: [LLMToolDefinition], overrides: LLMCallOverrides) async throws -> LLMResponse {
+                throw LLMProviderError.httpError(statusCode: 429, body: "rate limited", url: nil, retryAfter: nil)
+            }
+        }
+        let finding = await ModelProber.binarySearchMaxOutput(
+            llm: RateLimited(), knownGood: 130_000, knownBad: 131_000, calls: nil, started: Date())
+        #expect(finding.status == .established)
+        #expect(finding.value == 130_000)
+    }
+
+    @Test("A rate-limit while still far from convergence stays inconclusive")
+    func stillInconclusiveWhenFar() async {
+        struct RateLimited: LLMProvider {
+            func send(messages: [LLMMessage], tools: [LLMToolDefinition], overrides: LLMCallOverrides) async throws -> LLMResponse {
+                throw LLMProviderError.httpError(statusCode: 429, body: "rate limited", url: nil, retryAfter: nil)
+            }
+        }
+        let finding = await ModelProber.binarySearchMaxOutput(
+            llm: RateLimited(), knownGood: 512, knownBad: 100_000_000, calls: nil, started: Date())
+        #expect(finding.status == .inconclusive)
+        #expect(finding.value == nil)
+    }
 }
 
 
@@ -579,5 +607,62 @@ struct OpenRouterDecodeTests {
         let models = try ModelFetchService().decodeOpenRouterModelsForTesting(from: Data(body.utf8), providerID: "builtin.openrouter")
         let m = try #require(models.first)
         #expect(m.pricing == nil)
+    }
+}
+
+/// HuggingFace's router lists concrete providers per model, each with its own caps/context/pricing.
+/// Pinned against the real GLM-5.2 payload shape (captured 2026-07-17).
+@Suite("HuggingFace models decoding")
+struct HuggingFaceDecodeTests {
+    // One model, several providers: context varies 4×, structured-output flips, one provider
+    // carries no usable data (must be skipped), and the meta-routers are absent by design.
+    static let glmBody = #"""
+    {"data":[{"id":"zai-org/GLM-5.2","created":1781595560,"owned_by":"zai-org",
+      "architecture":{"input_modalities":["text","image"],"output_modalities":["text"]},
+      "providers":[
+        {"provider":"novita","status":"live","context_length":1048576,"pricing":{"input":1.4,"output":4.4},"supports_tools":true,"supports_structured_output":true},
+        {"provider":"together","status":"live","context_length":262144,"pricing":{"input":1.4,"output":4.4},"supports_tools":true,"supports_structured_output":true},
+        {"provider":"fireworks-ai","status":"live","context_length":1048576,"pricing":{"input":1.4,"output":4.4},"supports_tools":true,"supports_structured_output":false},
+        {"provider":"featherless-ai","status":"live","is_free":false,"is_model_author":false}
+      ]}]}
+    """#
+
+    @Test("Each concrete provider becomes a model keyed org/model:provider")
+    func enumeratesConcreteProviders() throws {
+        let models = try ModelFetchService().decodeHuggingFaceModelsForTesting(from: Data(Self.glmBody.utf8), providerID: "builtin.hf")
+        // featherless-ai has no usable data and is skipped; the other three enumerate.
+        #expect(models.count == 3)
+        #expect(models.map(\.modelID).sorted() == [
+            "zai-org/GLM-5.2:fireworks-ai",
+            "zai-org/GLM-5.2:novita",
+            "zai-org/GLM-5.2:together"
+        ])
+    }
+
+    @Test("Per-provider context, caps, and USD/1e6 pricing decode independently")
+    func perProviderData() throws {
+        let models = try ModelFetchService().decodeHuggingFaceModelsForTesting(from: Data(Self.glmBody.utf8), providerID: "builtin.hf")
+        let byID = Dictionary(uniqueKeysWithValues: models.map { ($0.modelID, $0) })
+
+        let novita = try #require(byID["zai-org/GLM-5.2:novita"])
+        #expect(novita.maxInputTokens == 1048576)
+        #expect(novita.capabilities.responseSchema == true)
+        #expect(novita.capabilities.toolUse == true)
+        #expect(novita.capabilities.vision == true)      // shared model-level modality
+        #expect(novita.pricing?.base.input == 1.4 / 1_000_000)
+        #expect(novita.pricing?.base.output == 4.4 / 1_000_000)
+
+        // Same model ID, different provider: smaller context, structured output OFF.
+        let together = try #require(byID["zai-org/GLM-5.2:together"])
+        #expect(together.maxInputTokens == 262144)
+        let fireworks = try #require(byID["zai-org/GLM-5.2:fireworks-ai"])
+        #expect(fireworks.maxInputTokens == 1048576)
+        #expect(fireworks.capabilities.responseSchema == false)
+    }
+
+    @Test("A provider carrying only a name and is_free is skipped, not defaulted")
+    func skipsProvidersWithNoData() throws {
+        let models = try ModelFetchService().decodeHuggingFaceModelsForTesting(from: Data(Self.glmBody.utf8), providerID: "builtin.hf")
+        #expect(!models.contains { $0.modelID.hasSuffix(":featherless-ai") })
     }
 }
