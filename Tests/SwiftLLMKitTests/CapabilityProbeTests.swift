@@ -30,40 +30,54 @@ struct CapabilityProbeGradingTests {
         #expect(makeResult(.rejected).toolUse == false)
     }
 
-    // MARK: - Rejection vs failure to ask
+    // MARK: - Classifying a failure
 
-    /// A 4xx is the server having read the request and declined; that is a capability fact.
-    @Test("A 4xx is a rejection")
-    func fourxxIsRejection() {
-        for code in [400, 401, 403, 404, 422] {
-            #expect(CapabilityProbe.looksLikeRejection(httpError(code)), "\(code) should be a rejection")
-        }
+    /// A refusal that names tools is the endpoint answering the question we asked.
+    @Test("A 4xx naming tools is a capability answer")
+    func refusalNamingToolsIsCapabilityAnswer() {
+        #expect(CapabilityProbe.classifyFailure(
+            httpError(400, "tools are not supported for this model")) == .refusedTools)
+        #expect(CapabilityProbe.classifyFailure(
+            httpError(400, "Unknown parameter: 'function_call'")) == .refusedTools)
     }
 
-    /// Rate limiting says the endpoint is busy, not that the model can't do this. Reading it as a
+    /// The regression that matters. On the probe's first live run it sent `temperature: 0` to
+    /// claude-fable-5, which replied 400 "temperature is deprecated for this model" — and an
+    /// any-4xx-is-a-rejection rule recorded "claude-fable-5 cannot call tools". A flat lie about a
+    /// flagship model, manufactured by our own request. A refusal we provoked is not evidence.
+    @Test("A 4xx about our own parameters is NOT a capability answer")
+    func refusalAboutOurRequestIsNotEvidence() {
+        #expect(CapabilityProbe.classifyFailure(
+            httpError(400, #"{"error":{"message":"`temperature` is deprecated for this model."}}"#))
+            == .refusedOurRequest)
+        #expect(CapabilityProbe.classifyFailure(httpError(401, "invalid x-api-key")) == .refusedOurRequest)
+        #expect(CapabilityProbe.classifyFailure(httpError(404, "model not found")) == .refusedOurRequest)
+    }
+
+    /// Rate limiting says the endpoint is busy, not that the model is incapable. Reading it as a
     /// refusal would record "no tool calling" for a model we merely asked too fast.
-    @Test("429 is NOT a rejection — it says busy, not incapable")
-    func rateLimitIsNotRejection() {
-        #expect(!CapabilityProbe.looksLikeRejection(httpError(429)))
+    @Test("429 says busy, not incapable")
+    func rateLimitIsNoAnswer() {
+        #expect(CapabilityProbe.classifyFailure(httpError(429, "rate limit exceeded")) == .noAnswer)
     }
 
-    /// A 5xx is the endpoint breaking, which says nothing about the model.
-    @Test("5xx and transport errors are not rejections")
-    func serverAndTransportAreNotRejections() {
-        #expect(!CapabilityProbe.looksLikeRejection(httpError(500)))
-        #expect(!CapabilityProbe.looksLikeRejection(httpError(503)))
-        #expect(!CapabilityProbe.looksLikeRejection(URLError(.timedOut)))
-        #expect(!CapabilityProbe.looksLikeRejection(URLError(.notConnectedToInternet)))
-        #expect(!CapabilityProbe.looksLikeRejection(LLMProviderError.invalidResponse))
+    /// A 5xx is the endpoint breaking; a timeout is us not reaching it. Neither says anything.
+    @Test("5xx and transport failures establish nothing")
+    func serverAndTransportAreNoAnswer() {
+        #expect(CapabilityProbe.classifyFailure(httpError(500, "internal error")) == .noAnswer)
+        #expect(CapabilityProbe.classifyFailure(httpError(503, "overloaded")) == .noAnswer)
+        #expect(CapabilityProbe.classifyFailure(URLError(.timedOut)) == .noAnswer)
+        #expect(CapabilityProbe.classifyFailure(URLError(.notConnectedToInternet)) == .noAnswer)
+        #expect(CapabilityProbe.classifyFailure(LLMProviderError.invalidResponse) == .noAnswer)
     }
 
-    /// The status code alone loses the finding: "tools are not supported for this model" and
-    /// "unknown parameter 'tool_choice'" are different answers behind the same 400.
+    /// The status code alone loses the finding: "tools are not supported" and "temperature is
+    /// deprecated" are entirely different answers behind the same 400 — which is exactly how the
+    /// claude-fable-5 false negative was spotted.
     @Test("Rejection detail keeps the endpoint's own words")
     func rejectionDetailKeepsBody() {
         let detail = CapabilityProbe.rejectionDetail(
-            LLMProviderError.httpError(statusCode: 400, body: "tools are not supported for this model", url: nil, retryAfter: nil)
-        )
+            httpError(400, "tools are not supported for this model"))
         #expect(detail.contains("400"))
         #expect(detail.contains("tools are not supported"))
     }
@@ -105,7 +119,7 @@ struct CapabilityProbeGradingTests {
         )
     }
 
-    private func httpError(_ code: Int) -> LLMProviderError {
-        .httpError(statusCode: code, body: "body", url: nil, retryAfter: nil)
+    private func httpError(_ code: Int, _ body: String = "body") -> LLMProviderError {
+        .httpError(statusCode: code, body: body, url: nil, retryAfter: nil)
     }
 }

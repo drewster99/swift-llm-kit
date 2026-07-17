@@ -145,18 +145,27 @@ public enum CapabilityProbe {
             first = try await llm.send(messages: messages, tools: [tool],
                                        overrides: LLMCallOverrides(toolChoice: .required))
         } catch {
-            guard Self.looksLikeRejection(error) else {
-                logger.error("Probe \(modelID, privacy: .public): transport failure — \(error.localizedDescription, privacy: .public)")
+            switch Self.classifyFailure(error) {
+            case .noAnswer:
+                logger.error("Probe \(modelID, privacy: .public): no answer — \(error.localizedDescription, privacy: .public)")
                 return fail(.inconclusive, Self.rejectionDetail(error), forced: true)
-            }
-            // Rejected while forcing. Retry unforced to tell "won't accept tool_choice" apart
-            // from "won't accept tools at all" — only the latter is a capability answer.
-            forced = false
-            do {
-                first = try await llm.send(messages: messages, tools: [tool], overrides: LLMCallOverrides())
-            } catch {
-                let rejected = Self.looksLikeRejection(error)
-                return fail(rejected ? .rejected : .inconclusive, Self.rejectionDetail(error), forced: false)
+            case .refusedTools, .refusedOurRequest:
+                // Either way, retry with the choice free. A refusal naming tools might still only
+                // be about tool_choice; a refusal about something else might be cured by dropping
+                // the parameter it disliked. Only the retry can tell, and guessing here is how a
+                // false negative gets written.
+                forced = false
+                do {
+                    first = try await llm.send(messages: messages, tools: [tool], overrides: LLMCallOverrides())
+                } catch {
+                    switch Self.classifyFailure(error) {
+                    case .refusedTools:
+                        return fail(.rejected, Self.rejectionDetail(error), forced: false)
+                    case .refusedOurRequest, .noAnswer:
+                        // It refused, but not over tools — so we learned nothing about tools.
+                        return fail(.inconclusive, Self.rejectionDetail(error), forced: false)
+                    }
+                }
             }
         }
 
@@ -199,19 +208,42 @@ public enum CapabilityProbe {
         )
     }
 
-    /// Whether an error is the endpoint saying "no" rather than the network failing.
+    /// Why a call failed, to the extent it can be told from the outside.
+    public enum FailureKind: Sendable, Equatable {
+        /// The endpoint refused in terms that name tools. Evidence the model can't call them.
+        case refusedTools
+        /// The endpoint refused, but over something else — a parameter it dislikes, auth, a bad
+        /// model name. Says nothing about tools.
+        case refusedOurRequest
+        /// We never got an answer: timeout, rate limit, server fault.
+        case noAnswer
+    }
+
+    /// Classifies a failure, biased hard toward admitting ignorance.
     ///
-    /// This decides between recording `rejected` — a capability fact — and `inconclusive`, which
-    /// records nothing, so it must never read a timeout as a refusal. A 4xx means the server read
-    /// the request and declined it; anything else means we failed to ask.
+    /// The two mistakes are not symmetric. Recording `inconclusive` for a model that genuinely
+    /// can't call tools costs a re-probe. Recording `rejected` for a model that can is a false
+    /// negative written into data we intend to trust, and nothing downstream can tell it from a
+    /// real measurement. So a refusal is only read as a capability answer when the endpoint's own
+    /// words implicate tools; otherwise it's assumed to be our fault.
     ///
-    /// 429 is excluded deliberately: rate limiting says the endpoint is busy, not that the model
-    /// can't do this. Filing it as `rejected` would write "no tool calling" for a model we simply
-    /// asked too quickly — the exact false negative this probe exists to avoid.
-    static func looksLikeRejection(_ error: any Error) -> Bool {
+    /// This is not hypothetical. On its first live run this probe sent `temperature: 0` to
+    /// claude-fable-5, which answered `400 "temperature is deprecated for this model"`, and the
+    /// old any-4xx-is-a-rejection rule recorded "claude-fable-5 cannot call tools" — a flat lie
+    /// about a flagship model, produced entirely by our own request.
+    ///
+    /// 429 is `noAnswer` too: rate limiting means the endpoint is busy, not that the model is
+    /// incapable.
+    static func classifyFailure(_ error: any Error) -> FailureKind {
         guard let providerError = error as? LLMProviderError,
-              case .httpError(let statusCode, _, _, _) = providerError else { return false }
-        return (400..<500).contains(statusCode) && statusCode != 429
+              case .httpError(let statusCode, let body, _, _) = providerError,
+              (400..<500).contains(statusCode), statusCode != 429 else {
+            return .noAnswer
+        }
+        let lowered = body.lowercased()
+        let mentionsTools = ["tool", "function_call", "function call", "functions"]
+            .contains { lowered.contains($0) }
+        return mentionsTools ? .refusedTools : .refusedOurRequest
     }
 
     /// The endpoint's own words about why it refused, kept for the report — a 400 saying
