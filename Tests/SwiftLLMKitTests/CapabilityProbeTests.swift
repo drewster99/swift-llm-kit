@@ -666,3 +666,38 @@ struct HuggingFaceDecodeTests {
         #expect(!models.contains { $0.modelID.hasSuffix(":featherless-ai") })
     }
 }
+
+/// Mistral's /models is capability-rich and carries deprecation metadata. Pinned against the real
+/// mistral-medium-2505 payload shape (captured 2026-07-17).
+@Suite("Mistral models decoding")
+struct MistralDecodeTests {
+    static let body = #"""
+    {"data":[{"id":"mistral-medium-2505","name":"mistral-medium-2505","created":1784318615,
+      "max_context_length":131072,"owned_by":"mistralai","type":"base",
+      "deprecation":"2026-08-31T12:00:00Z","deprecation_replacement_model":"mistral-medium-3-5",
+      "capabilities":{"completion_chat":true,"function_calling":true,"vision":true,"reasoning":false,
+        "audio":false,"audio_speech":false,"ocr":false}},
+      {"id":"mistral-small-latest","name":"mistral-small-latest","max_context_length":32768,
+       "capabilities":{"completion_chat":true,"function_calling":false,"vision":false}}]}
+    """#
+
+    @Test("Capabilities, context, and deprecation all decode")
+    func richFields() throws {
+        let models = try ModelFetchService().decodeMistralModelsForTesting(from: Data(Self.body.utf8), providerID: "builtin.mistral")
+        let byID = Dictionary(uniqueKeysWithValues: models.map { ($0.modelID, $0) })
+
+        let medium = try #require(byID["mistral-medium-2505"])
+        #expect(medium.maxInputTokens == 131072)
+        #expect(medium.capabilities.toolUse == true)      // function_calling
+        #expect(medium.capabilities.vision == true)
+        #expect(medium.supportsChatCompletions == true)
+        #expect(medium.isDeprecated == true)
+        #expect(medium.deprecationReplacement == "mistral-medium-3-5")
+        // 2026-08-31T12:00:00Z
+        #expect(medium.deprecatedOn == Date(timeIntervalSince1970: 1788177600))
+
+        let small = try #require(byID["mistral-small-latest"])
+        #expect(small.capabilities.toolUse == false)      // function_calling explicitly false
+        #expect(small.isDeprecated == false)              // no deprecation field
+    }
+}

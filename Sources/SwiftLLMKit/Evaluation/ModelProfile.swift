@@ -19,6 +19,16 @@ public struct ModelProfile: Sendable, Codable, Equatable {
     public var displayName: String?
     public var createdAt: Date?
 
+    /// Per-token pricing as the provider's own `/models` payload published it — decoded, never
+    /// probed (there is nothing to probe). `nil` when the provider doesn't state prices (OpenAI,
+    /// Anthropic, z.ai omit them; xAI, OpenRouter, HuggingFace publish them). Carried here so a
+    /// written profile is a complete record, not so the probe measures cost.
+    public var pricing: ModelPricing?
+    /// When the provider marked this model for deprecation, if it did (Mistral publishes a date).
+    /// `nil` means unmarked — never a guarantee of currency. A future date is "still usable, going
+    /// away then."
+    public var deprecatedOn: Date?
+
     /// The model's context window. Decoded-only today (Anthropic's `max_input_tokens`, Gemini's
     /// `inputTokenLimit`): probing it means actually sending a window's worth of tokens, which at
     /// 1M-context prices is deferred until everything else is finished and proven.
@@ -56,6 +66,8 @@ public struct ModelProfile: Sendable, Codable, Equatable {
         probedAt: Date = Date(),
         displayName: String? = nil,
         createdAt: Date? = nil,
+        pricing: ModelPricing? = nil,
+        deprecatedOn: Date? = nil,
         maxContextTokens: ProbeFinding<Int> = .notAttempted,
         chat: ProbeFinding<Bool> = .notAttempted,
         toolCalling: ProbeFinding<Bool> = .notAttempted,
@@ -73,6 +85,8 @@ public struct ModelProfile: Sendable, Codable, Equatable {
         self.probedAt = probedAt
         self.displayName = displayName
         self.createdAt = createdAt
+        self.pricing = pricing
+        self.deprecatedOn = deprecatedOn
         self.maxContextTokens = maxContextTokens
         self.chat = chat
         self.toolCalling = toolCalling

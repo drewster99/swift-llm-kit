@@ -46,6 +46,8 @@ public enum ModelProber {
         var profile = ModelProfile(providerID: info.providerID, modelID: info.modelID)
         profile.displayName = info.displayName
         profile.createdAt = info.createdAt
+        profile.pricing = info.pricing              // decoded-only, believed as published
+        profile.deprecatedOn = info.deprecatedOn    // decoded-only (Mistral publishes it)
         if let context = info.maxInputTokens {
             profile.maxContextTokens = .decoded(context, "provider /models payload")
         }
@@ -69,6 +71,13 @@ public enum ModelProber {
             }
         case .gemini:
             profile.chat = .decoded(info.supportsChatCompletions, "supportedGenerationMethods")
+        case .mistral:
+            // Mistral's capabilities block states each flag explicitly (true/false), like
+            // Anthropic's — so both directions are decodable, including tool calling
+            // (`function_calling`), which almost no other vendor publishes.
+            profile.chat = .decoded(info.supportsChatCompletions, "capabilities.completion_chat")
+            profile.toolCalling = .decoded(info.capabilities.toolUse, "capabilities.function_calling")
+            profile.vision = .decoded(info.capabilities.vision, "capabilities.vision")
         default:
             break
         }

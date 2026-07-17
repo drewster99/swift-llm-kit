@@ -437,6 +437,10 @@ public struct ModelFetchService: Sendable {
 
     // MARK: - Mistral
 
+    func decodeMistralModelsForTesting(from data: Data, providerID: String) throws -> [ModelInfo] {
+        try decodeMistralModels(from: data, providerID: providerID)
+    }
+
     private func decodeMistralModels(from data: Data, providerID: String) throws -> [ModelInfo] {
         let decoded = try JSONDecoder().decode(MistralModelsResponse.self, from: data)
         // Mistral returns both aliases (e.g. "mistral-large-latest") and specific versions
@@ -463,7 +467,9 @@ public struct ModelFetchService: Sendable {
                     createdAt: model.created.map { Date(timeIntervalSince1970: TimeInterval($0)) },
                     maxInputTokens: model.maxContextLength,
                     capabilities: caps,
-                    supportsChatCompletions: supportsChat
+                    supportsChatCompletions: supportsChat,
+                    deprecatedOn: model.deprecation.flatMap(parseISODate),
+                    deprecationReplacement: model.deprecationReplacementModel
                 )
             }
             .sorted { $0.modelID < $1.modelID }
@@ -861,9 +867,13 @@ private struct MistralModelsResponse: Decodable {
         let maxContextLength: Int?
         let capabilities: Capabilities?
         let description: String?
+        // ISO-8601 date the model is (or will be) deprecated; and the model Mistral points to next.
+        let deprecation: String?
+        let deprecationReplacementModel: String?
         enum CodingKeys: String, CodingKey {
-            case id, name, created, capabilities, description
+            case id, name, created, capabilities, description, deprecation
             case maxContextLength = "max_context_length"
+            case deprecationReplacementModel = "deprecation_replacement_model"
         }
     }
     let data: [ModelEntry]

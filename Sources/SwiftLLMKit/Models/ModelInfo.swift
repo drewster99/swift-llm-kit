@@ -51,6 +51,14 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
     /// model with no flags set behaves like a model from before this field
     /// existed. See `BehaviorFlags` for available knobs and the layering rules.
     public var behaviorFlags: BehaviorFlags
+    /// When the provider has scheduled (or already applied) this model's deprecation, if it says so
+    /// — Mistral's `/models` carries a `deprecation` date. `nil` means the provider named no
+    /// deprecation; it is NOT proof the model is current. A future date means "still usable, going
+    /// away then." See ``isDeprecated``.
+    public var deprecatedOn: Date?
+    /// The model the provider recommends migrating to, when it names one (Mistral's
+    /// `deprecation_replacement_model`). `nil` when unstated.
+    public var deprecationReplacement: String?
 
     // MARK: - Backward-compatible pricing accessors
 
@@ -88,7 +96,9 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
         supportsChatCompletions: Bool = true,
         mode: String? = nil,
         validEffortLevels: [String] = [],
-        behaviorFlags: BehaviorFlags = BehaviorFlags()
+        behaviorFlags: BehaviorFlags = BehaviorFlags(),
+        deprecatedOn: Date? = nil,
+        deprecationReplacement: String? = nil
     ) {
         self.providerID = providerID
         self.modelID = modelID
@@ -104,6 +114,8 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
         self.mode = mode
         self.validEffortLevels = validEffortLevels
         self.behaviorFlags = behaviorFlags
+        self.deprecatedOn = deprecatedOn
+        self.deprecationReplacement = deprecationReplacement
     }
 
     /// Whether the model was created/modified within the last 90 days.
@@ -112,6 +124,11 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
         let cutoff = Calendar.current.date(byAdding: .day, value: -90, to: Date()) ?? Date.distantPast
         return createdAt > cutoff
     }
+
+    /// Whether the provider has marked this model for deprecation at all (past or scheduled). A
+    /// scheduled future date still counts as marked — the model is on its way out. Absence of a
+    /// date is "not marked," never a guarantee the model is current.
+    public var isDeprecated: Bool { deprecatedOn != nil }
 }
 
 // MARK: - Codable (backward-compatible)
@@ -122,6 +139,7 @@ extension ModelInfo: Codable {
         case maxInputTokens, maxOutputTokens, capabilities
         case sizeLabel, quantizationLabel, pricing, supportsChatCompletions
         case mode, validEffortLevels, behaviorFlags
+        case deprecatedOn, deprecationReplacement
         // Legacy keys for reading old persisted data
         case inputCostPerMillionTokens, outputCostPerMillionTokens
     }
@@ -142,6 +160,8 @@ extension ModelInfo: Codable {
         mode = try container.decodeIfPresent(String.self, forKey: .mode)
         validEffortLevels = try container.decodeIfPresent([String].self, forKey: .validEffortLevels) ?? []
         behaviorFlags = try container.decodeIfPresent(BehaviorFlags.self, forKey: .behaviorFlags) ?? BehaviorFlags()
+        deprecatedOn = try container.decodeIfPresent(Date.self, forKey: .deprecatedOn)
+        deprecationReplacement = try container.decodeIfPresent(String.self, forKey: .deprecationReplacement)
 
         // Read new pricing field, or fall back to legacy flat cost fields.
         if let p = try container.decodeIfPresent(ModelPricing.self, forKey: .pricing) {
@@ -183,6 +203,8 @@ extension ModelInfo: Codable {
         if !behaviorFlags.isAllDefault {
             try container.encode(behaviorFlags, forKey: .behaviorFlags)
         }
+        try container.encodeIfPresent(deprecatedOn, forKey: .deprecatedOn)
+        try container.encodeIfPresent(deprecationReplacement, forKey: .deprecationReplacement)
         // Legacy fields intentionally not written — new format only.
     }
 }
