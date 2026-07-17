@@ -412,7 +412,18 @@ public final class LLMKitManager {
             logger.warning("refreshModels called with unknown providerID: \(providerID, privacy: .public)")
             return
         }
+        await refreshModels(provider: provider)
+    }
 
+    /// Refreshes the model catalog for a `ModelProvider` the caller already holds.
+    /// **This is the implementation**; ``refreshModels(forProviderID:)`` resolves the ID and
+    /// funnels here.
+    ///
+    /// Looks nothing up, so unlike the ID overload it has no unknown-provider case to warn about
+    /// and silently do nothing for. A caller iterating ``providers`` — refreshing every configured
+    /// provider in turn, say — has the struct already and shouldn't round-trip through an ID only
+    /// to re-find what it passed.
+    public func refreshModels(provider: ModelProvider) async {
         isRefreshing = true
         defer { isRefreshing = false }
 
@@ -462,6 +473,20 @@ public final class LLMKitManager {
              .xAI, .zAI, .metaLlama, .alibabaCloud, .openRouter:
             return false
         }
+    }
+
+    /// Refreshes LiteLLM metadata and then every configured provider's models, unconditionally.
+    ///
+    /// ``refreshIfNeeded()`` is the launch path and is gated: once metadata is same-day and the
+    /// catalog is non-empty it does only a straggler pass, so calling it twice in a day refreshes
+    /// nothing. That is right for launch and wrong for anything that must actually re-fetch —
+    /// a capability probe wants the provider's live model list, not yesterday's cache, however
+    /// many times it runs. This is the ungated door to the same work.
+    ///
+    /// Per-provider failures do not throw; they land in ``refreshErrors`` keyed by provider name,
+    /// so one dead endpoint can't abort the rest.
+    public func refreshAllModels() async {
+        await performRefresh()
     }
 
     private func performRefresh() async {
@@ -705,10 +730,25 @@ public final class LLMKitManager {
         guard let config = configurations.first(where: { $0.id == configurationID }) else {
             throw SwiftLLMKitError.configurationNotFound(id: configurationID)
         }
+        return try prepareRequest(configuration: config)
+    }
+
+    /// Resolves the `ModelProvider` for a caller-supplied configuration, then prepares the
+    /// request. See ``prepareRequest(configuration:provider:)`` for the implementation.
+    public func prepareRequest(configuration config: ModelConfiguration) throws -> PreparedRequest {
         guard let provider = providers.first(where: { $0.id == config.providerID }) else {
             throw SwiftLLMKitError.providerNotFound(id: config.providerID)
         }
+        return prepareRequest(configuration: config, provider: provider)
+    }
 
+    /// Prepares a request from a configuration and a `ModelProvider` the caller already holds.
+    /// **This is the implementation**; the other overloads resolve something and funnel here.
+    /// It looks nothing up, so it cannot fail and does not throw.
+    public func prepareRequest(
+        configuration config: ModelConfiguration,
+        provider: ModelProvider
+    ) -> PreparedRequest {
         let apiKey = keychain.apiKey(forProviderID: provider.id)
 
         // Build URL
@@ -864,9 +904,6 @@ public final class LLMKitManager {
         guard var config = configurations.first(where: { $0.id == configurationID }) else {
             throw SwiftLLMKitError.configurationNotFound(id: configurationID)
         }
-        guard let modelProvider = providers.first(where: { $0.id == config.providerID }) else {
-            throw SwiftLLMKitError.providerNotFound(id: config.providerID)
-        }
 
         // Clamp the requested output-token cap to the model's known maximum so we never
         // build a provider that will send a request the backend rejects with
@@ -876,10 +913,58 @@ public final class LLMKitManager {
         // min-semantics: clamping (never raising) means a later increase to the known limit
         // — an upstream metadata refresh or a raised override — takes effect immediately,
         // while a user-configured value below the limit is left untouched.
-        if let modelMax = modelInfo(providerID: modelProvider.id, modelID: config.modelID)?.maxOutputTokens,
+        //
+        // This reconciles a *saved* setting against the catalog, so it belongs here rather than
+        // in the overload below: a caller supplying its own configuration owns its own caps.
+        if let modelMax = modelInfo(providerID: config.providerID, modelID: config.modelID)?.maxOutputTokens,
            config.maxOutputTokens > modelMax {
             config.maxOutputTokens = modelMax
         }
+
+        // The provider-existence check lives in the overload, which throws providerNotFound.
+        return try makeProvider(configuration: config)
+    }
+
+    /// Resolves the `ModelProvider` for a caller-supplied configuration, then builds the
+    /// `LLMProvider`. See ``makeProvider(configuration:provider:)`` for the implementation.
+    public func makeProvider(configuration config: ModelConfiguration) throws -> any LLMProvider {
+        guard let modelProvider = providers.first(where: { $0.id == config.providerID }) else {
+            throw SwiftLLMKitError.providerNotFound(id: config.providerID)
+        }
+        return makeProvider(configuration: config, provider: modelProvider)
+    }
+
+    /// Builds an `LLMProvider` from a configuration and a `ModelProvider` the caller already
+    /// holds. **This is the implementation**; every other `makeProvider` overload resolves
+    /// something and funnels here, so they can never drift apart on how an `apiType` is wired.
+    ///
+    /// It looks nothing up, so there is nothing to fail on and it does not throw. Callers
+    /// enumerating ``providers`` already have the struct in hand and shouldn't pay for a lookup
+    /// that can only re-find what they passed.
+    ///
+    /// Taking both structs directly is what makes an un-saved model callable: capability probing
+    /// must reach models that have no `ModelConfiguration` (851 of 853 of them) and wants to pin
+    /// `temperature` / `streaming` / `maxOutputTokens` itself. Note what is deliberately NOT done
+    /// here: no clamping against ``modelInfo(providerID:modelID:)``, because that value is
+    /// LiteLLM-derived and a probe that let it shape the request would assume its own conclusion.
+    /// The caller owns the knobs; ``makeProvider(for:)`` is where a *saved* config gets reconciled
+    /// with the catalog.
+    ///
+    /// `behaviorFlags` ARE still applied, which is not a contradiction: they are our own
+    /// hand-authored knobs describing *how to form a valid request* (o1 rejects `temperature`;
+    /// OpenAI needs `max_completion_tokens`), not claims about what a model can do. Dropping them
+    /// would yield 400s that look like capability failures but are really our malformed requests.
+    ///
+    /// - Note: the configuration is used as given and never stored — nothing is added to
+    ///   ``configurations``, no validation runs, nothing is written to disk.
+    public func makeProvider(
+        configuration config: ModelConfiguration,
+        provider modelProvider: ModelProvider
+    ) -> any LLMProvider {
+        // Resolve the merged behavior flags for this (provider, model) so providers can read
+        // knobs without reaching back into the manager. Keyed on the ModelProvider's ID, so it
+        // works for any model that provider serves, saved configuration or not.
+        let flags = behaviorFlags(forProviderID: modelProvider.id, modelID: config.modelID)
 
         let providerID = modelProvider.id
         let providerName = modelProvider.name
@@ -892,12 +977,6 @@ public final class LLMKitManager {
             return key
         }
         let verbose = self.verboseLogging
-
-        // Resolve the merged behavior flags for this (provider, model) so providers
-        // can read knobs without reaching back into the manager. `behaviorFlags`
-        // returns the catalog-resolved flags (bundled + LiteLLM + user overrides
-        // already merged by `fetchProviderModels`).
-        let flags = behaviorFlags(forProviderID: modelProvider.id, modelID: config.modelID)
 
         switch modelProvider.apiType {
         case .anthropic:
