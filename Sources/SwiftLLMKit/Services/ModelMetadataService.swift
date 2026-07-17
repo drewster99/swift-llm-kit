@@ -9,7 +9,8 @@ private let logger = Logger(subsystem: "SwiftLLMKit", category: "ModelMetadata")
 /// and provides lookup by model ID. Uses conditional HTTP requests
 /// (ETag/Last-Modified) to avoid redundant downloads.
 public actor ModelMetadataService {
-    /// When true, full LiteLLM fetch responses are logged to `$TMPDIR/SwiftLLMKit-Logs/`.
+    /// When true, the LiteLLM fetch's request line and response are logged via ``LLMRequestLogger``,
+    /// into whichever directory it is configured to use — the same one the chat traffic uses.
     public nonisolated(unsafe) static var verboseLogging = false
 
     private let storageDirectory: URL
@@ -194,6 +195,10 @@ public actor ModelMetadataService {
             request.setValue(lastModified, forHTTPHeaderField: "If-Modified-Since")
         }
 
+        if Self.verboseLogging {
+            LLMRequestLogger.logBodylessRequest(label: "LiteLLM", method: "GET", url: Self.liteLLMURL)
+        }
+
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw ModelMetadataError.invalidResponse
@@ -201,7 +206,10 @@ public actor ModelMetadataService {
 
         if Self.verboseLogging {
             logger.debug("LiteLLM fetch: HTTP \(http.statusCode) bytes=\(data.count)")
-            ModelFetchService.logData(label: "LiteLLM", data: data)
+            // Through the shared logger so the metadata fetch sits in the same directory and
+            // timeline as everything else, and so the status code is recorded — a 304 is the
+            // difference between "fetched" and "reused the cache", and it used to be invisible.
+            LLMRequestLogger.logResponse(label: "LiteLLM", statusCode: http.statusCode, data: data)
         }
 
         if http.statusCode == 304 {

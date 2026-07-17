@@ -79,6 +79,30 @@ public enum LLMRequestLogger {
         }
     }
 
+    /// Logs a request that carries no JSON body — a `GET /models`, say.
+    ///
+    /// Exists so bodyless calls land in the same directory and timeline as chat traffic. Model
+    /// fetches previously logged to a directory of their own, which meant that in a session full
+    /// of chat logs the model calls looked absent rather than merely elsewhere.
+    ///
+    /// Headers are deliberately not recorded: for these requests the only interesting one is
+    /// `Authorization`, and writing API keys to `$TMPDIR` is not a trade worth making.
+    public static func logBodylessRequest(
+        label: String,
+        method: String,
+        url: URL
+    ) {
+        let stamp = timestamp()
+        print("[\(label)] REQUEST \(stamp) → \(method) \(url.absoluteString)")
+
+        let file = logDirectory.appendingPathComponent("\(stamp)_\(label)_request.txt")
+        do {
+            try "\(method) \(url.absoluteString)\n".write(to: file, atomically: true, encoding: .utf8)
+        } catch {
+            loggerOS.warning("Failed to write request log to \(file.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
     /// Logs a full response body to a JSON file and prints a console summary.
     public static func logResponse(
         label: String,

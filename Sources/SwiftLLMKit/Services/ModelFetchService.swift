@@ -5,7 +5,8 @@ private let logger = Logger(subsystem: "SwiftLLMKit", category: "ModelFetch")
 
 /// Queries provider APIs for available model lists.
 public struct ModelFetchService: Sendable {
-    /// When true, full request/response JSON is logged to `$TMPDIR/SwiftLLMKit-Logs/`.
+    /// When true, the full request line and response JSON are logged via ``LLMRequestLogger``,
+    /// into whichever directory it is configured to use — the same one the chat traffic uses.
     public nonisolated(unsafe) static var verboseLogging = false
 
     public init() {}
@@ -69,9 +70,13 @@ public struct ModelFetchService: Sendable {
             }
         }
 
+        // Logged through LLMRequestLogger so model calls land in the same directory and timeline
+        // as chat traffic. They used to write to a directory of their own, which made them look
+        // absent rather than merely elsewhere.
+        let label = "ModelFetch_\(provider.name.replacingOccurrences(of: " ", with: "_"))"
         logger.debug("Model fetch: GET \(modelsURL.absoluteString, privacy: .public)")
         if Self.verboseLogging {
-            Self.log("REQUEST GET \(modelsURL.absoluteString) provider=\(provider.name)")
+            LLMRequestLogger.logBodylessRequest(label: label, method: "GET", url: modelsURL)
         }
 
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -81,13 +86,13 @@ public struct ModelFetchService: Sendable {
             let body = String(data: data, encoding: .utf8) ?? "(non-utf8)"
             logger.error("Model fetch failed: HTTP \(code, privacy: .public) body=\(body, privacy: .private)")
             if Self.verboseLogging {
-                Self.logData(label: "ModelFetch_error", data: data)
+                LLMRequestLogger.logResponse(label: "\(label)_error", statusCode: code, data: data)
             }
             throw ModelFetchError.httpError(statusCode: code)
         }
 
         if Self.verboseLogging {
-            Self.logData(label: "ModelFetch_\(provider.name)", data: data)
+            LLMRequestLogger.logResponse(label: label, statusCode: http.statusCode, data: data)
         }
 
         let decoded: [ModelInfo]
@@ -266,35 +271,6 @@ public struct ModelFetchService: Sendable {
         return parser.date(from: iso)
     }
 
-    // MARK: - Verbose logging helpers
-
-    private static let logDirectory: URL = {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("SwiftLLMKit-Logs")
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
-    }()
-
-    private static func log(_ message: String) {
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm:ss.SSS"
-        print("[ModelFetch] \(f.string(from: Date())) \(message)")
-    }
-
-    static func logData(label: String, data: Data) {
-        let f = DateFormatter()
-        f.dateFormat = "HH-mm-ss.SSS"
-        let stamp = f.string(from: Date())
-        let safeLabel = label.replacingOccurrences(of: " ", with: "_")
-        let file = logDirectory.appendingPathComponent("\(stamp)_\(safeLabel)_response.json")
-        if let parsed = try? JSONSerialization.jsonObject(with: data),
-           let pretty = try? JSONSerialization.data(withJSONObject: parsed, options: [.prettyPrinted, .sortedKeys]),
-           let prettyString = String(data: pretty, encoding: .utf8) {
-            try? prettyString.write(to: file, atomically: true, encoding: .utf8)
-        } else {
-            try? data.write(to: file)
-        }
-        print("[ModelFetch] \(stamp) Response logged to \(file.path)")
-    }
 }
 
 /// Formats a token count as a compact "16K" / "1M" label.
