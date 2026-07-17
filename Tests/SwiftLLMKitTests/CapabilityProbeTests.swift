@@ -1,5 +1,7 @@
 import Testing
 import Foundation
+import CoreGraphics
+import ImageIO
 @testable import SwiftLLMKit
 
 /// The probe exists to produce evidence rather than repeat claims, so its grading has to be
@@ -149,5 +151,111 @@ struct ModelRequestConstraintTests {
         let registry = BundledModelMetadataRegistry.load()
         let haiku = registry.override(providerAPIType: "anthropic", modelID: "claude-haiku-4-5-20251001")
         #expect(haiku?.behaviorFlags?.mustNeverSendTemperatureParam != true)
+    }
+}
+
+/// Fixtures are hand-assembled bytes, so "it compiles" proves nothing. These check the containers
+/// are actually well-formed — a malformed PNG would make every vision probe report "no vision".
+@Suite("Probe fixtures")
+struct ProbeFixtureTests {
+
+    @Test("PNG has a valid signature, IHDR dimensions, and IEND")
+    func pngIsWellFormed() {
+        let png = ProbeFixtures.makePNG(width: 16, height: 16, red: 255, green: 0, blue: 0)
+        #expect(png.starts(with: [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]))
+        #expect(String(data: png, encoding: .isoLatin1)?.contains("IHDR") == true)
+        #expect(String(data: png, encoding: .isoLatin1)?.contains("IEND") == true)
+        // width/height are big-endian at fixed offsets right after the IHDR length+type.
+        let width = png[16...19].reduce(0) { ($0 << 8) | Int($1) }
+        let height = png[20...23].reduce(0) { ($0 << 8) | Int($1) }
+        #expect(width == 16 && height == 16)
+    }
+
+    /// macOS can decode PNG natively, so the fixture can be validated against a real decoder
+    /// rather than against our own idea of the format.
+    @Test("PNG decodes in a real image decoder, with the colour we asked for")
+    func pngDecodes() throws {
+        for color in ProbeFixtures.namedColors {
+            let png = ProbeFixtures.makePNG(width: 8, height: 8, red: color.red, green: color.green, blue: color.blue)
+            let source = try #require(CGImageSourceCreateWithData(png as CFData, nil))
+            let image = try #require(CGImageSourceCreateImageAtIndex(source, 0, nil))
+            #expect(image.width == 8 && image.height == 8, "\(color.name) failed to decode")
+        }
+    }
+
+    @Test("PDF is a well-formed container carrying the code")
+    func pdfIsWellFormed() throws {
+        let pdf = ProbeFixtures.makePDF(code: "K7M2Q")
+        let text = try #require(String(data: pdf, encoding: .isoLatin1))
+        #expect(text.hasPrefix("%PDF-1.4"))
+        #expect(text.hasSuffix("%%EOF"))
+        #expect(text.contains("(K7M2Q) Tj"))     // the code is actually drawn
+        #expect(text.contains("startxref"))
+    }
+
+    /// The xref offsets are computed by measuring, and an off-by-one there yields a file readers
+    /// reject — which would read as "this model can't do PDFs".
+    @Test("PDF opens in a real PDF parser")
+    func pdfParses() throws {
+        let pdf = ProbeFixtures.makePDF(code: "XR4T9")
+        let provider = try #require(CGDataProvider(data: pdf as CFData))
+        let document = try #require(CGPDFDocument(provider))
+        #expect(document.numberOfPages == 1)
+    }
+}
+
+/// The profile is the durable output, so its shape is worth pinning — especially the invariant
+/// that "we didn't find out" never reads as a measured false.
+@Suite("Model profile")
+struct ModelProfileTests {
+
+    @Test("A finding's value is nil unless established")
+    func findingValueGuarded() {
+        #expect(ProbeFinding<Bool>.notAttempted.value == nil)
+        #expect(ProbeFinding<Bool>.inconclusive("timeout").value == nil)
+        #expect(ProbeFinding<Bool>.established(true).value == true)
+        #expect(ProbeFinding<Int>.established(64000).value == 64000)
+    }
+
+    @Test("Established effort levels come back ordered shallow → deep, gaps allowed")
+    func effortLevelsOrdered() {
+        var p = ModelProfile(providerID: "builtin.anthropic", modelID: "claude-sonnet-4-6")
+        // Sonnet 4.6 accepts max but NOT xhigh — the real gap that broke an earlier inference.
+        p.effortLevels = [
+            "max": .established(true), "high": .established(true),
+            "xhigh": .established(false), "medium": .established(true),
+            "low": .established(true), "none": .inconclusive("not tried")
+        ]
+        #expect(p.establishedEffortLevels == ["low", "medium", "high", "max"])
+    }
+
+    @Test("Rank table orders max above xhigh, and unknowns sort last")
+    func effortRanks() {
+        #expect(EffortRank.rank(of: "xhigh") < EffortRank.rank(of: "max"))
+        #expect(EffortRank.rank(of: "low") < EffortRank.rank(of: "high"))
+        #expect(EffortRank.rank(of: "none") < EffortRank.rank(of: "minimal"))
+        #expect(EffortRank.rank(of: "some-future-level") == Int.max)
+        #expect(EffortRank.allKnown == ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+    }
+
+    @Test("Profile round-trips through Codable")
+    func profileCodable() throws {
+        var p = ModelProfile(providerID: "p", modelID: "m",
+                             toolCalling: .established(true, "returned identifier"),
+                             maxOutputTokens: .established(64000, "endpoint reported"))
+        p.effortLevels = ["high": .established(true)]
+        let back = try JSONDecoder().decode(ModelProfile.self, from: JSONEncoder().encode(p))
+        #expect(back.toolCalling.value == true)
+        #expect(back.maxOutputTokens.value == 64000)
+        #expect(back.effortLevels["high"]?.value == true)
+    }
+
+    @Test("Coloured shapes decode and carry both signals distinctly")
+    func shapeFixtureDecodes() throws {
+        for shape in ProbeFixtures.namedShapes {
+            let png = ProbeFixtures.makeShapePNG(shape: shape, red: 0, green: 0, blue: 255, size: 32)
+            let source = try #require(CGImageSourceCreateWithData(png as CFData, nil))
+            #expect(CGImageSourceCreateImageAtIndex(source, 0, nil) != nil, "\(shape.rawValue) failed to decode")
+        }
     }
 }

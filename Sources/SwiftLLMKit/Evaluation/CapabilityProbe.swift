@@ -107,7 +107,8 @@ public enum CapabilityProbe {
     public static func probeToolCalling(
         llm: any LLMProvider,
         providerID: String,
-        modelID: String
+        modelID: String,
+        calls: ProbeCallCounter? = nil
     ) async -> ToolCallResult {
         let started = Date()
         let identifier = makeIdentifier()
@@ -142,6 +143,7 @@ public enum CapabilityProbe {
         var forced = true
         var first: LLMResponse
         do {
+            calls?.increment()
             first = try await llm.send(messages: messages, tools: [tool],
                                        overrides: LLMCallOverrides(toolChoice: .required))
         } catch {
@@ -156,6 +158,7 @@ public enum CapabilityProbe {
                 // false negative gets written.
                 forced = false
                 do {
+                    calls?.increment()
                     first = try await llm.send(messages: messages, tools: [tool], overrides: LLMCallOverrides())
                 } catch {
                     switch Self.classifyFailure(error) {
@@ -186,6 +189,7 @@ public enum CapabilityProbe {
 
         let second: LLMResponse
         do {
+            calls?.increment()
             second = try await llm.send(messages: followUp, tools: [tool], overrides: LLMCallOverrides())
         } catch {
             // The call itself is already proven; only the round-trip is unresolved.
