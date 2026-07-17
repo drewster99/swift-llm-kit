@@ -285,3 +285,27 @@ struct MaxOutputParsingTests {
         #expect(LLMProviderError.reportedMaxOutputTokenLimit(inBody: "invalid api key") == nil)
     }
 }
+
+/// Anthropic's adaptive-only models reject temperature AND require adaptive thinking — the same
+/// set, proven live 2026-07-17. Both flags must be present, or a config sending temperature 400s
+/// on every request (which is how the whole investigation started, with claude-fable-5).
+@Suite("Anthropic adaptive-only model flags")
+struct AnthropicAdaptiveFlagTests {
+    @Test("fable-5, sonnet-5, opus-4-8, opus-4-7 carry both flags")
+    func adaptiveOnlyModelsFlagged() {
+        let registry = BundledModelMetadataRegistry.load()
+        for model in ["claude-fable-5", "claude-sonnet-5", "claude-opus-4-8", "claude-opus-4-7"] {
+            let flags = registry.override(providerAPIType: "anthropic", modelID: model)?.behaviorFlags
+            #expect(flags?.mustNeverSendTemperatureParam == true, "\(model) must never send temperature")
+            #expect(flags?.requiresAdaptiveThinking == true, "\(model) requires adaptive thinking")
+        }
+    }
+    @Test("Dual-mode models (enabled==true) are NOT flagged — they accept temperature")
+    func dualModeModelsUnflagged() {
+        let registry = BundledModelMetadataRegistry.load()
+        for model in ["claude-sonnet-4-6", "claude-opus-4-5-20251101", "claude-haiku-4-5-20251001"] {
+            let flags = registry.override(providerAPIType: "anthropic", modelID: model)?.behaviorFlags
+            #expect(flags?.mustNeverSendTemperatureParam != true, "\(model) accepts temperature")
+        }
+    }
+}
