@@ -385,7 +385,9 @@ public enum ModelProber {
     /// search — that's the fallback for endpoints whose error doesn't state the number, and is
     /// deferred until it's actually needed. When the rejection is in a format we don't parse, the
     /// raw body is kept as `inconclusive` evidence so an unrecognised shape is visible, not lost.
-    public static func probeMaxOutputTokens(llm: any LLMProvider, modelID: String, calls: ProbeCallCounter? = nil) async -> ProbeFinding<Int> {
+    public static func probeMaxOutputTokens(
+        llm: any LLMProvider, modelID: String, calls: ProbeCallCounter? = nil, allowBinarySearch: Bool = true
+    ) async -> ProbeFinding<Int> {
         let absurd = 100_000_000
         let started = Date()
         calls?.increment()
@@ -398,11 +400,89 @@ public enum ModelProber {
             return .inconclusive("accepted max_tokens=\(absurd); true ceiling not revealed", duration: Date().timeIntervalSince(started))
         } catch {
             let dur = Date().timeIntervalSince(started)
+            // Preferred: the endpoint stated its ceiling and we parsed it — one call, exact.
             if let limit = (error as? LLMProviderError)?.reportedMaxOutputTokenLimit {
                 return .established(limit, "endpoint reported its maximum", duration: dur)
             }
-            return .inconclusive(CapabilityProbe.rejectionDetail(error), duration: dur)
+            // A non-4xx failure says nothing about the cap.
+            guard CapabilityProbe.classifyFailure(error) != .noAnswer else {
+                return .inconclusive(CapabilityProbe.rejectionDetail(error), duration: dur)
+            }
+            // It rejected the absurd cap but didn't state the limit in a form we parse (z.ai's
+            // "The max_tokens parameter is illegal.：限制数值范围[1,131072]" is such a case). Rather
+            // than chase every provider's phrasing with another regex, find the ceiling
+            // empirically — the same "max_tokens is the only variable" logic the attachment probes
+            // use, applied as a search.
+            guard allowBinarySearch else {
+                return .inconclusive("rejected max_tokens=\(absurd) without a parseable limit: \(CapabilityProbe.rejectionDetail(error))", duration: dur)
+            }
+            return await binarySearchMaxOutput(llm: llm, knownGood: 512, knownBad: absurd, calls: calls, started: started)
         }
+    }
+
+    /// Finds the largest `max_tokens` the endpoint accepts when it won't state its limit in a
+    /// parseable form.
+    ///
+    /// No error text is parsed. The invariant is structural: `knownGood` accepts and `knownBad`
+    /// rejects, and `max_tokens` is the ONLY thing changing between calls — so at each step a 200
+    /// means "ceiling ≥ mid" and any 4xx means "ceiling < mid". A non-4xx failure aborts (it says
+    /// nothing about the cap).
+    ///
+    /// Two phases so it stays exact without bisecting the whole `[512, 100M]` range (real ceilings
+    /// are ≤ ~200K, so most of that range is empty): first double upward to trap the ceiling in a
+    /// one-octave window, then bisect that window to the exact integer. Returns the largest
+    /// accepted value — never above the true ceiling, the safe direction for a clamp.
+    ///
+    /// Only reached on the rare provider that rejects without stating the number (z.ai), so its
+    /// double-digit call cost lands there, not on Anthropic/OpenAI (one call each). Disable with
+    /// `allowBinarySearch: false` on ``probeMaxOutputTokens(llm:modelID:calls:allowBinarySearch:)``.
+    static func binarySearchMaxOutput(
+        llm: any LLMProvider, knownGood: Int, knownBad: Int, calls: ProbeCallCounter?, started: Date
+    ) async -> ProbeFinding<Int> {
+        var low = knownGood, high = knownBad, steps = 0
+        let stepCap = 40
+
+        func accepts(_ value: Int) async -> Bool? {   // nil = transport failure, abort
+            steps += 1
+            calls?.increment()
+            do {
+                _ = try await llm.send(messages: [.user("Reply with the single word: ok")],
+                                       tools: [], overrides: LLMCallOverrides(maxOutputTokens: value))
+                return true
+            } catch {
+                return CapabilityProbe.classifyFailure(error) == .noAnswer ? nil : false
+            }
+        }
+
+        func aborted() -> ProbeFinding<Int> {
+            .inconclusive("binary search interrupted after \(steps) steps (narrowed to \(low)–\(high))",
+                          duration: Date().timeIntervalSince(started))
+        }
+
+        // Phase 1 — exponential: double until a probe is rejected, trapping the ceiling in
+        // [low, high] with high ≤ 2·ceiling. Skips bisecting the huge empty upper range.
+        var probe = max(knownGood * 2, knownGood + 1)
+        while probe < knownBad && steps < stepCap {
+            switch await accepts(probe) {
+            case .some(true):  low = probe; probe = min(probe * 2, knownBad)
+            case .some(false): high = probe
+            case .none:        return aborted()
+            }
+            if high != knownBad { break }   // trapped
+        }
+
+        // Phase 2 — bisect [low, high] to the exact boundary.
+        while high - low > 1 && steps < stepCap {
+            let mid = low + (high - low) / 2
+            switch await accepts(mid) {
+            case .some(true):  low = mid
+            case .some(false): high = mid
+            case .none:        return aborted()
+            }
+        }
+
+        return .established(low, "largest accepted max_tokens found by binary search (\(steps) calls)",
+                            duration: Date().timeIntervalSince(started))
     }
 
     /// Whether a named effort level is accepted. See the driver's note on flag-gated emission:

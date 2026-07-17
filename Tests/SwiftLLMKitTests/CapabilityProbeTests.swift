@@ -414,3 +414,51 @@ struct GLMRejectionTests {
         #expect(["pdf", "document", "file"].contains { body.lowercased().contains($0) })
     }
 }
+
+/// Binary search finds an output ceiling by bisection when the endpoint won't state it in a form
+/// we parse (z.ai answers "The max_tokens parameter is illegal.：限制数值范围[1,131072]" — a limit,
+/// but not one worth a regex). The search parses no error text: max_tokens is the only variable,
+/// so a 200 means "ceiling ≥ mid" and any 4xx means "ceiling < mid".
+@Suite("Max-output binary search")
+struct MaxOutputBinarySearchTests {
+
+    /// A provider that accepts any request whose max_tokens override is ≤ `ceiling` and 400s
+    /// otherwise — modelling exactly the z.ai-style endpoint that rejects without a parseable number.
+    private struct CeilingProvider: LLMProvider {
+        let ceiling: Int
+        func send(messages: [LLMMessage], tools: [LLMToolDefinition], overrides: LLMCallOverrides) async throws -> LLMResponse {
+            let requested = overrides.maxOutputTokens ?? 512
+            if requested > ceiling {
+                throw LLMProviderError.httpError(statusCode: 400, body: "The max_tokens parameter is illegal.", url: nil, retryAfter: nil)
+            }
+            return LLMResponse(text: "ok", toolCalls: [], reasoning: nil, usage: nil, continuation: nil)
+        }
+    }
+
+    @Test("Converges to the exact ceiling without reading the error")
+    func convergesToCeiling() async {
+        for ceiling in [4096, 16384, 65536, 131072, 200000] {
+            let finding = await ModelProber.binarySearchMaxOutput(
+                llm: CeilingProvider(ceiling: ceiling), knownGood: 512, knownBad: 100_000_000,
+                calls: nil, started: Date())
+            #expect(finding.status == .established, "ceiling \(ceiling) not established")
+            // Largest accepted is the ceiling exactly (or a hair under if the cap bites — it won't
+            // for these, 20 steps is ample). Never above: an over-report would 400 in production.
+            let found = finding.value ?? -1
+            #expect(found == ceiling, "ceiling \(ceiling): found \(found)")
+        }
+    }
+
+    @Test("An interrupting transport error aborts inconclusively, not with a fake number")
+    func transportInterruptionIsInconclusive() async {
+        struct FlakyProvider: LLMProvider {
+            func send(messages: [LLMMessage], tools: [LLMToolDefinition], overrides: LLMCallOverrides) async throws -> LLMResponse {
+                throw URLError(.timedOut)
+            }
+        }
+        let finding = await ModelProber.binarySearchMaxOutput(
+            llm: FlakyProvider(), knownGood: 512, knownBad: 100_000_000, calls: nil, started: Date())
+        #expect(finding.status == .inconclusive)
+        #expect(finding.value == nil)
+    }
+}
