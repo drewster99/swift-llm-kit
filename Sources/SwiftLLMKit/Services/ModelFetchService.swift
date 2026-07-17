@@ -123,6 +123,10 @@ public struct ModelFetchService: Sendable {
 
     // MARK: - Ollama
 
+    func decodeOllamaModelsForTesting(from data: Data, providerID: String) throws -> [ModelInfo] {
+        try decodeOllamaModels(from: data, providerID: providerID)
+    }
+
     private func decodeOllamaModels(from data: Data, providerID: String) throws -> [ModelInfo] {
         let decoded = try JSONDecoder().decode(OllamaTagsResponse.self, from: data)
         return decoded.models
@@ -132,12 +136,18 @@ public struct ModelFetchService: Sendable {
                 if let capabilities = model.capabilities {
                     caps.toolUse = capabilities.contains("tools")
                 }
+                // Prefer the stated parameter count ("397B") over a byte-size label: `size` is the
+                // on-disk weight file in BYTES, and formatBytes renders it with a "B" suffix that
+                // reads like a parameter count but isn't. parameter_size is the real thing.
+                let sizeLabel = model.details?.parameterSize ?? formatBytes(model.size)
                 return ModelInfo(
                     providerID: providerID,
                     modelID: model.name,
                     createdAt: parseISODate(model.modifiedAt),
+                    // Only local Ollama's payload carries a context window; cloud omits it (nil).
+                    maxInputTokens: model.details?.contextLength,
                     capabilities: caps,
-                    sizeLabel: formatBytes(model.size),
+                    sizeLabel: sizeLabel,
                     quantizationLabel: quant.isEmpty ? nil : quant
                 )
             }
@@ -355,6 +365,18 @@ public struct ModelFetchService: Sendable {
                     if base.hasAnyRate { pricing = ModelPricing(base: base) }
                 }
 
+                // reasoning.supported_efforts is OpenRouter stating the effort ladder outright — the
+                // one non-Anthropic provider that does, so decode it into validEffortLevels (ordered
+                // shallow→deep) instead of probing each level.
+                let effortLevels = (model.reasoning?.supportedEfforts ?? [])
+                    .sorted { EffortRank.rank(of: $0) < EffortRank.rank(of: $1) }
+
+                let dp = model.defaultParameters
+                let defaults = SamplingDefaults(
+                    temperature: dp?.temperature, topP: dp?.topP, topK: dp?.topK,
+                    frequencyPenalty: dp?.frequencyPenalty, presencePenalty: dp?.presencePenalty,
+                    repetitionPenalty: dp?.repetitionPenalty)
+
                 return ModelInfo(
                     providerID: providerID,
                     modelID: model.id,
@@ -366,7 +388,14 @@ public struct ModelFetchService: Sendable {
                     maxInputTokens: model.topProvider?.contextLength ?? model.contextLength,
                     maxOutputTokens: model.topProvider?.maxCompletionTokens,
                     capabilities: caps,
-                    pricing: pricing
+                    pricing: pricing,
+                    validEffortLevels: effortLevels,
+                    // expiration_date is OpenRouter's scheduled-removal date; treat like a deprecation.
+                    deprecatedOn: model.expirationDate.flatMap(parseYearMonthDay),
+                    modelDescription: model.description,
+                    samplingDefaults: defaults.isEmpty ? nil : defaults,
+                    benchmarks: (model.benchmarks?.isEmpty ?? true) ? nil : model.benchmarks,
+                    huggingFaceID: model.huggingFaceID
                 )
             }
             .sorted { $0.modelID < $1.modelID }
@@ -431,7 +460,8 @@ public struct ModelFetchService: Sendable {
                             createdAt: createdAt,
                             maxInputTokens: entry.contextLength,
                             capabilities: caps,
-                            pricing: pricing
+                            pricing: pricing,
+                            isFree: entry.isFree
                         )
                     }
             }
@@ -473,7 +503,8 @@ public struct ModelFetchService: Sendable {
                     supportsChatCompletions: supportsChat,
                     deprecatedOn: model.deprecation.flatMap(parseISODate),
                     deprecationReplacement: model.deprecationReplacementModel,
-                    modelDescription: model.description
+                    modelDescription: model.description,
+                    samplingDefaults: model.defaultModelTemperature.map { SamplingDefaults(temperature: $0) }
                 )
             }
             .sorted { $0.modelID < $1.modelID }
@@ -500,6 +531,8 @@ public struct ModelFetchService: Sendable {
                 var caps = ModelCapabilities()
                 caps.reasoning = model.thinking ?? false
 
+                let defaults = SamplingDefaults(temperature: model.temperature, topP: model.topP, topK: model.topK)
+
                 return ModelInfo(
                     providerID: providerID,
                     modelID: modelID,
@@ -509,7 +542,8 @@ public struct ModelFetchService: Sendable {
                     capabilities: caps,
                     supportsChatCompletions: supportsChat,
                     maxTemperature: model.maxTemperature,
-                    modelDescription: model.description
+                    modelDescription: model.description,
+                    samplingDefaults: defaults.isEmpty ? nil : defaults
                 )
             }
             .sorted { $0.modelID < $1.modelID }
@@ -549,6 +583,16 @@ public struct ModelFetchService: Sendable {
         }
         parser.formatOptions = [.withInternetDateTime]
         return parser.date(from: iso)
+    }
+
+    /// Parses a bare `yyyy-MM-dd` date (OpenRouter's `expiration_date`) as midnight UTC. Falls back
+    /// to the full ISO parser for anything carrying a time component.
+    func parseYearMonthDay(_ raw: String) -> Date? {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "GMT")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.date(from: raw) ?? parseISODate(raw)
     }
 
 }
@@ -764,6 +808,28 @@ private struct OpenRouterModelsResponse: Decodable {
             case maxCompletionTokens = "max_completion_tokens"
         }
     }
+    struct Reasoning: Decodable {
+        let supportedEfforts: [String]?
+        enum CodingKeys: String, CodingKey {
+            case supportedEfforts = "supported_efforts"
+        }
+    }
+    struct DefaultParameters: Decodable {
+        let temperature: Double?
+        let topP: Double?
+        let topK: Int?
+        let frequencyPenalty: Double?
+        let presencePenalty: Double?
+        let repetitionPenalty: Double?
+        enum CodingKeys: String, CodingKey {
+            case temperature
+            case topP = "top_p"
+            case topK = "top_k"
+            case frequencyPenalty = "frequency_penalty"
+            case presencePenalty = "presence_penalty"
+            case repetitionPenalty = "repetition_penalty"
+        }
+    }
     struct ModelEntry: Decodable {
         let id: String
         let name: String?
@@ -773,11 +839,20 @@ private struct OpenRouterModelsResponse: Decodable {
         let pricing: Pricing?
         let topProvider: TopProvider?
         let supportedParameters: [String]?
+        let description: String?
+        let reasoning: Reasoning?
+        let defaultParameters: DefaultParameters?
+        let expirationDate: String?
+        let huggingFaceID: String?
+        let benchmarks: ModelBenchmarks?
         enum CodingKeys: String, CodingKey {
-            case id, name, created, architecture, pricing
+            case id, name, created, architecture, pricing, description, reasoning, benchmarks
             case contextLength = "context_length"
             case topProvider = "top_provider"
             case supportedParameters = "supported_parameters"
+            case defaultParameters = "default_parameters"
+            case expirationDate = "expiration_date"
+            case huggingFaceID = "hugging_face_id"
         }
     }
     let data: [ModelEntry]
@@ -812,11 +887,13 @@ private struct HuggingFaceModelsResponse: Decodable {
         let pricing: Pricing?
         let supportsTools: Bool?
         let supportsStructuredOutput: Bool?
+        let isFree: Bool?
         enum CodingKeys: String, CodingKey {
             case provider, status, pricing
             case contextLength = "context_length"
             case supportsTools = "supports_tools"
             case supportsStructuredOutput = "supports_structured_output"
+            case isFree = "is_free"
         }
 
         /// Whether this entry carries anything worth enumerating. A provider that lists only a
@@ -838,8 +915,14 @@ private struct HuggingFaceModelsResponse: Decodable {
 private struct OllamaTagsResponse: Decodable {
     struct Details: Decodable {
         let quantizationLevel: String?
+        // The stated parameter count ("397B"); a truer size label than the byte-size `size` field.
+        let parameterSize: String?
+        // The model's context window — only local Ollama's payload includes it; cloud omits it.
+        let contextLength: Int?
         enum CodingKeys: String, CodingKey {
             case quantizationLevel = "quantization_level"
+            case parameterSize = "parameter_size"
+            case contextLength = "context_length"
         }
     }
     struct Model: Decodable {
@@ -882,10 +965,13 @@ private struct MistralModelsResponse: Decodable {
         // ISO-8601 date the model is (or will be) deprecated; and the model Mistral points to next.
         let deprecation: String?
         let deprecationReplacementModel: String?
+        // The model's default temperature (Mistral's only published sampling default).
+        let defaultModelTemperature: Double?
         enum CodingKeys: String, CodingKey {
             case id, name, created, capabilities, description, deprecation
             case maxContextLength = "max_context_length"
             case deprecationReplacementModel = "deprecation_replacement_model"
+            case defaultModelTemperature = "default_model_temperature"
         }
     }
     let data: [ModelEntry]
@@ -900,9 +986,12 @@ private struct GeminiModelsResponse: Decodable {
         let outputTokenLimit: Int?
         let supportedGenerationMethods: [String]?
         let thinking: Bool?
-        // Gemini alone publishes a temperature ceiling (usually 2); temperature/topK/topP are
-        // defaults, not limits, so they're intentionally not captured.
+        // Gemini alone publishes a temperature ceiling (usually 2). temperature/topK/topP are the
+        // model's default sampling parameters (not limits) — captured as reference metadata.
         let maxTemperature: Double?
+        let temperature: Double?
+        let topK: Int?
+        let topP: Double?
     }
     let models: [ModelEntry]
 }

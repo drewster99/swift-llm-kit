@@ -34,6 +34,14 @@ public struct ModelProfile: Sendable, Codable, Equatable {
     /// above it is rejected — not a default. `nil` when unstated.
     public var maxTemperature: Double?
 
+    /// The default sampling parameters the provider publishes (Gemini, Mistral, OpenRouter).
+    /// Decoded-only reference metadata; `nil` when unstated.
+    public var samplingDefaults: SamplingDefaults?
+    /// Whether the provider serves this model free (HuggingFace per-provider `is_free`). Decoded-only.
+    public var isFree: Bool?
+    /// Third-party benchmark scores (OpenRouter's `benchmarks`). Decoded-only reference metadata.
+    public var benchmarks: ModelBenchmarks?
+
     /// Whether the model is actually reachable, as opposed to merely listed. Seeded `decoded(true)`
     /// ("present in /models") and flipped to `established(false)` when a live call reports it gone
     /// (a 404 "no longer available"). Kept separate from ``deprecatedOn`` on purpose: a model can be
@@ -87,6 +95,9 @@ public struct ModelProfile: Sendable, Codable, Equatable {
         pricing: ModelPricing? = nil,
         deprecatedOn: Date? = nil,
         maxTemperature: Double? = nil,
+        samplingDefaults: SamplingDefaults? = nil,
+        isFree: Bool? = nil,
+        benchmarks: ModelBenchmarks? = nil,
         isAvailable: ProbeFinding<Bool> = .notAttempted,
         isAccessDenied: ProbeFinding<Bool> = .notAttempted,
         maxContextTokens: ProbeFinding<Int> = .notAttempted,
@@ -109,6 +120,9 @@ public struct ModelProfile: Sendable, Codable, Equatable {
         self.pricing = pricing
         self.deprecatedOn = deprecatedOn
         self.maxTemperature = maxTemperature
+        self.samplingDefaults = samplingDefaults
+        self.isFree = isFree
+        self.benchmarks = benchmarks
         self.isAvailable = isAvailable
         self.isAccessDenied = isAccessDenied
         self.maxContextTokens = maxContextTokens

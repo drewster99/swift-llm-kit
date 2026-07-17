@@ -617,6 +617,32 @@ struct OpenRouterDecodeTests {
         #expect(m.maxInputTokens == 262144)     // top_provider wins over the 1,000,000 headline
         #expect(m.maxOutputTokens == 32000)
     }
+
+    @Test("reasoning efforts, default params, expiration, benchmarks, and hugging_face_id decode")
+    func richMetadata() throws {
+        let body = #"""
+        {"data":[{"id":"meta/muse","name":"Muse","context_length":200000,"description":"A muse.",
+          "hugging_face_id":"meta/Muse","expiration_date":"2026-07-28",
+          "reasoning":{"supported_efforts":["high","low","medium"],"mandatory":true},
+          "default_parameters":{"temperature":0.7,"top_p":0.9,"top_k":40,"frequency_penalty":null,"presence_penalty":null,"repetition_penalty":1.1},
+          "benchmarks":{"artificial_analysis":{"intelligence_index":57.1,"coding_index":76.2,"agentic_index":50.1},
+            "design_arena":[{"arena":"agents","category":"agenticgamedev","elo":1200,"rank":7,"win_rate":47.8}]}}]}
+        """#
+        let m = try #require(try ModelFetchService().decodeOpenRouterModelsForTesting(from: Data(body.utf8), providerID: "builtin.openrouter").first)
+        // supported_efforts → validEffortLevels, ordered shallow→deep.
+        #expect(m.validEffortLevels == ["low", "medium", "high"])
+        #expect(m.modelDescription == "A muse.")
+        #expect(m.huggingFaceID == "meta/Muse")
+        #expect(m.deprecatedOn == Date(timeIntervalSince1970: 1785196800))  // 2026-07-28 UTC
+        #expect(m.samplingDefaults?.temperature == 0.7)
+        #expect(m.samplingDefaults?.topK == 40)
+        #expect(m.samplingDefaults?.repetitionPenalty == 1.1)
+        #expect(m.benchmarks?.artificialAnalysis?.intelligenceIndex == 57.1)
+        let arena = try #require(m.benchmarks?.designArena?.first)
+        #expect(arena.elo == 1200)
+        #expect(arena.rank == 7)
+        #expect(arena.winRate == 47.8)
+    }
 }
 
 /// HuggingFace's router lists concrete providers per model, each with its own caps/context/pricing.
@@ -629,7 +655,7 @@ struct HuggingFaceDecodeTests {
     {"data":[{"id":"zai-org/GLM-5.2","created":1781595560,"owned_by":"zai-org",
       "architecture":{"input_modalities":["text","image"],"output_modalities":["text"]},
       "providers":[
-        {"provider":"novita","status":"live","context_length":1048576,"pricing":{"input":1.4,"output":4.4},"supports_tools":true,"supports_structured_output":true},
+        {"provider":"novita","status":"live","context_length":1048576,"pricing":{"input":1.4,"output":4.4},"supports_tools":true,"supports_structured_output":true,"is_free":false},
         {"provider":"together","status":"live","context_length":262144,"pricing":{"input":1.4,"output":4.4},"supports_tools":true,"supports_structured_output":true},
         {"provider":"fireworks-ai","status":"live","context_length":1048576,"pricing":{"input":1.4,"output":4.4},"supports_tools":true,"supports_structured_output":false},
         {"provider":"featherless-ai","status":"live","is_free":false,"is_model_author":false}
@@ -655,6 +681,7 @@ struct HuggingFaceDecodeTests {
 
         let novita = try #require(byID["zai-org/GLM-5.2:novita"])
         #expect(novita.maxInputTokens == 1048576)
+        #expect(novita.isFree == false)
         #expect(novita.capabilities.responseSchema == true)
         #expect(novita.capabilities.toolUse == true)
         #expect(novita.capabilities.vision == true)      // shared model-level modality
@@ -683,7 +710,7 @@ struct MistralDecodeTests {
     static let body = #"""
     {"data":[{"id":"mistral-medium-2505","name":"mistral-medium-2505","created":1784318615,
       "max_context_length":131072,"owned_by":"mistralai","type":"base",
-      "deprecation":"2026-08-31T12:00:00Z","deprecation_replacement_model":"mistral-medium-3-5",
+      "deprecation":"2026-08-31T12:00:00Z","deprecation_replacement_model":"mistral-medium-3-5","default_model_temperature":0.3,
       "capabilities":{"completion_chat":true,"function_calling":true,"vision":true,"reasoning":false,
         "audio":false,"audio_speech":false,"ocr":false}},
       {"id":"mistral-small-latest","name":"mistral-small-latest","max_context_length":32768,
@@ -704,6 +731,8 @@ struct MistralDecodeTests {
         #expect(medium.deprecationReplacement == "mistral-medium-3-5")
         // 2026-08-31T12:00:00Z
         #expect(medium.deprecatedOn == Date(timeIntervalSince1970: 1788177600))
+
+        #expect(medium.samplingDefaults?.temperature == 0.3)  // default_model_temperature
 
         let small = try #require(byID["mistral-small-latest"])
         #expect(small.capabilities.toolUse == false)      // function_calling explicitly false
@@ -727,6 +756,10 @@ struct GeminiRichFieldTests {
         #expect(m.maxTemperature == 2)
         #expect(m.modelDescription == "Mid-size multimodal model.")
         #expect(m.maxInputTokens == 1048576)
+        // temperature/topK/topP are defaults, captured as SamplingDefaults (not the maxTemperature limit).
+        #expect(m.samplingDefaults?.temperature == 1)
+        #expect(m.samplingDefaults?.topK == 64)
+        #expect(m.samplingDefaults?.topP == 0.95)
     }
 }
 
@@ -788,5 +821,31 @@ struct UnreachableModelTests {
         let profile = await ModelProber.probe(llm: DeniedProvider(), seed: seed)
         #expect(profile.isAccessDenied.value == true)
         #expect(profile.vision.value != false)
+    }
+}
+
+/// Ollama's tags payload: parameter_size is a truer size label than the byte-count, and local
+/// Ollama (unlike cloud) states a context window.
+@Suite("Ollama models decoding")
+struct OllamaDecodeTests {
+    @Test("parameter_size becomes the size label; local context_length becomes maxInputTokens")
+    func paramSizeAndContext() throws {
+        let body = #"""
+        {"models":[{"name":"qwen3.5:397b","size":240000000000,"modified_at":"2026-07-01T00:00:00Z",
+          "capabilities":["tools"],
+          "details":{"quantization_level":"Q4_K_M","parameter_size":"397B","context_length":262144}}]}
+        """#
+        let m = try #require(try ModelFetchService().decodeOllamaModelsForTesting(from: Data(body.utf8), providerID: "builtin.ollama").first)
+        #expect(m.sizeLabel == "397B")            // the parameter count, not the 240GB byte-size
+        #expect(m.maxInputTokens == 262144)       // local Ollama states the context window
+        #expect(m.capabilities.toolUse == true)
+    }
+
+    @Test("Cloud Ollama (no parameter_size / context_length) falls back to byte-size, nil context")
+    func cloudFallback() throws {
+        let body = #"{"models":[{"name":"glm-5.2:cloud","size":240000000000,"modified_at":"2026-07-01T00:00:00Z","details":{"quantization_level":"Q4_K_M"}}]}"#
+        let m = try #require(try ModelFetchService().decodeOllamaModelsForTesting(from: Data(body.utf8), providerID: "builtin.ollama-cloud").first)
+        #expect(m.maxInputTokens == nil)          // cloud omits context
+        #expect(m.sizeLabel != nil)               // byte-size fallback
     }
 }

@@ -64,8 +64,21 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
     /// `nil` when unstated.
     public var maxTemperature: Double?
     /// The provider's own prose description of the model, when it ships one (Gemini's `description`,
-    /// Mistral's `description`). `nil` when unstated. Carried for display; never drives behavior.
+    /// Mistral's `description`, OpenRouter's `description`). `nil` when unstated. Carried for
+    /// display; never drives behavior.
     public var modelDescription: String?
+    /// The default sampling parameters the provider publishes for this model, when it does (Gemini,
+    /// Mistral, OpenRouter). Reference metadata, not limits. `nil` when unstated or all-empty.
+    public var samplingDefaults: SamplingDefaults?
+    /// Whether the provider serves this model free of charge, when it says so (HuggingFace's
+    /// per-provider `is_free`). `nil` when unstated.
+    public var isFree: Bool?
+    /// Third-party benchmark scores the provider surfaces (OpenRouter's `benchmarks`). `nil` when
+    /// unstated. Reference metadata for model selection; never drives behavior.
+    public var benchmarks: ModelBenchmarks?
+    /// The model's identifier on the HuggingFace Hub, when the provider cross-references one
+    /// (OpenRouter's `hugging_face_id`, e.g. "meta-llama/Llama-3.3-70B-Instruct"). `nil` when unstated.
+    public var huggingFaceID: String?
 
     // MARK: - Backward-compatible pricing accessors
 
@@ -107,7 +120,11 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
         deprecatedOn: Date? = nil,
         deprecationReplacement: String? = nil,
         maxTemperature: Double? = nil,
-        modelDescription: String? = nil
+        modelDescription: String? = nil,
+        samplingDefaults: SamplingDefaults? = nil,
+        isFree: Bool? = nil,
+        benchmarks: ModelBenchmarks? = nil,
+        huggingFaceID: String? = nil
     ) {
         self.providerID = providerID
         self.modelID = modelID
@@ -127,6 +144,10 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
         self.deprecationReplacement = deprecationReplacement
         self.maxTemperature = maxTemperature
         self.modelDescription = modelDescription
+        self.samplingDefaults = samplingDefaults
+        self.isFree = isFree
+        self.benchmarks = benchmarks
+        self.huggingFaceID = huggingFaceID
     }
 
     /// Whether the model was created/modified within the last 90 days.
@@ -151,6 +172,7 @@ extension ModelInfo: Codable {
         case sizeLabel, quantizationLabel, pricing, supportsChatCompletions
         case mode, validEffortLevels, behaviorFlags
         case deprecatedOn, deprecationReplacement, maxTemperature, modelDescription
+        case samplingDefaults, isFree, benchmarks, huggingFaceID
         // Legacy keys for reading old persisted data
         case inputCostPerMillionTokens, outputCostPerMillionTokens
     }
@@ -175,6 +197,10 @@ extension ModelInfo: Codable {
         deprecationReplacement = try container.decodeIfPresent(String.self, forKey: .deprecationReplacement)
         maxTemperature = try container.decodeIfPresent(Double.self, forKey: .maxTemperature)
         modelDescription = try container.decodeIfPresent(String.self, forKey: .modelDescription)
+        samplingDefaults = try container.decodeIfPresent(SamplingDefaults.self, forKey: .samplingDefaults)
+        isFree = try container.decodeIfPresent(Bool.self, forKey: .isFree)
+        benchmarks = try container.decodeIfPresent(ModelBenchmarks.self, forKey: .benchmarks)
+        huggingFaceID = try container.decodeIfPresent(String.self, forKey: .huggingFaceID)
 
         // Read new pricing field, or fall back to legacy flat cost fields.
         if let p = try container.decodeIfPresent(ModelPricing.self, forKey: .pricing) {
@@ -220,6 +246,10 @@ extension ModelInfo: Codable {
         try container.encodeIfPresent(deprecationReplacement, forKey: .deprecationReplacement)
         try container.encodeIfPresent(maxTemperature, forKey: .maxTemperature)
         try container.encodeIfPresent(modelDescription, forKey: .modelDescription)
+        try container.encodeIfPresent(samplingDefaults, forKey: .samplingDefaults)
+        try container.encodeIfPresent(isFree, forKey: .isFree)
+        try container.encodeIfPresent(benchmarks, forKey: .benchmarks)
+        try container.encodeIfPresent(huggingFaceID, forKey: .huggingFaceID)
         // Legacy fields intentionally not written — new format only.
     }
 }

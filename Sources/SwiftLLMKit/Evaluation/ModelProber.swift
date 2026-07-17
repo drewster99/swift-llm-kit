@@ -49,6 +49,9 @@ public enum ModelProber {
         profile.pricing = info.pricing              // decoded-only, believed as published
         profile.deprecatedOn = info.deprecatedOn    // decoded-only (Mistral publishes it)
         profile.maxTemperature = info.maxTemperature // decoded-only (Gemini publishes it)
+        profile.samplingDefaults = info.samplingDefaults // decoded-only (Gemini/Mistral/OpenRouter)
+        profile.isFree = info.isFree                  // decoded-only (HuggingFace per-provider)
+        profile.benchmarks = info.benchmarks          // decoded-only (OpenRouter)
         // Listed in /models ⇒ presumed reachable, but only presumed — a live probe can overturn it.
         profile.isAvailable = .decoded(true, "present in provider /models listing")
         if let context = info.maxInputTokens {
