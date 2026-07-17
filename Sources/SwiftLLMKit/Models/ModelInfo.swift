@@ -29,8 +29,8 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
     /// Whether this model supports `/v1/chat/completions`. Defaults to `true` unless LiteLLM says otherwise.
     ///
     /// Endpoint reachability only — it does NOT mean the model can back an agent. Gemini's image
-    /// models answer on the chat endpoint and are `true` here. Use ``isConversational`` to ask
-    /// whether a model is a conversational text model.
+    /// models answer on the chat endpoint and are `true` here. Whether a model can actually drive
+    /// an agent is ``capabilities``' `toolUse` to answer, on evidence rather than on kind.
     public var supportsChatCompletions: Bool
     /// The model's kind as reported by LiteLLM (`chat`, `embedding`, `image_generation`,
     /// `responses`, `ocr`, …), or `nil` when unknown — which is the norm for the ~63% of the
@@ -95,25 +95,6 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
         self.mode = mode
         self.behaviorFlags = behaviorFlags
     }
-
-    /// Whether this model is a conversational text model — the kind an agent can drive.
-    ///
-    /// Distinct from ``supportsChatCompletions``, which only says the endpoint accepts it:
-    /// Gemini's image models answer on `/v1/chat/completions` and are still not agent material.
-    /// An unknown `mode` reports `true`, because most of the catalog has no LiteLLM entry and
-    /// must stay usable.
-    public var isConversational: Bool {
-        guard let mode else { return true }
-        return !Self.nonConversationalModes.contains(mode)
-    }
-
-    /// Kinds that can never back an agent. `chat` and `responses` are both text-generation kinds
-    /// and are deliberately excluded — a `responses` model may still be chat-reachable, which
-    /// ``supportsChatCompletions`` decides.
-    static let nonConversationalModes: Set<String> = [
-        "embedding", "image_generation", "video_generation", "audio_speech",
-        "audio_transcription", "moderation", "ocr", "rerank"
-    ]
 
     /// Whether the model was created/modified within the last 90 days.
     public var isNew: Bool {

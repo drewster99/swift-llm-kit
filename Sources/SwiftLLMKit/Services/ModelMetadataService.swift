@@ -456,10 +456,10 @@ public struct LiteLLMEntry: Sendable {
 
     /// Whether this model supports the standard chat completions endpoint.
     ///
-    /// Answers only "will `/v1/chat/completions` accept this model", NOT "is this a model an
-    /// agent can drive" — see ``isConversational`` for that. The two genuinely differ: Gemini
-    /// generates images *through* the chat endpoint, so `gemini-3-pro-image` belongs here and
-    /// still isn't something Brown can run.
+    /// Answers only "will `/v1/chat/completions` accept this model" — nothing about whether the
+    /// model is a good agent. Gemini generates images *through* the chat endpoint, so its image
+    /// models legitimately report `true` here; whether they can call tools is a separate
+    /// question that `capabilities.toolUse` answers on evidence.
     ///
     /// Precedence:
     /// 1. `supported_endpoints` when present — an explicit list outranks `mode`, which names a
@@ -471,26 +471,6 @@ public struct LiteLLMEntry: Sendable {
         if let endpoints = supportedEndpoints { return endpoints.contains("/v1/chat/completions") }
         if let mode { return mode == "chat" }
         return true
-    }
-
-    /// Model kinds that are definitively not conversational text generation, and so can never
-    /// back an agent no matter what endpoint they answer on.
-    ///
-    /// `chat` and `responses` are both text-generation kinds and are deliberately absent: a
-    /// `responses` model may still be chat-reachable, so it is left to ``supportsChatCompletions``
-    /// rather than disqualified here.
-    private static let nonConversationalModes: Set<String> = [
-        "embedding", "image_generation", "video_generation", "audio_speech",
-        "audio_transcription", "moderation", "ocr", "rerank"
-    ]
-
-    /// Whether this is a conversational text model — the kind an agent can actually drive.
-    ///
-    /// Unknown (`mode == nil`) reports `true`: an unrecognised model must stay usable, since a
-    /// missing mode is the norm for the endpoints LiteLLM doesn't catalogue at all.
-    public var isConversational: Bool {
-        guard let mode else { return true }
-        return !Self.nonConversationalModes.contains(mode)
     }
 
     /// Merges this LiteLLM entry's capabilities into an existing ``ModelCapabilities``,

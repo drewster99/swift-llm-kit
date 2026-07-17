@@ -669,14 +669,6 @@ public final class LLMKitManager {
                 return
             }
 
-            // Reachable on the endpoint but not a conversational model — Gemini's image models
-            // answer on /v1/chat/completions and would otherwise sail through the check above.
-            // An unknown kind passes, so the ~63% of the catalog LiteLLM doesn't cover stays usable.
-            if !modelInfo.isConversational {
-                configurations[index].isValid = false
-                configurations[index].validationError = "Model '\(config.modelID)' is \(modelInfo.mode.map { "a '\($0)' model" } ?? "not a chat model") — agents need a conversational model"
-                return
-            }
 
             // Check maxOutputTokens doesn't exceed model's reported max
             if let modelMax = modelInfo.maxOutputTokens, config.maxOutputTokens > modelMax {
