@@ -608,6 +608,15 @@ struct OpenRouterDecodeTests {
         let m = try #require(models.first)
         #expect(m.pricing == nil)
     }
+
+    @Test("top_provider.context_length (the served route's limit) is preferred over the headline")
+    func topProviderContextPreferred() throws {
+        let body = #"{"data":[{"id":"x/y","context_length":1000000,"top_provider":{"context_length":262144,"max_completion_tokens":32000}}]}"#
+        let models = try ModelFetchService().decodeOpenRouterModelsForTesting(from: Data(body.utf8), providerID: "builtin.openrouter")
+        let m = try #require(models.first)
+        #expect(m.maxInputTokens == 262144)     // top_provider wins over the 1,000,000 headline
+        #expect(m.maxOutputTokens == 32000)
+    }
 }
 
 /// HuggingFace's router lists concrete providers per model, each with its own caps/context/pricing.

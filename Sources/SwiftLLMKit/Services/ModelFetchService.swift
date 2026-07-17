@@ -360,7 +360,10 @@ public struct ModelFetchService: Sendable {
                     modelID: model.id,
                     displayName: model.name ?? model.id,
                     createdAt: model.created.map { Date(timeIntervalSince1970: TimeInterval($0)) },
-                    maxInputTokens: model.contextLength,
+                    // top_provider.context_length is the limit of the route OpenRouter actually
+                    // serves by default and can be smaller than the model's headline context; prefer
+                    // it, falling back to the top-level figure.
+                    maxInputTokens: model.topProvider?.contextLength ?? model.contextLength,
                     maxOutputTokens: model.topProvider?.maxCompletionTokens,
                     capabilities: caps,
                     pricing: pricing
@@ -754,8 +757,10 @@ private struct OpenRouterModelsResponse: Decodable {
         }
     }
     struct TopProvider: Decodable {
+        let contextLength: Int?
         let maxCompletionTokens: Int?
         enum CodingKeys: String, CodingKey {
+            case contextLength = "context_length"
             case maxCompletionTokens = "max_completion_tokens"
         }
     }
