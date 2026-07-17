@@ -119,7 +119,6 @@ public enum ModelProber {
         //    call with temperature: 0 settles both. Only a temperature rejection costs a second,
         //    temperature-free call. If chat can't be reached at all, every later probe fails the
         //    same way — stop once.
-        let callsBeforeStep1 = calls.value
         if profile.chat.status == .notAttempted {
             let combined = await probeChatAndTemperature(llm: llm, modelID: modelID, calls: calls)
             profile.chat = combined.chat
@@ -128,7 +127,6 @@ public enum ModelProber {
             // Chat came decoded; temperature still needs its own (cheap) probe.
             profile.acceptsTemperature = await probeTemperature(llm: llm, modelID: modelID, calls: calls)
         }
-        let madeLiveCall = calls.value > callsBeforeStep1
 
         // Reachability gate. A decoded chat=true is a claim, not proof: a model can be retired while
         // still listed (Gemini keeps returning gemini-2.0-flash-lite in /models long after every
@@ -159,12 +157,22 @@ public enum ModelProber {
             // Not a chat model. Tool calling and the rest are meaningless.
             return finish(&profile, calls: calls, started: started)
         }
-        // The model is reachable. Only claim "responded to a live call" when we actually made one —
-        // a fully pre-seeded profile reaches here without any request, so don't fabricate evidence.
-        if madeLiveCall {
-            profile.isAvailable = .established(true, "responded to a live call")
-            profile.isAccessDenied = .established(false, "responded to a live call")
+        // Reachability must be CONFIRMED by a live call that produced a DEFINITE answer before the
+        // structural probes (tool/vision/PDF/max-output) run — each of them grades a 4xx as the
+        // capability failing, which is only sound if a plain call to this model currently works. A
+        // step-1 finding that is `established` AND `probed` is exactly that proof: the endpoint gave
+        // a coherent answer (a 200, or a real 400 like "temperature not supported" — either way it's
+        // reachable). If step 1 produced only inconclusive results (rate-limit, auth, network), the
+        // assumption is unproven, so halt rather than fabricate falses, and don't claim availability
+        // we never confirmed. (A decoded chat=true is a catalog claim, not a live confirmation.)
+        let reachableConfirmed = [profile.chat, profile.acceptsTemperature]
+            .contains { $0.status == .established && $0.source == .probed }
+        guard reachableConfirmed else {
+            logger.info("Probe \(modelID, privacy: .public): no confirmed live response — halting before structural probes")
+            return finish(&profile, calls: calls, started: started)
         }
+        profile.isAvailable = .established(true, "responded to a live call")
+        profile.isAccessDenied = .established(false, "responded to a live call")
 
         // 2. Tool calling, then the result round-trip. The reason the probe exists.
         if profile.toolCalling.status == .notAttempted || profile.toolResultRoundTrip.status == .notAttempted {
@@ -178,10 +186,11 @@ public enum ModelProber {
             }
             profile.toolResultRoundTrip = {
                 switch toolResult.verdict {
-                case .roundTripCompleted:    return .established(true, "returned the identifier")
-                case .toolCallOnly:          return .established(false, "called the tool but did not return the identifier")
-                case .noToolCall, .rejected: return .established(false, "no tool call")
-                case .inconclusive:          return .inconclusive(toolResult.errorDescription ?? "no answer")
+                case .roundTripCompleted:      return .established(true, "returned the identifier")
+                case .toolCallOnly:            return .established(false, "called the tool but did not return the identifier")
+                case .noToolCall, .rejected:   return .established(false, "no tool call")
+                case .roundTripInconclusive:   return .inconclusive(toolResult.errorDescription ?? "tool-result request unresolved")
+                case .inconclusive:            return .inconclusive(toolResult.errorDescription ?? "no answer")
                 }
             }()
         }
@@ -282,7 +291,13 @@ public enum ModelProber {
                                  duration: Date().timeIntervalSince(started)))
         } catch {
             let detail = CapabilityProbe.rejectionDetail(error)
-            guard detail.lowercased().contains("temperature") else {
+            // "Temperature is the culprit" only when a GENUINE refusal (a coherent 4xx) names it. A
+            // transport failure / rate limit / auth / missing-model error that merely contains the
+            // word "temperature" establishes nothing — and re-probing chat without temperature would
+            // just fail the same way. Treat those like any other non-temperature failure.
+            let namesTemperature = CapabilityProbe.classifyFailure(error) != .noAnswer
+                && detail.lowercased().contains("temperature")
+            guard namesTemperature else {
                 // Not a temperature problem — chat failed for some other reason, and we learned
                 // nothing about temperature.
                 return (finding(fromError: error, capabilityKeywords: [], started: started),
@@ -344,7 +359,10 @@ public enum ModelProber {
             return .established(true, "accepted temperature", duration: Date().timeIntervalSince(started))
         } catch {
             let detail = CapabilityProbe.rejectionDetail(error)
-            if detail.lowercased().contains("temperature") {
+            // Only a genuine refusal (a coherent 4xx) that NAMES temperature is a "no". A transport
+            // failure, rate limit, missing model, or auth error that merely happens to contain the
+            // word "temperature" establishes nothing.
+            if CapabilityProbe.classifyFailure(error) != .noAnswer, detail.lowercased().contains("temperature") {
                 return .established(false, detail, duration: Date().timeIntervalSince(started))
             }
             return .inconclusive(detail, duration: Date().timeIntervalSince(started))
@@ -590,7 +608,10 @@ public enum ModelProber {
             return .established(true, "accepted effort '\(level)'", duration: Date().timeIntervalSince(started))
         } catch {
             let detail = CapabilityProbe.rejectionDetail(error)
-            if detail.lowercased().contains("effort") || detail.lowercased().contains("reasoning") {
+            // A genuine refusal (coherent 4xx) naming effort/reasoning is a "no"; a transport/rate-
+            // limit/auth/missing-model error that happens to mention "reasoning" establishes nothing.
+            if CapabilityProbe.classifyFailure(error) != .noAnswer,
+               detail.lowercased().contains("effort") || detail.lowercased().contains("reasoning") {
                 return .established(false, detail, duration: Date().timeIntervalSince(started))
             }
             return .inconclusive(detail, duration: Date().timeIntervalSince(started))

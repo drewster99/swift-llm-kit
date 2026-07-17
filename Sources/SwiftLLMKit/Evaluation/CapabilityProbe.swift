@@ -30,6 +30,11 @@ public enum CapabilityProbe {
         /// Emitted a well-formed call but never returned the identifier. Tool calling works;
         /// something about handling the result does not.
         case toolCallOnly
+        /// Emitted a well-formed call, but the tool-RESULT request never got an answer (transport
+        /// failure / rate limit). Tool calling is proven; the round-trip is simply UNRESOLVED — not
+        /// a failure. Distinct from `toolCallOnly` so a network hiccup isn't written as "can't use
+        /// tool results".
+        case roundTripInconclusive
         /// Answered in prose without calling the tool, despite being told to and (where
         /// supported) being forced to. Evidence of no usable tool calling.
         case noToolCall
@@ -60,7 +65,7 @@ public enum CapabilityProbe {
         /// `inconclusive` maps to `nil`, not `false`.
         public var toolUse: Bool? {
             switch verdict {
-            case .roundTripCompleted, .toolCallOnly: return true
+            case .roundTripCompleted, .toolCallOnly, .roundTripInconclusive: return true
             case .noToolCall, .rejected: return false
             case .inconclusive: return nil
             }
@@ -192,9 +197,12 @@ public enum CapabilityProbe {
             calls?.increment()
             second = try await llm.send(messages: followUp, tools: [tool], overrides: LLMCallOverrides())
         } catch {
-            // The call itself is already proven; only the round-trip is unresolved.
+            // The call itself is already proven. A transport failure / rate limit on the tool-result
+            // request leaves the round-trip UNRESOLVED (roundTripInconclusive), not failed — only a
+            // coherent refusal of the result submission is evidence the round-trip doesn't work.
+            let verdict: ToolCallVerdict = Self.classifyFailure(error) == .noAnswer ? .roundTripInconclusive : .toolCallOnly
             return ToolCallResult(
-                providerID: providerID, modelID: modelID, verdict: .toolCallOnly,
+                providerID: providerID, modelID: modelID, verdict: verdict,
                 toolChoiceForced: forced, expectedIdentifier: identifier,
                 returnedText: nil, calledTools: first.toolCalls.map(\.name),
                 errorDescription: error.localizedDescription,
@@ -236,14 +244,19 @@ public enum CapabilityProbe {
     /// old any-4xx-is-a-rejection rule recorded "claude-fable-5 cannot call tools" — a flat lie
     /// about a flagship model, produced entirely by our own request.
     ///
-    /// 429 is `noAnswer` too: rate limiting means the endpoint is busy, not that the model is
-    /// incapable. 404 likewise: a "not found" is a missing model or wrong endpoint (gone /
-    /// Responses-only), never the model answering "I can't do that" — that's a 400. Grading a 404
-    /// as a capability `false` would fabricate a "no" for a model that simply isn't reachable here.
+    /// Several 4xx codes are `noAnswer`, not capability answers, because none of them is the model
+    /// saying "I can't do that" (only a 400 is):
+    /// - **429** rate limit — the endpoint is busy, not the model incapable.
+    /// - **404** not found — a missing model or wrong endpoint (retired / Responses-only).
+    /// - **401 / 403** auth — an expired or unauthorized key. Grading these as a capability `false`
+    ///   would disable a perfectly capable model because we couldn't reach it. (An access-denied
+    ///   403 that names the model is still surfaced separately via ``textIndicatesAccessDenied``,
+    ///   which the caller scans on the resulting inconclusive finding.)
     static func classifyFailure(_ error: any Error) -> FailureKind {
+        let noAnswerCodes: Set<Int> = [401, 403, 404, 429]
         guard let providerError = error as? LLMProviderError,
               case .httpError(let statusCode, let body, _, _) = providerError,
-              (400..<500).contains(statusCode), statusCode != 429, statusCode != 404 else {
+              (400..<500).contains(statusCode), !noAnswerCodes.contains(statusCode) else {
             return .noAnswer
         }
         let lowered = body.lowercased()

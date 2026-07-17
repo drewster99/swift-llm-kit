@@ -52,16 +52,18 @@ struct CapabilityProbeGradingTests {
         #expect(CapabilityProbe.classifyFailure(
             httpError(400, #"{"error":{"message":"`temperature` is deprecated for this model."}}"#))
             == .refusedOurRequest)
-        #expect(CapabilityProbe.classifyFailure(httpError(401, "invalid x-api-key")) == .refusedOurRequest)
     }
 
-    /// A 404 is "model missing / wrong endpoint", never the model answering "I can't" (that's a
-    /// 400). Grading it as a capability answer would fabricate a `false` for a model that simply
-    /// isn't reachable here (retired, or Responses-API-only).
-    @Test("404 is noAnswer, not a capability answer")
-    func notFoundIsNoAnswer() {
+    /// A 404 (missing model / wrong endpoint), a 401/403 (auth), and a 429 (rate limit) are all
+    /// "we couldn't ask", never the model answering "I can't do that" — only a coherent 400 is.
+    /// Grading any of them as a capability answer would fabricate a `false` for a capable model we
+    /// merely failed to reach (expired key, retired model, Responses-only endpoint, busy server).
+    @Test("404/401/403 are noAnswer, not capability answers")
+    func unreachableCodesAreNoAnswer() {
         #expect(CapabilityProbe.classifyFailure(httpError(404, "model not found")) == .noAnswer)
         #expect(CapabilityProbe.classifyFailure(httpError(404, "")) == .noAnswer)
+        #expect(CapabilityProbe.classifyFailure(httpError(401, "invalid x-api-key")) == .noAnswer)
+        #expect(CapabilityProbe.classifyFailure(httpError(403, "forbidden")) == .noAnswer)
     }
 
     /// Rate limiting says the endpoint is busy, not that the model is incapable. Reading it as a
@@ -892,5 +894,57 @@ struct VisionGradingTests {
         #expect(ModelProber.gradeVisionAnswer("a yellow rectangle", colorName: "yellow", shape: .square).sawShape)
         // A wrong shape word is still a miss.
         #expect(ModelProber.gradeVisionAnswer("a red circle", colorName: "red", shape: .triangle).sawShape == false)
+    }
+}
+
+/// Regression tests for the "fabricated no on an unreachable model" hazards the external review
+/// (codex + agy) surfaced: auth/transport/rate-limit failures must never be written as capability
+/// falses, and structural probes must not run without a confirmed live response.
+@Suite("Unreachable model never fabricates a capability no")
+struct NoFabricatedNegativesTests {
+    /// Throws a fixed HTTP error on every call.
+    struct AlwaysFails: LLMProvider {
+        let code: Int
+        let body: String
+        func send(messages: [LLMMessage], tools: [LLMToolDefinition], overrides: LLMCallOverrides) async throws -> LLMResponse {
+            throw LLMProviderError.httpError(statusCode: code, body: body, url: nil, retryAfter: nil)
+        }
+    }
+
+    @Test("An expired key (401 everywhere) records NO capability falses and no availability claim")
+    func expiredKeyIsAllInconclusive() async {
+        let profile = await ModelProber.probe(llm: AlwaysFails(code: 401, body: "invalid api key"),
+                                              seed: ModelProfile(providerID: "p", modelID: "m"))
+        #expect(profile.chat.value != false)              // not "not a chat model"
+        #expect(profile.vision.value != false)            // never probed / never fabricated
+        #expect(profile.pdfInput.value != false)
+        #expect(profile.isAvailable.value != true)        // we never confirmed a live response
+    }
+
+    @Test("A model that only rate-limits is halted, not graded")
+    func rateLimitedIsHalted() async {
+        let profile = await ModelProber.probe(llm: AlwaysFails(code: 429, body: "rate limited"),
+                                              seed: ModelProfile(providerID: "p", modelID: "m"))
+        #expect(profile.chat.status != .established || profile.chat.value != false)
+        #expect(profile.toolCalling.value != false)
+        #expect(profile.vision.value != false)
+    }
+
+    @Test("probeTemperature: a 429 that mentions 'temperature' is inconclusive, not false")
+    func temperatureKeywordInTransportErrorIsInconclusive() async {
+        let finding = await ModelProber.probeTemperature(
+            llm: AlwaysFails(code: 429, body: "temperature-tier quota exceeded"), modelID: "m")
+        #expect(finding.status == .inconclusive)   // 429 is noAnswer despite the keyword
+        #expect(finding.value == nil)
+    }
+
+    @Test("The tool round-trip is inconclusive (not false) when the result call is a transport failure")
+    func roundTripInconclusiveMapping() {
+        // roundTripInconclusive: tool calling proven, round-trip unresolved.
+        let result = CapabilityProbe.ToolCallResult(
+            providerID: "p", modelID: "m", verdict: .roundTripInconclusive, toolChoiceForced: true,
+            expectedIdentifier: "ABC234XYZ", returnedText: nil, calledTools: ["get_test_identifier"],
+            errorDescription: "timed out", duration: 0)
+        #expect(result.toolUse == true)   // the call itself is still proven
     }
 }
