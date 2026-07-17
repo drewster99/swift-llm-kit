@@ -325,7 +325,7 @@ public enum ModelProber {
             let got = [sawColor ? "colour✓" : "colour✗", sawShape ? "shape✓" : "shape✗"].joined(separator: " ")
             return .established(false, "expected '\(color.name) \(shape.rawValue)' — \(got); said '\(text.prefix(50))'", duration: dur)
         } catch {
-            return finding(fromError: error, capabilityKeywords: ["image", "vision"], started: started)
+            return finding(fromError: error, capabilityKeywords: ["image", "vision", "multimodal"], started: started)
         }
     }
 
@@ -349,7 +349,7 @@ public enum ModelProber {
             }
             return .established(false, "expected '\(code)', said '\(text.prefix(40))'", duration: dur)
         } catch {
-            return finding(fromError: error, capabilityKeywords: ["pdf", "document", "file content"], started: started)
+            return finding(fromError: error, capabilityKeywords: ["pdf", "document", "file"], started: started)
         }
     }
 

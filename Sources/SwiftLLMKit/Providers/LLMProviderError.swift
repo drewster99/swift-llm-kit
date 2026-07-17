@@ -92,6 +92,8 @@ public enum LLMProviderError: Error, LocalizedError {
             "> *(\\d+),? *which is the maximum",
             // OpenAI (current): "This model supports at most 128000 completion tokens"
             "supports at most *(\\d+) *(?:completion|output) tokens",
+            // z.ai / GLM: "max_completion_tokens is limited to 16384 for glm-5.2"
+            "max_(?:completion_)?tokens (?:is )?limited to *(\\d+)",
             // OpenAI-style (older): "... maximum output tokens (131072)" / "... maximum output tokens is 131072"
             "maximum(?: allowed(?: number of)?)? output tokens(?: is)? *\\(? *(\\d+)"
         ]

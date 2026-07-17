@@ -388,3 +388,29 @@ struct AnthropicDecodeTests {
         #expect(models[0].validEffortLevels.isEmpty)
     }
 }
+
+/// Live glm-5.2 rejections (captured 2026-07-17) that the probe first read as inconclusive. Each
+/// is a definitive answer; these pin the phrasings so the next model that speaks this dialect is
+/// graded correctly instead of shrugged off.
+@Suite("GLM/z.ai rejection phrasings")
+struct GLMRejectionTests {
+
+    @Test("'max_completion_tokens is limited to N' yields the ceiling")
+    func maxCompletionLimited() {
+        let body = #"{"error":"BAD REQUEST","message":"payload validation: max_completion_tokens is limited to 16384 for glm-5.2","status":400}"#
+        #expect(LLMProviderError.reportedMaxOutputTokenLimit(inBody: body) == 16384)
+    }
+
+    @Test("'is not a multimodal model' is a vision no")
+    func notMultimodalIsVisionNo() {
+        // finding() lowercases both sides; the keyword set must catch the phrasing.
+        let body = "glm-5.2 is not a multimodal model"
+        #expect(["image", "vision", "multimodal"].contains { body.lowercased().contains($0) })
+    }
+
+    @Test("'content part type: file' is a pdf no")
+    func unsupportedFilePartIsPDFNo() {
+        let body = "Unsupported chat content part type: 'file'. Supported types: image_url, input_text, text"
+        #expect(["pdf", "document", "file"].contains { body.lowercased().contains($0) })
+    }
+}
