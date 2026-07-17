@@ -90,7 +90,9 @@ public enum LLMProviderError: Error, LocalizedError {
         let patterns = [
             // Anthropic: "... > 64000, which is the maximum allowed number of output tokens ..."
             "> *(\\d+),? *which is the maximum",
-            // OpenAI-style: "... maximum output tokens (131072)" / "... maximum output tokens is 131072"
+            // OpenAI (current): "This model supports at most 128000 completion tokens"
+            "supports at most *(\\d+) *(?:completion|output) tokens",
+            // OpenAI-style (older): "... maximum output tokens (131072)" / "... maximum output tokens is 131072"
             "maximum(?: allowed(?: number of)?)? output tokens(?: is)? *\\(? *(\\d+)"
         ]
         let range = NSRange(body.startIndex..<body.endIndex, in: body)

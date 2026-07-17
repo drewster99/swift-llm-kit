@@ -273,6 +273,12 @@ struct MaxOutputParsingTests {
         #expect(LLMProviderError.reportedMaxOutputTokenLimit(inBody: body) == 64000)
     }
 
+    @Test("OpenAI's current format: 'supports at most N completion tokens'")
+    func openAICurrentFormat() {
+        let body = #"{"error":{"message":"max_tokens is too large: 100000000. This model supports at most 128000 completion tokens, whereas you provided 100000000.","param":"max_tokens"}}"#
+        #expect(LLMProviderError.reportedMaxOutputTokenLimit(inBody: body) == 128000)
+    }
+
     @Test("OpenAI-style phrases it after")
     func openAIFormat() {
         #expect(LLMProviderError.reportedMaxOutputTokenLimit(inBody: "max_tokens exceeds the maximum output tokens (131072)") == 131072)
