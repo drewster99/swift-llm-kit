@@ -97,6 +97,30 @@ public enum LLMProviderError: Error, LocalizedError {
             // OpenAI-style (older): "... maximum output tokens (131072)" / "... maximum output tokens is 131072"
             "maximum(?: allowed(?: number of)?)? output tokens(?: is)? *\\(? *(\\d+)"
         ]
+        return Self.firstCapture(in: body, patterns: patterns)
+    }
+
+    /// A nearby token limit the body reveals even when it isn't the exact max-output figure — a
+    /// context length, or the upper bound of an allowed range. Used to shrink a max-output binary
+    /// search from `[512, 100M]` to `[512, hint]`: it's only a bound (context ≥ output, and the
+    /// range's top may exceed the true output cap), so the caller still bisects for the real value,
+    /// but from a handful of calls instead of ~24.
+    ///
+    /// Kept separate from ``reportedMaxOutputTokenLimit(inBody:)`` on purpose: this is not
+    /// necessarily the output ceiling, so it must never be reported AS the output ceiling.
+    public static func reportedLimitHint(inBody body: String) -> Int? {
+        let patterns = [
+            // OpenRouter: "This endpoint's maximum context length is 202752 tokens."
+            "context length is *(\\d+)",
+            // z.ai: "The max_tokens parameter is illegal.：限制数值范围[1,131072]"
+            "范围 *\\[ *1 *, *(\\d+) *\\]",
+            "range *\\[ *1 *, *(\\d+) *\\]"
+        ]
+        return Self.firstCapture(in: body, patterns: patterns)
+    }
+
+    /// First capture group of the first matching pattern (case-insensitive), as an Int.
+    private static func firstCapture(in body: String, patterns: [String]) -> Int? {
         let range = NSRange(body.startIndex..<body.endIndex, in: body)
         for pattern in patterns {
             guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),

@@ -408,39 +408,49 @@ public enum ModelProber {
             guard CapabilityProbe.classifyFailure(error) != .noAnswer else {
                 return .inconclusive(CapabilityProbe.rejectionDetail(error), duration: dur)
             }
-            // It rejected the absurd cap but didn't state the limit in a form we parse (z.ai's
-            // "The max_tokens parameter is illegal.：限制数值范围[1,131072]" is such a case). Rather
-            // than chase every provider's phrasing with another regex, find the ceiling
-            // empirically — the same "max_tokens is the only variable" logic the attachment probes
-            // use, applied as a search.
+            // It rejected the absurd cap but didn't state the exact output limit in a form we
+            // parse. Find the ceiling empirically — the same "max_tokens is the only variable"
+            // logic the attachment probes use, applied as a search.
             guard allowBinarySearch else {
                 return .inconclusive("rejected max_tokens=\(absurd) without a parseable limit: \(CapabilityProbe.rejectionDetail(error))", duration: dur)
             }
-            return await binarySearchMaxOutput(llm: llm, knownGood: 512, knownBad: absurd, calls: calls, started: started)
+            // Shrink the search when the same error reveals a nearby bound (a context length, a
+            // range's top) — [512, hint] instead of [512, 100M] is a handful of calls, not ~24.
+            var knownBad = absurd
+            if let providerError = error as? LLMProviderError,
+               case .httpError(_, let body, _, _) = providerError,
+               let hint = LLMProviderError.reportedLimitHint(inBody: body), hint > 512, hint < absurd {
+                knownBad = hint + 1   // the bound itself may be rejectable; +1 keeps it a known-bad
+            }
+            return await binarySearchMaxOutput(llm: llm, knownGood: 512, knownBad: knownBad, calls: calls, started: started)
         }
     }
 
     /// Finds the largest `max_tokens` the endpoint accepts when it won't state its limit in a
-    /// parseable form.
+    /// parseable form, by binary search over `[knownGood, knownBad]`.
     ///
     /// No error text is parsed. The invariant is structural: `knownGood` accepts and `knownBad`
     /// rejects, and `max_tokens` is the ONLY thing changing between calls — so at each step a 200
     /// means "ceiling ≥ mid" and any 4xx means "ceiling < mid". A non-4xx failure aborts (it says
     /// nothing about the cap).
     ///
-    /// Two phases so it stays exact without bisecting the whole `[512, 100M]` range (real ceilings
-    /// are ≤ ~200K, so most of that range is empty): first double upward to trap the ceiling in a
-    /// one-octave window, then bisect that window to the exact integer. Returns the largest
-    /// accepted value — never above the true ceiling, the safe direction for a clamp.
+    /// A real binary search: each step probes the MIDPOINT of the live interval and discards the
+    /// half that can't contain the ceiling. From `[512, 100M]` the first probe is ~50M, then ~25M,
+    /// ~12.5M, and so on down — the interval halves every call. (Tightening `knownBad` with a
+    /// parsed hint first, as the caller does, cuts the wasted steps through the empty upper range.)
     ///
-    /// Only reached on the rare provider that rejects without stating the number (z.ai), so its
-    /// double-digit call cost lands there, not on Anthropic/OpenAI (one call each). Disable with
-    /// `allowBinarySearch: false` on ``probeMaxOutputTokens(llm:modelID:calls:allowBinarySearch:)``.
+    /// Stops when the interval is within `tolerance` of the ceiling — the value feeds a clamp, so
+    /// a handful of tokens' slack isn't worth extra calls — or at the step cap. Returns the largest
+    /// accepted value, never above the true ceiling (the safe direction for a clamp).
+    ///
+    /// Only reached on the rare provider that rejects without stating the number, so its cost
+    /// lands there, not on Anthropic/OpenAI (one call each). Disable with `allowBinarySearch:
+    /// false` on ``probeMaxOutputTokens(llm:modelID:calls:allowBinarySearch:)``.
     static func binarySearchMaxOutput(
-        llm: any LLMProvider, knownGood: Int, knownBad: Int, calls: ProbeCallCounter?, started: Date
+        llm: any LLMProvider, knownGood: Int, knownBad: Int, calls: ProbeCallCounter?, started: Date,
+        stepCap: Int = 24
     ) async -> ProbeFinding<Int> {
         var low = knownGood, high = knownBad, steps = 0
-        let stepCap = 40
 
         func accepts(_ value: Int) async -> Bool? {   // nil = transport failure, abort
             steps += 1
@@ -454,34 +464,20 @@ public enum ModelProber {
             }
         }
 
-        func aborted() -> ProbeFinding<Int> {
-            .inconclusive("binary search interrupted after \(steps) steps (narrowed to \(low)–\(high))",
-                          duration: Date().timeIntervalSince(started))
-        }
-
-        // Phase 1 — exponential: double until a probe is rejected, trapping the ceiling in
-        // [low, high] with high ≤ 2·ceiling. Skips bisecting the huge empty upper range.
-        var probe = max(knownGood * 2, knownGood + 1)
-        while probe < knownBad && steps < stepCap {
-            switch await accepts(probe) {
-            case .some(true):  low = probe; probe = min(probe * 2, knownBad)
-            case .some(false): high = probe
-            case .none:        return aborted()
-            }
-            if high != knownBad { break }   // trapped
-        }
-
-        // Phase 2 — bisect [low, high] to the exact boundary.
-        while high - low > 1 && steps < stepCap {
+        // "Close enough" once the remaining gap is under ~0.5% of the live floor (min 2), since the
+        // result only clamps an output cap. Converges to the exact integer for small ceilings and
+        // stops a few calls early for large ones.
+        while high - low > max(2, low / 200) && steps < stepCap {
             let mid = low + (high - low) / 2
             switch await accepts(mid) {
-            case .some(true):  low = mid
-            case .some(false): high = mid
-            case .none:        return aborted()
+            case .some(true):  low = mid          // ceiling ≥ mid → search the upper half
+            case .some(false): high = mid         // ceiling < mid → search the lower half
+            case .none:
+                return .inconclusive("binary search interrupted after \(steps) steps (narrowed to \(low)–\(high))",
+                                     duration: Date().timeIntervalSince(started))
             }
         }
-
-        return .established(low, "largest accepted max_tokens found by binary search (\(steps) calls)",
+        return .established(low, "largest accepted max_tokens by binary search (\(steps) calls, within \(high - low))",
                             duration: Date().timeIntervalSince(started))
     }
 

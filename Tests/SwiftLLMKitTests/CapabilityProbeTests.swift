@@ -445,7 +445,10 @@ struct MaxOutputBinarySearchTests {
             // Largest accepted is the ceiling exactly (or a hair under if the cap bites — it won't
             // for these, 20 steps is ample). Never above: an over-report would 400 in production.
             let found = finding.value ?? -1
-            #expect(found == ceiling, "ceiling \(ceiling): found \(found)")
+            // Binary search stops within ~0.5% (it clamps an output cap; exactness isn't worth
+            // extra calls). Never above the true ceiling — an over-report would 400 in production.
+            #expect(found <= ceiling, "ceiling \(ceiling): found \(found) exceeds it")
+            #expect(found >= ceiling - max(2, ceiling / 100), "ceiling \(ceiling): found \(found) too low")
         }
     }
 
@@ -460,5 +463,49 @@ struct MaxOutputBinarySearchTests {
             llm: FlakyProvider(), knownGood: 512, knownBad: 100_000_000, calls: nil, started: Date())
         #expect(finding.status == .inconclusive)
         #expect(finding.value == nil)
+    }
+}
+
+
+/// The limit-hint extractor tightens the search when the endpoint reveals a nearby bound even
+/// though it isn't the exact output figure — captured from real 2026-07-17 bodies.
+@Suite("Output limit hint extraction")
+struct LimitHintTests {
+
+    @Test("OpenRouter states the context length")
+    func openRouterContextLength() {
+        let body = #"{"error":{"code":400,"message":"This endpoint's maximum context length is 202752 tokens. However, you requested about 100000008 tokens (8 of text input, 100000000 in the output)."}}"#
+        #expect(LLMProviderError.reportedLimitHint(inBody: body) == 202752)
+    }
+
+    @Test("z.ai states an allowed range")
+    func zaiRange() {
+        let body = "The max_tokens parameter is illegal.：限制数值范围[1,131072]"
+        #expect(LLMProviderError.reportedLimitHint(inBody: body) == 131072)
+    }
+
+    @Test("A tight knownBad from a hint converges to the exact ceiling")
+    func tightRangeIsExact() async {
+        struct CeilingProvider: LLMProvider {
+            let ceiling: Int
+            func send(messages: [LLMMessage], tools: [LLMToolDefinition], overrides: LLMCallOverrides) async throws -> LLMResponse {
+                if (overrides.maxOutputTokens ?? 512) > ceiling {
+                    throw LLMProviderError.httpError(statusCode: 400, body: "too big", url: nil, retryAfter: nil)
+                }
+                return LLMResponse(text: "ok", toolCalls: [], reasoning: nil, usage: nil, continuation: nil)
+            }
+        }
+        // With knownBad already near the ceiling (as a hint provides), the search converges
+        // within the 0.5% tolerance in a handful of calls — never above, always close.
+        let finding = await ModelProber.binarySearchMaxOutput(
+            llm: CeilingProvider(ceiling: 202744), knownGood: 512, knownBad: 202753, calls: nil, started: Date())
+        let found = finding.value ?? -1
+        #expect(found <= 202744)
+        #expect(found >= 202744 - 202744 / 100)
+    }
+
+    @Test("A non-limit body yields no hint")
+    func noHint() {
+        #expect(LLMProviderError.reportedLimitHint(inBody: "invalid api key") == nil)
     }
 }
