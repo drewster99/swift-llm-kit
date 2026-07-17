@@ -509,3 +509,27 @@ struct LimitHintTests {
         #expect(LLMProviderError.reportedLimitHint(inBody: "invalid api key") == nil)
     }
 }
+
+/// xAI's /models is richer than OpenAI's and shares the same decoder. These pin the two fields we
+/// decode from it, against the real grok-4.5 payload shape (captured 2026-07-17). Other
+/// OpenAI-compatible providers omit them and must decode unchanged.
+@Suite("xAI models decoding")
+struct XAIDecodeTests {
+    @Test("context_length becomes maxInputTokens; prompt_image_token_price implies vision")
+    func richFieldsDecoded() throws {
+        let body = #"{"data":[{"id":"grok-4.5","created":1782691200,"owned_by":"xai","context_length":500000,"prompt_image_token_price":20000,"completion_text_token_price":60000}]}"#
+        let models = try ModelFetchService().decodeOpenAIModelsForTesting(from: Data(body.utf8), providerID: "builtin.xai")
+        let grok = try #require(models.first)
+        #expect(grok.maxInputTokens == 500000)
+        #expect(grok.capabilities.vision == true)
+    }
+
+    @Test("A plain OpenAI payload (no rich fields) decodes unchanged")
+    func plainOpenAIUnaffected() throws {
+        let body = #"{"data":[{"id":"gpt-4o","created":1700000000,"owned_by":"openai"}]}"#
+        let models = try ModelFetchService().decodeOpenAIModelsForTesting(from: Data(body.utf8), providerID: "builtin.openai")
+        let m = try #require(models.first)
+        #expect(m.maxInputTokens == nil)
+        #expect(m.capabilities.vision == false)
+    }
+}

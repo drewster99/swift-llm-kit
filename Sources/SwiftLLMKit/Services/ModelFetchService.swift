@@ -205,14 +205,29 @@ public struct ModelFetchService: Sendable {
 
     // MARK: - OpenAI Compatible
 
+    /// Test seam for the shared OpenAI-compatible decoder (xAI routes through it).
+    func decodeOpenAIModelsForTesting(from data: Data, providerID: String) throws -> [ModelInfo] {
+        try decodeOpenAIModels(from: data, providerID: providerID)
+    }
+
     private func decodeOpenAIModels(from data: Data, providerID: String) throws -> [ModelInfo] {
         let decoded = try JSONDecoder().decode(OpenAIModelsResponse.self, from: data)
         return decoded.data
             .map { model in
-                ModelInfo(
+                // xAI states these; plain OpenAI-compatible endpoints leave them nil and are
+                // unaffected. A positive image-token price means the model prices — and therefore
+                // accepts — image input, so it's a vendor-stated vision signal, not a LiteLLM
+                // guess. Only set vision to true from it; its absence isn't proof of no vision.
+                var caps = ModelCapabilities()
+                if let imagePrice = model.promptImageTokenPrice, imagePrice > 0 {
+                    caps.vision = true
+                }
+                return ModelInfo(
                     providerID: providerID,
                     modelID: model.id,
-                    createdAt: model.created.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+                    createdAt: model.created.map { Date(timeIntervalSince1970: TimeInterval($0)) },
+                    maxInputTokens: model.contextLength,
+                    capabilities: caps
                 )
             }
             .sorted { $0.modelID < $1.modelID }
@@ -451,9 +466,17 @@ private struct OpenAIModelsResponse: Decodable {
         let id: String
         let created: Int?
         let ownedBy: String?
+        // xAI's /models is richer than OpenAI's and shares this decoder (apiType .xAI routes here).
+        // These are optional so every other OpenAI-compatible provider, which omits them, decodes
+        // unchanged. Prices are left to LiteLLM (verified, and xAI's are in an undocumented "tick"
+        // unit); what's decoded here is what the vendor states unambiguously.
+        let contextLength: Int?
+        let promptImageTokenPrice: Int?
         enum CodingKeys: String, CodingKey {
             case id, created
             case ownedBy = "owned_by"
+            case contextLength = "context_length"
+            case promptImageTokenPrice = "prompt_image_token_price"
         }
     }
     let data: [ModelEntry]
