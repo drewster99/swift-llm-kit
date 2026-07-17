@@ -140,17 +140,64 @@ public struct ModelFetchService: Sendable {
 
     // MARK: - Anthropic
 
+    /// Test seam: exercises the private decoder against captured payload shapes without a fetch.
+    func decodeAnthropicModelsForTesting(from data: Data, providerID: String) throws -> [ModelInfo] {
+        try decodeAnthropicModels(from: data, providerID: providerID)
+    }
+
     private func decodeAnthropicModels(from data: Data, providerID: String) throws -> [ModelInfo] {
         let decoded = try JSONDecoder().decode(AnthropicModelsResponse.self, from: data)
         return decoded.data
             .map { model in
-                ModelInfo(
+                // The vendor describing its own models is the one source with standing to — so
+                // the capabilities block is decoded and believed, not discarded (as it was until
+                // 2026-07: image_input and pdf_input were being thrown away and re-derived from
+                // LiteLLM's third-party claims instead).
+                var caps = ModelCapabilities()
+                var flags = BehaviorFlags()
+                var effortLevels: [String] = []
+
+                if let capabilities = model.capabilities {
+                    caps.vision = capabilities.imageInput?.supported ?? false
+                    caps.pdfInput = capabilities.pdfInput?.supported ?? false
+                    caps.reasoning = capabilities.thinking?.supported ?? false
+                    caps.codeExecution = capabilities.codeExecution?.supported ?? false
+                    caps.responseSchema = capabilities.structuredOutputs?.supported ?? false
+
+                    // The payload's own per-model level list, ordered by our rank table (the
+                    // payload is a JSON object, so it carries no order itself).
+                    if capabilities.effort?.supported == true {
+                        effortLevels = capabilities.effort?.levels
+                            .filter { $0.value }
+                            .map(\.key)
+                            .sorted { EffortRank.rank(of: $0) < EffortRank.rank(of: $1) } ?? []
+                    }
+
+                    // DERIVED, not hand-listed: a thinking model whose budget_tokens form is
+                    // unsupported (`types.enabled == false`) is adaptive-only — and, verified
+                    // live 2026-07-17, adaptive-only models also reject the `temperature`
+                    // parameter with HTTP 400 ("deprecated for this model"): opus-4-8 rejects,
+                    // while sonnet-4-6 / opus-4-5 (enabled == true) accept. Deriving both flags
+                    // here means the next adaptive-only model Anthropic ships is handled the day
+                    // it appears, instead of 400-ing until someone edits the bundled JSON. The
+                    // bundled entries remain as gap-fill for cold starts with no fetched catalog.
+                    if capabilities.thinking?.supported == true,
+                       capabilities.thinking?.types?.enabled?.supported == false {
+                        flags.requiresAdaptiveThinking = true
+                        flags.mustNeverSendTemperatureParam = true
+                    }
+                }
+
+                return ModelInfo(
                     providerID: providerID,
                     modelID: model.id,
                     displayName: model.displayName ?? model.id,
                     createdAt: model.createdAt.flatMap { parseISODate($0) },
                     maxInputTokens: model.maxInputTokens,
-                    maxOutputTokens: model.maxTokens
+                    maxOutputTokens: model.maxTokens,
+                    capabilities: caps,
+                    validEffortLevels: effortLevels,
+                    behaviorFlags: flags
                 )
             }
             .sorted { $0.modelID < $1.modelID }
@@ -315,18 +362,85 @@ private enum ModelFetchError: Error, LocalizedError {
 // MARK: - API Response Types
 
 private struct AnthropicModelsResponse: Decodable {
+    /// Anthropic's per-capability leaf: `{"supported": true}`. Everything in the capabilities
+    /// block bottoms out in this shape.
+    struct Supported: Decodable {
+        let supported: Bool?
+    }
+
+    /// The `thinking` block: overall support plus which mechanisms exist. `types.enabled` is the
+    /// budget_tokens form; `types.adaptive` is `thinking: {type: "adaptive"}`. A model with
+    /// `enabled.supported == false` is adaptive-ONLY — which, verified live, also means it
+    /// rejects the `temperature` parameter.
+    struct Thinking: Decodable {
+        struct Types: Decodable {
+            let adaptive: Supported?
+            let enabled: Supported?
+        }
+        let supported: Bool?
+        let types: Types?
+    }
+
+    /// The `effort` block: an overall `supported` plus one `{"supported": Bool}` per level. The
+    /// level names arrive as dynamic keys, so it decodes from a keyed container by hand.
+    struct Effort: Decodable {
+        let supported: Bool?
+        let levels: [String: Bool]
+
+        struct DynamicKey: CodingKey {
+            var stringValue: String
+            var intValue: Int? { nil }
+            init?(stringValue: String) { self.stringValue = stringValue }
+            init?(intValue: Int) { nil }
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: DynamicKey.self)
+            var supported: Bool?
+            var levels: [String: Bool] = [:]
+            for key in container.allKeys {
+                if key.stringValue == "supported" {
+                    supported = try? container.decode(Bool.self, forKey: key)
+                } else if let leaf = try? container.decode(Supported.self, forKey: key) {
+                    levels[key.stringValue] = leaf.supported ?? false
+                }
+            }
+            self.supported = supported
+            self.levels = levels
+        }
+    }
+
+    struct Capabilities: Decodable {
+        let imageInput: Supported?
+        let pdfInput: Supported?
+        let thinking: Thinking?
+        let effort: Effort?
+        let codeExecution: Supported?
+        let structuredOutputs: Supported?
+        enum CodingKeys: String, CodingKey {
+            case imageInput = "image_input"
+            case pdfInput = "pdf_input"
+            case thinking
+            case effort
+            case codeExecution = "code_execution"
+            case structuredOutputs = "structured_outputs"
+        }
+    }
+
     struct ModelEntry: Decodable {
         let id: String
         let displayName: String?
         let createdAt: String?
         let maxTokens: Int?
         let maxInputTokens: Int?
+        let capabilities: Capabilities?
         enum CodingKeys: String, CodingKey {
             case id
             case displayName = "display_name"
             case createdAt = "created_at"
             case maxTokens = "max_tokens"
             case maxInputTokens = "max_input_tokens"
+            case capabilities
         }
     }
     let data: [ModelEntry]

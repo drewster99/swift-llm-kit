@@ -39,6 +39,14 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
     /// Carried verbatim rather than reduced to a Bool so the UI can say *why* a model was
     /// disqualified ("this is an embedding model") instead of only that it was.
     public var mode: String?
+    /// The named effort levels this model accepts, ordered shallow → deep, or `[]` when the model
+    /// has no effort knob — or when nobody told us, which today only Anthropic does (its `/models`
+    /// payload enumerates them per model: sonnet-4-6 accepts `max` but not `xhigh`; haiku accepts
+    /// none). The wire values, e.g. `["low", "medium", "high", "xhigh", "max"]`.
+    ///
+    /// Replaces guessing from a vendor-blind allowlist: validation can check a chosen effort
+    /// against THIS model's list, and a picker can offer exactly what the model takes.
+    public var validEffortLevels: [String]
     /// Per-(provider+model) runtime behavior knobs. Defaults to all-off — a
     /// model with no flags set behaves like a model from before this field
     /// existed. See `BehaviorFlags` for available knobs and the layering rules.
@@ -79,6 +87,7 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
         pricing: ModelPricing? = nil,
         supportsChatCompletions: Bool = true,
         mode: String? = nil,
+        validEffortLevels: [String] = [],
         behaviorFlags: BehaviorFlags = BehaviorFlags()
     ) {
         self.providerID = providerID
@@ -93,6 +102,7 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
         self.pricing = pricing
         self.supportsChatCompletions = supportsChatCompletions
         self.mode = mode
+        self.validEffortLevels = validEffortLevels
         self.behaviorFlags = behaviorFlags
     }
 
@@ -111,7 +121,7 @@ extension ModelInfo: Codable {
         case providerID, modelID, displayName, createdAt
         case maxInputTokens, maxOutputTokens, capabilities
         case sizeLabel, quantizationLabel, pricing, supportsChatCompletions
-        case mode, behaviorFlags
+        case mode, validEffortLevels, behaviorFlags
         // Legacy keys for reading old persisted data
         case inputCostPerMillionTokens, outputCostPerMillionTokens
     }
@@ -130,6 +140,7 @@ extension ModelInfo: Codable {
         quantizationLabel = try container.decodeIfPresent(String.self, forKey: .quantizationLabel)
         supportsChatCompletions = try container.decodeIfPresent(Bool.self, forKey: .supportsChatCompletions) ?? true
         mode = try container.decodeIfPresent(String.self, forKey: .mode)
+        validEffortLevels = try container.decodeIfPresent([String].self, forKey: .validEffortLevels) ?? []
         behaviorFlags = try container.decodeIfPresent(BehaviorFlags.self, forKey: .behaviorFlags) ?? BehaviorFlags()
 
         // Read new pricing field, or fall back to legacy flat cost fields.
@@ -163,6 +174,9 @@ extension ModelInfo: Codable {
         try container.encodeIfPresent(pricing, forKey: .pricing)
         try container.encode(supportsChatCompletions, forKey: .supportsChatCompletions)
         try container.encodeIfPresent(mode, forKey: .mode)
+        if !validEffortLevels.isEmpty {
+            try container.encode(validEffortLevels, forKey: .validEffortLevels)
+        }
         // Skip encoding behavior flags when they're at defaults to keep on-disk
         // payloads compact and round-trippable through clients that don't know
         // the field. The all-default case loads as the same value either way.

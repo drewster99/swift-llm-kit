@@ -694,6 +694,18 @@ public final class LLMKitManager {
                 return
             }
 
+            // When the model's OWN effort list is known (today: Anthropic publishes it per model),
+            // validate the chosen effort against it — not against the vendor-blind union above,
+            // which happily accepts `minimal` on a Claude model (a guaranteed 400) and can't know
+            // that sonnet-4-6 takes `max` but not `xhigh`. An empty list means nobody told us the
+            // levels, not "no levels", so it stays permissive.
+            if let effort = config.thinkingEffort,
+               !modelInfo.validEffortLevels.isEmpty,
+               !modelInfo.validEffortLevels.contains(effort) {
+                configurations[index].isValid = false
+                configurations[index].validationError = "Model '\(config.modelID)' does not accept effort '\(effort)' (it accepts: \(modelInfo.validEffortLevels.joined(separator: ", ")))"
+                return
+            }
 
             // Check maxOutputTokens doesn't exceed model's reported max
             if let modelMax = modelInfo.maxOutputTokens, config.maxOutputTokens > modelMax {

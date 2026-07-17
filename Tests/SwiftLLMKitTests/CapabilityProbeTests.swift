@@ -309,3 +309,76 @@ struct AnthropicAdaptiveFlagTests {
         }
     }
 }
+
+/// The Anthropic decoder now reads the capabilities block it used to discard. Tested against the
+/// real payload shape (captured live 2026-07-16), including the two models that differ most:
+/// sonnet-5 (everything on, adaptive-only) and haiku-4-5 (no effort, budget thinking).
+@Suite("Anthropic capabilities decoding")
+struct AnthropicDecodeTests {
+
+    private let payload = """
+    {"data":[
+      {"id":"claude-sonnet-5","display_name":"Claude Sonnet 5","created_at":"2026-06-29T00:00:00Z",
+       "max_input_tokens":1000000,"max_tokens":128000,"type":"model",
+       "capabilities":{
+         "image_input":{"supported":true},"pdf_input":{"supported":true},
+         "code_execution":{"supported":true},"structured_outputs":{"supported":true},
+         "effort":{"supported":true,"low":{"supported":true},"medium":{"supported":true},
+                   "high":{"supported":true},"xhigh":{"supported":true},"max":{"supported":true}},
+         "thinking":{"supported":true,"types":{"adaptive":{"supported":true},"enabled":{"supported":false}}}}},
+      {"id":"claude-haiku-4-5-20251001","display_name":"Claude Haiku 4.5","created_at":"2025-10-15T00:00:00Z",
+       "max_input_tokens":200000,"max_tokens":64000,"type":"model",
+       "capabilities":{
+         "image_input":{"supported":true},"pdf_input":{"supported":true},
+         "code_execution":{"supported":false},"structured_outputs":{"supported":true},
+         "effort":{"supported":false,"low":{"supported":false},"medium":{"supported":false},
+                   "high":{"supported":false},"xhigh":{"supported":false},"max":{"supported":false}},
+         "thinking":{"supported":true,"types":{"adaptive":{"supported":false},"enabled":{"supported":true}}}}}
+    ]}
+    """
+
+    private func decode() throws -> [ModelInfo] {
+        try ModelFetchService().decodeAnthropicModelsForTesting(
+            from: Data(payload.utf8), providerID: "builtin.anthropic")
+    }
+
+    @Test("Vendor capabilities land on ModelInfo instead of being discarded")
+    func capabilitiesDecoded() throws {
+        let models = try decode()
+        let sonnet = try #require(models.first { $0.modelID == "claude-sonnet-5" })
+        #expect(sonnet.capabilities.vision && sonnet.capabilities.pdfInput && sonnet.capabilities.reasoning)
+        #expect(sonnet.capabilities.codeExecution && sonnet.capabilities.responseSchema)
+        #expect(sonnet.maxInputTokens == 1_000_000 && sonnet.maxOutputTokens == 128_000)
+    }
+
+    @Test("Effort levels decode per model, rank-ordered; no-effort models get an empty list")
+    func effortLevelsDecoded() throws {
+        let models = try decode()
+        let sonnet = try #require(models.first { $0.modelID == "claude-sonnet-5" })
+        #expect(sonnet.validEffortLevels == ["low", "medium", "high", "xhigh", "max"])
+        let haiku = try #require(models.first { $0.modelID == "claude-haiku-4-5-20251001" })
+        #expect(haiku.validEffortLevels.isEmpty)
+    }
+
+    /// The derivation that retires hand-listing: adaptive-only (enabled == false) implies BOTH
+    /// flags, proven live 2026-07-17. Haiku (enabled == true) must get neither.
+    @Test("Adaptive-only models derive both behavior flags; budget models derive none")
+    func flagsDerived() throws {
+        let models = try decode()
+        let sonnet = try #require(models.first { $0.modelID == "claude-sonnet-5" })
+        #expect(sonnet.behaviorFlags.requiresAdaptiveThinking)
+        #expect(sonnet.behaviorFlags.mustNeverSendTemperatureParam)
+        let haiku = try #require(models.first { $0.modelID == "claude-haiku-4-5-20251001" })
+        #expect(!haiku.behaviorFlags.requiresAdaptiveThinking)
+        #expect(!haiku.behaviorFlags.mustNeverSendTemperatureParam)
+    }
+
+    @Test("A payload with no capabilities block still decodes (older API shape)")
+    func missingCapabilitiesTolerated() throws {
+        let bare = #"{"data":[{"id":"claude-x","type":"model"}]}"#
+        let models = try ModelFetchService().decodeAnthropicModelsForTesting(
+            from: Data(bare.utf8), providerID: "p")
+        #expect(models.count == 1)
+        #expect(models[0].validEffortLevels.isEmpty)
+    }
+}
