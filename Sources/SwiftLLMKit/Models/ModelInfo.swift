@@ -59,6 +59,13 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
     /// The model the provider recommends migrating to, when it names one (Mistral's
     /// `deprecation_replacement_model`). `nil` when unstated.
     public var deprecationReplacement: String?
+    /// The highest `temperature` the provider says this model accepts, when it publishes a ceiling
+    /// (only Gemini does: `maxTemperature`, typically 2). A request-validation limit, not a default.
+    /// `nil` when unstated.
+    public var maxTemperature: Double?
+    /// The provider's own prose description of the model, when it ships one (Gemini's `description`,
+    /// Mistral's `description`). `nil` when unstated. Carried for display; never drives behavior.
+    public var modelDescription: String?
 
     // MARK: - Backward-compatible pricing accessors
 
@@ -98,7 +105,9 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
         validEffortLevels: [String] = [],
         behaviorFlags: BehaviorFlags = BehaviorFlags(),
         deprecatedOn: Date? = nil,
-        deprecationReplacement: String? = nil
+        deprecationReplacement: String? = nil,
+        maxTemperature: Double? = nil,
+        modelDescription: String? = nil
     ) {
         self.providerID = providerID
         self.modelID = modelID
@@ -116,6 +125,8 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
         self.behaviorFlags = behaviorFlags
         self.deprecatedOn = deprecatedOn
         self.deprecationReplacement = deprecationReplacement
+        self.maxTemperature = maxTemperature
+        self.modelDescription = modelDescription
     }
 
     /// Whether the model was created/modified within the last 90 days.
@@ -139,7 +150,7 @@ extension ModelInfo: Codable {
         case maxInputTokens, maxOutputTokens, capabilities
         case sizeLabel, quantizationLabel, pricing, supportsChatCompletions
         case mode, validEffortLevels, behaviorFlags
-        case deprecatedOn, deprecationReplacement
+        case deprecatedOn, deprecationReplacement, maxTemperature, modelDescription
         // Legacy keys for reading old persisted data
         case inputCostPerMillionTokens, outputCostPerMillionTokens
     }
@@ -162,6 +173,8 @@ extension ModelInfo: Codable {
         behaviorFlags = try container.decodeIfPresent(BehaviorFlags.self, forKey: .behaviorFlags) ?? BehaviorFlags()
         deprecatedOn = try container.decodeIfPresent(Date.self, forKey: .deprecatedOn)
         deprecationReplacement = try container.decodeIfPresent(String.self, forKey: .deprecationReplacement)
+        maxTemperature = try container.decodeIfPresent(Double.self, forKey: .maxTemperature)
+        modelDescription = try container.decodeIfPresent(String.self, forKey: .modelDescription)
 
         // Read new pricing field, or fall back to legacy flat cost fields.
         if let p = try container.decodeIfPresent(ModelPricing.self, forKey: .pricing) {
@@ -205,6 +218,8 @@ extension ModelInfo: Codable {
         }
         try container.encodeIfPresent(deprecatedOn, forKey: .deprecatedOn)
         try container.encodeIfPresent(deprecationReplacement, forKey: .deprecationReplacement)
+        try container.encodeIfPresent(maxTemperature, forKey: .maxTemperature)
+        try container.encodeIfPresent(modelDescription, forKey: .modelDescription)
         // Legacy fields intentionally not written — new format only.
     }
 }

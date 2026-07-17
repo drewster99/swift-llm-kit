@@ -701,3 +701,81 @@ struct MistralDecodeTests {
         #expect(small.isDeprecated == false)              // no deprecation field
     }
 }
+
+/// Gemini alone publishes a temperature ceiling and prose description; both decode.
+@Suite("Gemini rich fields")
+struct GeminiRichFieldTests {
+    @Test("maxTemperature and description decode; temperature/topK/topP defaults are ignored")
+    func maxTempAndDescription() throws {
+        let body = #"""
+        {"models":[{"name":"models/gemini-2.5-flash","displayName":"Gemini 2.5 Flash",
+          "description":"Mid-size multimodal model.","inputTokenLimit":1048576,"outputTokenLimit":65536,
+          "supportedGenerationMethods":["generateContent"],"temperature":1,"topK":64,"topP":0.95,
+          "maxTemperature":2}]}
+        """#
+        let models = try ModelFetchService().decodeGeminiModelsForTesting(from: Data(body.utf8), providerID: "builtin.gemini")
+        let m = try #require(models.first)
+        #expect(m.maxTemperature == 2)
+        #expect(m.modelDescription == "Mid-size multimodal model.")
+        #expect(m.maxInputTokens == 1048576)
+    }
+}
+
+/// A model that is gone or access-denied must never be graded as "can't do X" — the failure is the
+/// model or the permission, not the capability under test.
+@Suite("Unreachable-model grading")
+struct UnreachableModelTests {
+    @Test("Gemini's 'no longer available' 404 is recognized as model-gone")
+    func modelGoneText() {
+        let body = "This model models/gemini-2.0-flash-lite is no longer available. Please update your code."
+        #expect(CapabilityProbe.textIndicatesModelGone(body))
+        #expect(!CapabilityProbe.textIndicatesModelGone("image input is not supported for this model"))
+    }
+
+    @Test("Alibaba's Model.AccessDenied is recognized as access-denied")
+    func accessDeniedText() {
+        #expect(CapabilityProbe.textIndicatesAccessDenied(#"{"error":{"code":"Model.AccessDenied","message":"Model access denied."}}"#))
+        #expect(!CapabilityProbe.textIndicatesAccessDenied("temperature is out of range"))
+    }
+
+    /// The exact bug from the field: chat decoded true, but every live call 404s "no longer
+    /// available". The probe must halt with isAvailable=false and NOT record vision/pdf as false.
+    @Test("A delisted-but-listed model halts as unavailable, fabricating no capability falses")
+    func delistedModelHaltsCleanly() async {
+        struct GoneProvider: LLMProvider {
+            func send(messages: [LLMMessage], tools: [LLMToolDefinition], overrides: LLMCallOverrides) async throws -> LLMResponse {
+                throw LLMProviderError.httpError(
+                    statusCode: 404,
+                    body: #"{"error":{"code":404,"message":"This model is no longer available.","status":"NOT_FOUND"}}"#,
+                    url: nil, retryAfter: nil)
+            }
+        }
+        // Seed chat as decoded true (as Gemini's supportedGenerationMethods would).
+        var seed = ModelProfile(providerID: "builtin.gemini", modelID: "gemini-2.0-flash-lite")
+        seed.chat = .decoded(true, "supportedGenerationMethods")
+        seed.isAvailable = .decoded(true, "present in provider /models listing")
+
+        let profile = await ModelProber.probe(llm: GoneProvider(), seed: seed)
+        #expect(profile.isAvailable.value == false)
+        // The whole point: no fabricated capability answers for a dead model.
+        #expect(profile.vision.value != false)
+        #expect(profile.pdfInput.value != false)
+    }
+
+    @Test("An access-denied model halts with isAccessDenied, not capability falses")
+    func accessDeniedModelHaltsCleanly() async {
+        struct DeniedProvider: LLMProvider {
+            func send(messages: [LLMMessage], tools: [LLMToolDefinition], overrides: LLMCallOverrides) async throws -> LLMResponse {
+                throw LLMProviderError.httpError(
+                    statusCode: 403,
+                    body: #"{"error":{"code":"Model.AccessDenied","message":"Model access denied."}}"#,
+                    url: nil, retryAfter: nil)
+            }
+        }
+        var seed = ModelProfile(providerID: "builtin.alibaba", modelID: "qwen-max")
+        seed.chat = .decoded(true, "listed")
+        let profile = await ModelProber.probe(llm: DeniedProvider(), seed: seed)
+        #expect(profile.isAccessDenied.value == true)
+        #expect(profile.vision.value != false)
+    }
+}

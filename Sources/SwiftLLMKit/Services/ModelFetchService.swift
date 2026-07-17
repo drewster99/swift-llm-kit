@@ -469,13 +469,18 @@ public struct ModelFetchService: Sendable {
                     capabilities: caps,
                     supportsChatCompletions: supportsChat,
                     deprecatedOn: model.deprecation.flatMap(parseISODate),
-                    deprecationReplacement: model.deprecationReplacementModel
+                    deprecationReplacement: model.deprecationReplacementModel,
+                    modelDescription: model.description
                 )
             }
             .sorted { $0.modelID < $1.modelID }
     }
 
     // MARK: - Gemini
+
+    func decodeGeminiModelsForTesting(from data: Data, providerID: String) throws -> [ModelInfo] {
+        try decodeGeminiModels(from: data, providerID: providerID)
+    }
 
     private func decodeGeminiModels(from data: Data, providerID: String) throws -> [ModelInfo] {
         let decoded = try JSONDecoder().decode(GeminiModelsResponse.self, from: data)
@@ -499,7 +504,9 @@ public struct ModelFetchService: Sendable {
                     maxInputTokens: model.inputTokenLimit,
                     maxOutputTokens: model.outputTokenLimit,
                     capabilities: caps,
-                    supportsChatCompletions: supportsChat
+                    supportsChatCompletions: supportsChat,
+                    maxTemperature: model.maxTemperature,
+                    modelDescription: model.description
                 )
             }
             .sorted { $0.modelID < $1.modelID }
@@ -888,6 +895,9 @@ private struct GeminiModelsResponse: Decodable {
         let outputTokenLimit: Int?
         let supportedGenerationMethods: [String]?
         let thinking: Bool?
+        // Gemini alone publishes a temperature ceiling (usually 2); temperature/topK/topP are
+        // defaults, not limits, so they're intentionally not captured.
+        let maxTemperature: Double?
     }
     let models: [ModelEntry]
 }

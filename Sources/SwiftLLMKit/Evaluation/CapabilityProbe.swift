@@ -250,6 +250,34 @@ public enum CapabilityProbe {
         return mentionsTools ? .refusedTools : .refusedOurRequest
     }
 
+    /// Whether an error body says the MODEL itself is gone — retired, removed, never existed — as
+    /// opposed to rejecting something about our request. Gemini keeps listing `gemini-2.0-flash-lite`
+    /// in `/models` long after every call 404s with "is no longer available"; a delisted-but-listed
+    /// model must not be read as "rejected the attachment" or "isn't a chat model."
+    ///
+    /// This is a text signal on top of the status code because the code alone can't tell "model
+    /// retired" (404) from "wrong image format" (also 4xx). The phrases are provider-agnostic and
+    /// specific enough not to fire on a normal capability refusal.
+    public static func textIndicatesModelGone(_ text: String) -> Bool {
+        let lowered = text.lowercased()
+        return ["no longer available", "is not found", "does not exist", "model not found",
+                "not_found", "has been deprecated and is no longer"]
+            .contains { lowered.contains($0) }
+    }
+
+    /// Whether an error body says the ACCOUNT may not call this model — the model exists and is
+    /// current, but this key hasn't been granted access (Alibaba Cloud's `Model.AccessDenied`,
+    /// returned until you enable the model in their dashboard). Distinct from "model gone": the
+    /// remedy is a permission change, not a model swap, so a caller may want to surface it
+    /// differently. Like ``textIndicatesModelGone(_:)``, a text signal because the status code
+    /// (403) is shared with unrelated auth failures.
+    public static func textIndicatesAccessDenied(_ text: String) -> Bool {
+        let lowered = text.lowercased()
+        return ["access denied", "accessdenied", "model access", "not authorized to access",
+                "does not have access"]
+            .contains { lowered.contains($0) }
+    }
+
     /// The endpoint's own words about why it refused, kept for the report — a 400 saying
     /// "tools are not supported for this model" and one saying "unknown parameter
     /// 'tool_choice'" are entirely different findings, and the status code alone loses that.

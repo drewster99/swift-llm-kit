@@ -29,6 +29,24 @@ public struct ModelProfile: Sendable, Codable, Equatable {
     /// away then."
     public var deprecatedOn: Date?
 
+    /// The highest `temperature` the provider says this model accepts, when it publishes one (only
+    /// Gemini does: `maxTemperature`, typically 2). A real request-validation ceiling — sending
+    /// above it is rejected — not a default. `nil` when unstated.
+    public var maxTemperature: Double?
+
+    /// Whether the model is actually reachable, as opposed to merely listed. Seeded `decoded(true)`
+    /// ("present in /models") and flipped to `established(false)` when a live call reports it gone
+    /// (a 404 "no longer available"). Kept separate from ``deprecatedOn`` on purpose: a model can be
+    /// scheduled-for-deprecation yet fully usable, or delisted-but-still-listed yet already dead.
+    public var isAvailable: ProbeFinding<Bool>
+
+    /// Whether the account is allowed to call this model. `established(false)` when a live call is
+    /// refused for access reasons (Alibaba Cloud's `Model.AccessDenied` — the model exists and is
+    /// current, but the dashboard hasn't enabled it for this key). Separate from ``isAvailable``:
+    /// "you can't call it" and "it no longer exists" are different facts a caller may treat
+    /// differently.
+    public var isAccessDenied: ProbeFinding<Bool>
+
     /// The model's context window. Decoded-only today (Anthropic's `max_input_tokens`, Gemini's
     /// `inputTokenLimit`): probing it means actually sending a window's worth of tokens, which at
     /// 1M-context prices is deferred until everything else is finished and proven.
@@ -68,6 +86,9 @@ public struct ModelProfile: Sendable, Codable, Equatable {
         createdAt: Date? = nil,
         pricing: ModelPricing? = nil,
         deprecatedOn: Date? = nil,
+        maxTemperature: Double? = nil,
+        isAvailable: ProbeFinding<Bool> = .notAttempted,
+        isAccessDenied: ProbeFinding<Bool> = .notAttempted,
         maxContextTokens: ProbeFinding<Int> = .notAttempted,
         chat: ProbeFinding<Bool> = .notAttempted,
         toolCalling: ProbeFinding<Bool> = .notAttempted,
@@ -87,6 +108,9 @@ public struct ModelProfile: Sendable, Codable, Equatable {
         self.createdAt = createdAt
         self.pricing = pricing
         self.deprecatedOn = deprecatedOn
+        self.maxTemperature = maxTemperature
+        self.isAvailable = isAvailable
+        self.isAccessDenied = isAccessDenied
         self.maxContextTokens = maxContextTokens
         self.chat = chat
         self.toolCalling = toolCalling

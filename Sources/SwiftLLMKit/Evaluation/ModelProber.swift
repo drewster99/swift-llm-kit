@@ -48,6 +48,9 @@ public enum ModelProber {
         profile.createdAt = info.createdAt
         profile.pricing = info.pricing              // decoded-only, believed as published
         profile.deprecatedOn = info.deprecatedOn    // decoded-only (Mistral publishes it)
+        profile.maxTemperature = info.maxTemperature // decoded-only (Gemini publishes it)
+        // Listed in /models ⇒ presumed reachable, but only presumed — a live probe can overturn it.
+        profile.isAvailable = .decoded(true, "present in provider /models listing")
         if let context = info.maxInputTokens {
             profile.maxContextTokens = .decoded(context, "provider /models payload")
         }
@@ -121,6 +124,23 @@ public enum ModelProber {
             // Chat came decoded; temperature still needs its own (cheap) probe.
             profile.acceptsTemperature = await probeTemperature(llm: llm, modelID: modelID, calls: calls)
         }
+        // Reachability gate. A decoded chat=true is a claim, not proof: a model can be retired while
+        // still listed (Gemini keeps returning gemini-2.0-flash-lite in /models long after every
+        // call 404s "no longer available"), or listed but not enabled for this account (Alibaba
+        // Cloud's Model.AccessDenied). Step 1 just made a live call — if it, or the chat reading,
+        // reports either, mark the specific reason and stop. Otherwise everything downstream would
+        // grade an unreachable model and write fabricated `false`s.
+        let step1Evidence = [profile.chat, profile.acceptsTemperature].compactMap(\.evidence)
+        if let gone = step1Evidence.first(where: CapabilityProbe.textIndicatesModelGone) {
+            profile.isAvailable = .established(false, gone)
+            logger.error("Probe \(modelID, privacy: .public): model unavailable — halting")
+            return finish(&profile, calls: calls, started: started)
+        }
+        if let denied = step1Evidence.first(where: CapabilityProbe.textIndicatesAccessDenied) {
+            profile.isAccessDenied = .established(true, denied)
+            logger.error("Probe \(modelID, privacy: .public): access denied — halting")
+            return finish(&profile, calls: calls, started: started)
+        }
         if profile.chat.status == .inconclusive {
             logger.error("Probe \(modelID, privacy: .public): chat inconclusive — halting")
             return finish(&profile, calls: calls, started: started)
@@ -129,6 +149,10 @@ public enum ModelProber {
             // Not a chat model. Tool calling and the rest are meaningless.
             return finish(&profile, calls: calls, started: started)
         }
+        // The model answered a live call and is reachable — record it available and access-granted,
+        // upgrading the decoded "listed in /models" presumption to probed facts.
+        profile.isAvailable = .established(true, "responded to a live call")
+        profile.isAccessDenied = .established(false, "responded to a live call")
 
         // 2. Tool calling, then the result round-trip. The reason the probe exists.
         if profile.toolCalling.status == .notAttempted || profile.toolResultRoundTrip.status == .notAttempted {
@@ -389,6 +413,13 @@ public enum ModelProber {
     private static func attachmentRejection(_ error: any Error, attachment: String, started: Date) -> ProbeFinding<Bool> {
         let dur = Date().timeIntervalSince(started)
         let detail = CapabilityProbe.rejectionDetail(error)
+        // The structural grading below assumes plain chat to this model works, so the attachment is
+        // the only new variable. If the body says the MODEL is gone or the account can't access it,
+        // that assumption is void — the failure is the model/permission, not the attachment.
+        // Inconclusive, never a fabricated "no".
+        if CapabilityProbe.textIndicatesModelGone(detail) || CapabilityProbe.textIndicatesAccessDenied(detail) {
+            return .inconclusive("model unavailable/denied, not a \(attachment) rejection: \(detail)", duration: dur)
+        }
         switch CapabilityProbe.classifyFailure(error) {
         case .noAnswer:
             return .inconclusive(detail, duration: dur)
@@ -540,6 +571,12 @@ public enum ModelProber {
     private static func finding(fromError error: any Error, capabilityKeywords: [String], started: Date) -> ProbeFinding<Bool> {
         let dur = Date().timeIntervalSince(started)
         let detail = CapabilityProbe.rejectionDetail(error)
+        // A model that is gone (404 "no longer available") or that this account can't access hasn't
+        // refused our request on its merits — it isn't reachable. For chat that means inconclusive,
+        // not "not a chat model."
+        if CapabilityProbe.textIndicatesModelGone(detail) || CapabilityProbe.textIndicatesAccessDenied(detail) {
+            return .inconclusive(detail, duration: dur)
+        }
         switch CapabilityProbe.classifyFailure(error) {
         case .noAnswer:
             return .inconclusive(detail, duration: dur)
