@@ -325,7 +325,7 @@ public enum ModelProber {
             let got = [sawColor ? "colour✓" : "colour✗", sawShape ? "shape✓" : "shape✗"].joined(separator: " ")
             return .established(false, "expected '\(color.name) \(shape.rawValue)' — \(got); said '\(text.prefix(50))'", duration: dur)
         } catch {
-            return finding(fromError: error, capabilityKeywords: ["image", "vision", "multimodal"], started: started)
+            return attachmentRejection(error, attachment: "image", started: started)
         }
     }
 
@@ -349,7 +349,33 @@ public enum ModelProber {
             }
             return .established(false, "expected '\(code)', said '\(text.prefix(40))'", duration: dur)
         } catch {
-            return finding(fromError: error, capabilityKeywords: ["pdf", "document", "file"], started: started)
+            return attachmentRejection(error, attachment: "PDF", started: started)
+        }
+    }
+
+    /// Grades a failure from an attachment probe (image or PDF) WITHOUT parsing the error text.
+    ///
+    /// This is the answer to "how do you classify the rejection?": for an attachment, you don't
+    /// have to. The vision/PDF probes run only after a plain chat call to the same model has
+    /// already succeeded (the driver establishes chat first; a bare chat is what the temperature
+    /// probe and tool probe also send). The one thing added to the failing request is the
+    /// attachment — so any 4xx is caused by the attachment, and no keyword matching against the
+    /// provider's ever-changing error dialect is needed. (glm-5.2 alone rejects images three
+    /// different ways across z.ai / Ollama-Cloud / vLLM; matching all of them is a losing game.)
+    ///
+    /// "No vision" and "wrong image format for this endpoint" both land here as `false`, and that
+    /// is correct: the practical fact is that this (provider, model) will not take the attachment
+    /// the way we send it. Only a non-4xx failure — timeout, 429, 5xx — is `inconclusive`, because
+    /// that says nothing about the attachment.
+    private static func attachmentRejection(_ error: any Error, attachment: String, started: Date) -> ProbeFinding<Bool> {
+        let dur = Date().timeIntervalSince(started)
+        let detail = CapabilityProbe.rejectionDetail(error)
+        switch CapabilityProbe.classifyFailure(error) {
+        case .noAnswer:
+            return .inconclusive(detail, duration: dur)
+        case .refusedTools, .refusedOurRequest:
+            // A plain chat call to this model works; the \(attachment) is the only added variable.
+            return .established(false, "rejected the request with a \(attachment) attached (plain chat works): \(detail)", duration: dur)
         }
     }
 
