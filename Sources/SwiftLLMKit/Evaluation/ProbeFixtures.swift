@@ -101,23 +101,22 @@ enum ProbeFixtures {
         return png
     }
 
-    /// Colours a model must name. Chosen to be unmistakable and mutually distant so a near-miss
-    /// is a real failure rather than a naming quibble — and drawn at random per probe, so a model
-    /// that guesses is right only 1-in-6 rather than always.
+    /// Colours a model must name. Restricted to unmistakable primaries so a near-miss is a real
+    /// failure, not a naming quibble: magenta/cyan were dropped because models legitimately call
+    /// cyan "blue" (a false negative seen live on Alibaba Cloud). Drawn at random per probe, so a
+    /// guesser is right only 1-in-4 rather than always.
     static let namedColors: [(name: String, red: UInt8, green: UInt8, blue: UInt8)] = [
         ("red", 255, 0, 0),
         ("green", 0, 255, 0),
         ("blue", 0, 0, 255),
-        ("yellow", 255, 255, 0),
-        ("magenta", 255, 0, 255),
-        ("cyan", 0, 255, 255)
+        ("yellow", 255, 255, 0)
     ]
 
     enum Shape: String, CaseIterable { case triangle, square, circle }
 
     /// Shapes a model must name. Combined with a random colour, a correct answer to "what shape,
-    /// what colour" needs both right — a guesser lands it 1-in-18, so a pass is real vision, not
-    /// luck. Solid colour alone is too guessable and too easy to fake by describing the payload.
+    /// what colour" needs both right — a guesser lands it 1-in-12 (4 colours × 3 shapes), so a pass
+    /// is real vision, not luck. Solid colour alone is too guessable and too easy to fake.
     static let namedShapes: [Shape] = Shape.allCases
 
     /// A `shape` filled in `color` on a white background. Rasterised with plain pixel tests — no

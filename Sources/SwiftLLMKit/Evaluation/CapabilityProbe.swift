@@ -261,7 +261,11 @@ public enum CapabilityProbe {
     public static func textIndicatesModelGone(_ text: String) -> Bool {
         let lowered = text.lowercased()
         return ["no longer available", "is not found", "does not exist", "model not found",
-                "not_found", "has been deprecated and is no longer"]
+                "not_found", "has been deprecated and is no longer",
+                // Alibaba Cloud: a model listed in /models but not enabled for this workspace/region
+                // returns "Model is not supported in current workspace service". Treated as
+                // unavailable (per product decision) rather than access-denied.
+                "not supported in current workspace", "not supported in this workspace"]
             .contains { lowered.contains($0) }
     }
 

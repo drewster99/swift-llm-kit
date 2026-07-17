@@ -739,6 +739,8 @@ struct UnreachableModelTests {
         let body = "This model models/gemini-2.0-flash-lite is no longer available. Please update your code."
         #expect(CapabilityProbe.textIndicatesModelGone(body))
         #expect(!CapabilityProbe.textIndicatesModelGone("image input is not supported for this model"))
+        // Alibaba Cloud: model listed but not enabled for this workspace → treated as unavailable.
+        #expect(CapabilityProbe.textIndicatesModelGone(#"{"error":{"message":"Model is not supported in current workspace service."}}"#))
     }
 
     @Test("Alibaba's Model.AccessDenied is recognized as access-denied")

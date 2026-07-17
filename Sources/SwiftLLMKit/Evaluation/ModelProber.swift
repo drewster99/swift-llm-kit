@@ -340,7 +340,7 @@ public enum ModelProber {
     }
 
     /// Whether the model reads an image. Sends a coloured shape and asks for both the shape and
-    /// the colour. Only `true` when it names BOTH — a guesser lands both about 1-in-18, and a
+    /// the colour. Only `true` when it names BOTH — a guesser lands both about 1-in-12, and a
     /// model that merely accepts the attachment without reading it can't produce either. Colour
     /// alone was too guessable and too easy to fake by describing the payload's existence.
     public static func probeVision(llm: any LLMProvider, modelID: String, calls: ProbeCallCounter? = nil) async -> ProbeFinding<Bool> {
