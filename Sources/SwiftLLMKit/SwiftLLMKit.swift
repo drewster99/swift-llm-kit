@@ -942,8 +942,9 @@ public final class LLMKitManager {
     /// enumerating ``providers`` already have the struct in hand and shouldn't pay for a lookup
     /// that can only re-find what they passed.
     ///
-    /// Taking both structs directly is what makes an un-saved model callable: capability probing
-    /// must reach models that have no `ModelConfiguration` (851 of 853 of them) and wants to pin
+    /// Taking both structs directly is what makes an un-saved model callable: a configuration is
+    /// something a user creates deliberately, so the overwhelming majority of catalog models have
+    /// none, and capability probing has to reach exactly those. It also wants to pin
     /// `temperature` / `streaming` / `maxOutputTokens` itself. Note what is deliberately NOT done
     /// here: no clamping against ``modelInfo(providerID:modelID:)``, because that value is
     /// LiteLLM-derived and a probe that let it shape the request would assume its own conclusion.
