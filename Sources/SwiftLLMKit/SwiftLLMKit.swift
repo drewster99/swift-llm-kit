@@ -731,7 +731,14 @@ public final class LLMKitManager {
                 ))
             }
 
-            recordModelObservation(providerID: provider.id, keys: providerModels.map(\.id), providerName: provider.name)
+            // The ledger records what the LISTING contained — decoded models only. Synthesized
+            // override-only rows were never in the listing, and recording them would make the
+            // ledger lie about its own definition.
+            recordModelObservation(
+                providerID: provider.id,
+                keys: decodedFacts.map { "\(provider.id)/\($0.modelID)" },
+                providerName: provider.name
+            )
 
             logger.info("Fetched \(providerModels.count, privacy: .public) models from \(provider.name, privacy: .public)")
             return (providerModels, nil)
