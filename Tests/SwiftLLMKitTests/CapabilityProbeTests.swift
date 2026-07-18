@@ -1643,6 +1643,19 @@ struct GeminiMethodLimitationTests {
         #expect(CapabilityProbe.textIndicatesNotAChatModel(body404))
     }
 
+    /// "No longer available TO NEW USERS" is account-scoped (existing keys still work), so it is
+    /// access-denial, not global retirement — a gone stamp would mislead a grandfathered account.
+    @Test("'no longer available to new users' is access-denied, not gone")
+    func newUserRestrictionIsAccessDenied() {
+        let body = "This model models/gemini-2.5-pro is no longer available to new users. Please update your code to use a newer model."
+        #expect(!CapabilityProbe.textIndicatesModelGone(body))     // NOT global retirement
+        #expect(CapabilityProbe.textIndicatesAccessDenied(body))   // account-scoped denial
+        // A bare "is no longer available" (full retirement) still reads as gone.
+        let retired = "This model models/gemini-2.0-flash is no longer available. Please update your code."
+        #expect(CapabilityProbe.textIndicatesModelGone(retired))
+        #expect(!CapabilityProbe.textIndicatesAccessDenied(retired))
+    }
+
     @Test("Through the temperature probe, a method-limitation 404 stays inconclusive (not gone)")
     func temperatureProbeDoesNotMarkGone() async {
         struct EmbeddingProvider: LLMProvider {

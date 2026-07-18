@@ -353,6 +353,11 @@ public enum CapabilityProbe {
         // model isAvailable=false. It is "not a chat model", handled by the chat=false path, not a
         // retirement — so never treat a method-limitation body as gone.
         if lowered.contains("not supported for generatecontent") { return false }
+        // "No longer available TO NEW USERS" is account-scoped, not global retirement — existing
+        // users still call the model. It is access-denial for THIS key (see textIndicatesAccessDenied),
+        // and stamping it globally gone would mislead any account that already has access. Genuine
+        // retirement is a bare "is no longer available".
+        if lowered.contains("no longer available to new users") { return false }
         return ["no longer available", "is not found", "does not exist", "model not found",
                 "not_found", "has been deprecated and is no longer",
                 // Alibaba Cloud: a model listed in /models but not enabled for this workspace/region
@@ -402,7 +407,11 @@ public enum CapabilityProbe {
     public static func textIndicatesAccessDenied(_ text: String) -> Bool {
         let lowered = text.lowercased()
         return ["access denied", "accessdenied", "model access", "not authorized to access",
-                "does not have access"]
+                "does not have access",
+                // Gemini restricts whole model generations to existing users over time: "This model
+                // models/X is no longer available to new users." The model is live for grandfathered
+                // keys, so this is account-scoped access denial, not global retirement.
+                "no longer available to new users"]
             .contains { lowered.contains($0) }
     }
 
