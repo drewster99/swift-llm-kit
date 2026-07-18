@@ -362,6 +362,12 @@ public enum CapabilityProbe {
         if lowered.contains("available to new") || lowered.contains("available for new") { return false }
         return ["no longer available", "is not found", "does not exist", "model not found",
                 "not_found", "has been deprecated and is no longer",
+                // Ollama Cloud retires models with HTTP 410 "X was retired at <date>" — a gone
+                // signal (the model existed and is a chat model, it's just removed), which without
+                // this fell through to chat=established(false), i.e. "not a chat model". Match the
+                // retirement phrasing, not bare "retired" (a parameter-deprecation note could say
+                // "retired" without the model being gone).
+                "was retired", "retired at",
                 // Alibaba Cloud: a model listed in /models but not enabled for this workspace/region
                 // returns "Model is not supported in current workspace service". Treated as
                 // unavailable (per product decision) rather than access-denied.

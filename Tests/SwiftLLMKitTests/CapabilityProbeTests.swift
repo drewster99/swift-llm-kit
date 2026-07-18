@@ -1685,3 +1685,40 @@ struct GeminiMethodLimitationTests {
         #expect(!CapabilityProbe.textIndicatesModelGone(finding.evidence ?? ""))  // the gate won't stamp gone
     }
 }
+
+/// Ollama Cloud retires models with HTTP 410 "X was retired at <date>" — a gone signal, not a
+/// "not a chat model" verdict (glm-5 is a chat model; it was removed).
+@Suite("Ollama Cloud retired-model 410")
+struct OllamaCloudRetiredTests {
+    @Test("'was retired at' reads as gone, not not-a-chat")
+    func retiredIsGone() {
+        let body = #"{"error":"glm-5 was retired at 2026-07-15 00:00:00 -0700 PDT (ref: 8875ba32)"}"#
+        #expect(CapabilityProbe.textIndicatesModelGone(body))
+        #expect(!CapabilityProbe.textIndicatesNotAChatModel(body))
+        #expect(!CapabilityProbe.textIndicatesAccessDenied(body))
+    }
+
+    @Test("The chat probe records a retired model as unavailable, not chat=false")
+    func chatProbeMarksRetiredUnavailable() async {
+        struct RetiredProvider: LLMProvider {
+            func send(messages: [LLMMessage], tools: [LLMToolDefinition], overrides: LLMCallOverrides) async throws -> LLMResponse {
+                throw LLMProviderError.httpError(
+                    statusCode: 410,
+                    body: #"{"error":"glm-5 was retired at 2026-07-15 00:00:00 -0700 PDT"}"#,
+                    url: nil, retryAfter: nil)
+            }
+        }
+        let finding = await ModelProber.probeChat(llm: RetiredProvider(), modelID: "glm-5")
+        // Gone → inconclusive at the chat probe (the reachability gate then stamps isAvailable=false),
+        // never established(false) which would falsely claim "not a chat model".
+        #expect(finding.status == .inconclusive)
+        #expect(finding.value != false)
+    }
+
+    /// A parameter-deprecation note that merely contains "retired" (without the model-retirement
+    /// phrasing) must NOT read as gone.
+    @Test("A bare 'retired' in unrelated text is not gone")
+    func bareRetiredIsNotGone() {
+        #expect(!CapabilityProbe.textIndicatesModelGone("the 'best_of' parameter is retired; use 'n' instead"))
+    }
+}
