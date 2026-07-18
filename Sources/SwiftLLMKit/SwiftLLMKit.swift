@@ -221,6 +221,17 @@ public final class LLMKitManager {
         return (localProbeRecords[key], downloadedProbeRecords[key])
     }
 
+    /// Every locally-discovered probe record, EXPORT-STRIPPED (account-scoped findings removed) —
+    /// the exact array shape the downloaded-probe slot consumes, so the CLI's export file IS the
+    /// shipped format. Re-reads the store first so a headless run exports records written by any
+    /// process, ordered stably by key.
+    public func exportableProbeRecords() -> [ProbeRecord] {
+        reloadProbeRecords()
+        return localProbeRecords.values
+            .map(\.strippedForExport)
+            .sorted { $0.key.storageKey < $1.key.storageKey }
+    }
+
     /// Persists current state to disk.
     public func save() {
         var errors: [String] = []
