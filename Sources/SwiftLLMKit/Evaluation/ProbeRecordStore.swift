@@ -142,6 +142,16 @@ public struct ProbeRecordStore: Sendable {
         return records
     }
 
+    /// Removes the record for a key if one exists. Returns whether a file was deleted. Used by
+    /// the self-healing prune when an authoritative payload supersedes a stale record.
+    @discardableResult
+    public func delete(forKey key: ProbeRecordKey) throws -> Bool {
+        let url = directory.appendingPathComponent(key.fileName)
+        guard FileManager.default.fileExists(atPath: url.path) else { return false }
+        try FileManager.default.removeItem(at: url)
+        return true
+    }
+
     public func record(forKey key: ProbeRecordKey) -> ProbeRecord? {
         let url = directory.appendingPathComponent(key.fileName)
         guard let data = try? Data(contentsOf: url),
@@ -205,6 +215,26 @@ extension ModelProfile {
             let alreadyProbed = current?.status == .established && current?.source == .probed
             if !alreadyProbed { effortLevels[level] = finding }
         }
+    }
+
+    /// Whether any CAPABILITY finding was established by probing — EXCLUDING the availability /
+    /// access flags (isAvailable, isAccessDenied). A record whose only probed content is an
+    /// availability flag holds no real capability measurement (e.g. a since-fixed bug that stamped
+    /// isAvailable=false), so it is safe to prune when an authoritative payload supersedes it; a
+    /// record with a true capability measurement is not.
+    public var hasProbedCapabilityFindings: Bool {
+        func probed<T>(_ f: ProbeFinding<T>) -> Bool { f.status == .established && f.source == .probed }
+        return probed(chat) || probed(toolCalling) || probed(toolResultRoundTrip)
+            || probed(vision) || probed(pdfInput) || probed(acceptsTemperature)
+            || probed(maxOutputTokens) || probed(maxContextTokens)
+            || (maxOutputBoundedByContext.map(probed) ?? false)
+            || effortLevels.values.contains { probed($0) }
+    }
+
+    /// The vendor's own /models payload states this is not a chat model (chat decoded false) — a
+    /// definitive, non-transient fact, distinct from a probe halting on a rate limit or timeout.
+    public var isAuthoritativelyNonChat: Bool {
+        chat.status == .established && chat.source == .decoded && chat.value == false
     }
 
     /// Projects this profile into an empirical-layer ``ModelFacts`` record.

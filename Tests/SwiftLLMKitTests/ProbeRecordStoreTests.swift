@@ -393,3 +393,60 @@ struct AccountScopingHardeningTests {
         #expect(decoded.toolResultRoundTrip == true)
     }
 }
+
+/// The self-healing prune: a bug-fix re-probe that halts at authoritatively-non-chat with no
+/// probed findings must be able to remove a stale record it can no longer overwrite — but only
+/// when that record holds no real capability measurement.
+@Suite("Self-healing prune")
+struct SelfHealingPruneTests {
+    private func makeTempStore() throws -> ProbeRecordStore {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("prune-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return ProbeRecordStore(baseDirectory: dir)
+    }
+
+    /// A record shaped exactly like the Gemini gone-bug: the only probed finding is a (now wrong)
+    /// isAvailable; there is no capability measurement.
+    private var bugRecordProfile: ModelProfile {
+        var p = ModelProfile(providerID: "builtin.gemini", modelID: "gemini-embedding-001")
+        p.isAvailable = .established(false, "HTTP 404: ... not supported for generateContent")
+        return p
+    }
+
+    @Test("delete removes an existing record and reports it")
+    func deleteWorks() throws {
+        let store = try makeTempStore()
+        let key = ProbeRecordKey(apiType: "gemini", host: "generativelanguage.googleapis.com", modelID: "gemini-embedding-001")
+        _ = try store.upsert(profile: bugRecordProfile, key: key, providerID: "builtin.gemini", proberVersion: 3)
+        #expect(store.record(forKey: key) != nil)
+        #expect(try store.delete(forKey: key) == true)
+        #expect(store.record(forKey: key) == nil)
+        #expect(try store.delete(forKey: key) == false)   // idempotent: nothing left to delete
+    }
+
+    @Test("hasProbedCapabilityFindings excludes availability/access flags")
+    func capabilityFindingsExcludeAvailability() {
+        // The bug record: isAvailable probed, no capability → false.
+        #expect(!bugRecordProfile.hasProbedCapabilityFindings)
+        #expect(bugRecordProfile.hasEstablishedProbedFindings)   // isAvailable still counts here
+
+        // A record with a real probed capability → true, must never be pruned.
+        var real = ModelProfile(providerID: "p", modelID: "m")
+        real.vision = .established(true, "named 'blue triangle'")
+        #expect(real.hasProbedCapabilityFindings)
+    }
+
+    @Test("isAuthoritativelyNonChat only when the payload decoded chat=false")
+    func authoritativeNonChat() {
+        var decodedNonChat = ModelProfile(providerID: "p", modelID: "m")
+        decodedNonChat.chat = .decoded(false, "provider /models payload")       // decoded false
+        #expect(decodedNonChat.isAuthoritativelyNonChat)
+
+        var probedNonChat = ModelProfile(providerID: "p", modelID: "m")
+        probedNonChat.chat = .established(false, "not a chat model")            // probed false (source .probed)
+        #expect(!probedNonChat.isAuthoritativelyNonChat)                        // probed, not decoded
+
+        #expect(!ModelProfile(providerID: "p", modelID: "m").isAuthoritativelyNonChat)  // notAttempted
+    }
+}

@@ -216,21 +216,51 @@ public final class LLMKitManager {
 
     // MARK: - Probe evidence
 
-    /// Persists a completed probe run and folds it into the live empirical layer. Returns false
-    /// (and stores nothing) when the profile established no probed findings — an aborted or
-    /// rate-gutted run must not overwrite a real record. The catalog is NOT recomposed here;
-    /// the next refresh reads the updated records. Callers wanting immediacy refresh the provider.
+    /// The outcome of persisting a probe run.
+    public enum ProbeStoreOutcome: Sendable, Equatable {
+        /// The run had established probed findings and was written (replacing any prior record).
+        case stored
+        /// The run had nothing to store and no stale record to clean up — the prior record, if
+        /// any, is left untouched (never clobber a real record with a probe-empty run).
+        case skipped
+        /// The run had nothing to store, the vendor payload authoritatively says the model is not
+        /// a chat model, and an existing record held no real capability measurement — so that
+        /// stale record was removed. This is how a bug-fix re-probe self-heals a record it can no
+        /// longer overwrite (the corrected run halts at not-a-chat with no probed findings).
+        case pruned
+    }
+
+    /// Persists a completed probe run and folds it into the live empirical layer. Stores nothing
+    /// and returns `.skipped` when the profile established no probed findings — an aborted or
+    /// rate-gutted run must not overwrite a real record — except that a run authoritatively
+    /// resolving the model as non-chat may `.prune` a stale capability-free record (see below).
+    /// The catalog is NOT recomposed here; the next refresh reads the updated records.
     @discardableResult
-    public func storeProbeResult(profile: ModelProfile, provider: ModelProvider, modelID: String) throws -> Bool {
+    public func storeProbeResult(profile: ModelProfile, provider: ModelProvider, modelID: String) throws -> ProbeStoreOutcome {
         let key = ProbeRecordKey(apiType: provider.apiType, endpoint: provider.endpoint, modelID: modelID)
         let stored = try probeStore.upsert(
             profile: profile, key: key, providerID: provider.id,
             proberVersion: ModelProber.proberVersion
         )
-        if stored, let record = probeStore.record(forKey: key) {
-            localProbeRecords[key] = record
+        if stored {
+            if let record = probeStore.record(forKey: key) { localProbeRecords[key] = record }
+            return .stored
         }
-        return stored
+        // Self-healing prune: the run has no probed findings to store, but the /models payload
+        // AUTHORITATIVELY says this is not a chat model. If an existing record holds no real
+        // capability measurement — only an availability/access flag, e.g. a since-fixed bug's
+        // isAvailable=false — it is stale and would otherwise linger forever (a corrected re-probe
+        // can never overwrite it, having nothing probed to write). Remove it so the decoded facts
+        // are the single source of truth. A record with a true probed capability is preserved.
+        if profile.isAuthoritativelyNonChat,
+           let existing = probeStore.record(forKey: key),
+           !existing.profile.hasProbedCapabilityFindings {
+            try probeStore.delete(forKey: key)
+            localProbeRecords[key] = nil
+            logger.info("Pruned stale probe record for \(key.storageKey, privacy: .public): payload says non-chat and the record held no capability measurement")
+            return .pruned
+        }
+        return .skipped
     }
 
     /// The probe evidence for a model as the merge sees it: local and downloaded records for its
