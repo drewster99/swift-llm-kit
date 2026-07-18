@@ -247,7 +247,8 @@ struct ModelInfoBehaviorFlagsCodableTests {
             benchmarks: ModelBenchmarks(
                 artificialAnalysis: .init(intelligenceIndex: 57.1, codingIndex: 76.2, agenticIndex: 50.1),
                 designArena: [.init(arena: "agents", category: "gamedev", elo: 1200, rank: 7, winRate: 47.8)]),
-            huggingFaceID: "org/M"
+            huggingFaceID: "org/M",
+            hidden: true
         )
         let decoded = try JSONDecoder().decode(ModelInfo.self, from: JSONEncoder().encode(original))
         #expect(decoded == original, "a full ModelInfo must survive an encode/decode round-trip unchanged")

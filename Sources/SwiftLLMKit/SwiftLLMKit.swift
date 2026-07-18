@@ -38,6 +38,11 @@ public final class LLMKitManager {
     public var verboseLogging: Bool = false
     /// Errors from the most recent model refresh, keyed by provider name.
     public private(set) var refreshErrors: [String: String] = [:]
+
+    /// Per-model composition detail from the most recent merge, keyed `providerID/modelID`:
+    /// each layer's own record, which layer won each field, and where layers disagreed. In-memory
+    /// only — recomputed on every refresh — and the data the provenance inspector reads.
+    public private(set) var metadataCompositions: [String: MergedModelComposition] = [:]
     /// Incremented every time any provider's API key is written via `addProvider`,
     /// `updateProvider`, or `setBuiltInProviderAPIKey`. Observable so SwiftUI views
     /// that read from `apiKey(for:)` (which goes through Keychain and is therefore
@@ -250,6 +255,10 @@ public final class LLMKitManager {
 
         providers.removeAll { $0.id == id }
         models.removeAll { $0.providerID == id }
+        // Compositions are keyed providerID/modelID and only refreshed by a live provider —
+        // evict the deleted provider's entries here or they linger in memory forever.
+        let deletedPrefix = "\(id)/"
+        metadataCompositions = metadataCompositions.filter { !$0.key.hasPrefix(deletedPrefix) }
 
         do {
             try keychain.delete(forProviderID: id)
@@ -515,83 +524,70 @@ public final class LLMKitManager {
         validateConfigurations()
     }
 
-    /// Fetches models for one provider and applies the layered metadata enrichment.
+    /// Fetches models for one provider and composes the layered metadata merge.
     /// On failure, returns the previously cached models for that provider plus an error
     /// string so the caller can preserve state without losing the catalog.
+    ///
+    /// The five-layer composition (see ``ModelFactsMerger``), applied per model, per field:
+    ///   1. authoritative — the provider's own `/models` decode (tri-state facts; the base)
+    ///   2. empirical — probe results (EMPTY until the probe store is wired in)
+    ///   3. downloaded overrides — app-curated fixes, FORCE (three key axes folded
+    ///      least-specific-first so the most specific wins)
+    ///   4. enrichment — LiteLLM, gap-fill only
+    ///   5. user overrides — FORCE, the user always wins
+    /// The full composition (per-layer records, per-field provenance, disagreements) is retained
+    /// in ``metadataCompositions`` for the inspector; the materialized `ModelInfo` is what the
+    /// rest of the app consumes, unchanged in shape.
     private func fetchAndEnrich(provider: ModelProvider) async -> (models: [ModelInfo], error: String?) {
         let apiKey = keychain.apiKey(forProviderID: provider.id)
         do {
-            var providerModels = try await fetchService.fetchModels(
+            let decodedFacts = try await fetchService.fetchModelFacts(
                 from: provider,
                 apiKey: apiKey
             )
 
-            // Enrich with layered metadata overrides.
-            // Provider API is the base. Gap-fillers run highest-priority first so
-            // they claim nil fields before lower-priority sources can.
-            // Priority: user (force-replace) > provider API (base) > bundled (gap-fill) > LiteLLM (gap-fill)
-            for i in providerModels.indices {
-                let modelID = providerModels[i].modelID
+            // Drop compositions from this provider's previous refresh so delisted models don't
+            // leave stale inspector entries behind.
+            let providerPrefix = "\(provider.id)/"
+            metadataCompositions = metadataCompositions.filter { !$0.key.hasPrefix(providerPrefix) }
 
-                // Layer 0a: App-bundled provider-wide defaults (gap-fill).
-                // Applies to every model from this providerID, e.g. all OpenAI
-                // models opting into `useMaxCompletionTokens`. Per-model entries
-                // below override on a flag-by-flag basis.
+            var providerModels: [ModelInfo] = []
+            providerModels.reserveCapacity(decodedFacts.count)
+            for decoded in decodedFacts {
+                let modelID = decoded.modelID
+
+                // Downloaded-overrides layer: three key axes, least specific applied first so the
+                // most specific wins — provider-wide defaults (e.g. all-OpenAI
+                // useMaxCompletionTokens), then (apiType, modelID), then (providerID, modelID).
+                var downloadedOverrides = ModelFacts()
                 if let providerWide = bundledRegistry.defaults(providerID: provider.id) {
-                    providerWide.apply(to: &providerModels[i], forceReplace: false)
+                    downloadedOverrides.overlay(providerWide.asFacts)
                 }
-
-                // Layer 0b: App-bundled per-(providerID, modelID) (gap-fill).
-                // Pinpoints a single built-in provider's model — used when the
-                // apiType is shared between built-in and user-created providers.
+                if let apiTypeScoped = bundledRegistry.override(providerAPIType: provider.apiType.rawValue, modelID: modelID) {
+                    downloadedOverrides.overlay(apiTypeScoped.asFacts)
+                }
                 if let providerScoped = bundledRegistry.override(providerID: provider.id, modelID: modelID) {
-                    providerScoped.apply(to: &providerModels[i], forceReplace: false)
+                    downloadedOverrides.overlay(providerScoped.asFacts)
                 }
 
-                // Layer 1: App-bundled per-(apiType, modelID) (gap-fill, higher priority than LiteLLM)
-                if let bundled = bundledRegistry.override(providerAPIType: provider.apiType.rawValue, modelID: modelID) {
-                    bundled.apply(to: &providerModels[i], forceReplace: false)
-                }
-
-                // Layer 2: LiteLLM (gap-fill, fills anything still nil after bundled)
+                var enrichment = ModelFacts()
                 if let litellm = await metadataService.metadata(for: modelID, liteLLMProviderName: provider.liteLLMProviderName) {
-                    let litellmOverride = ModelMetadataOverride(
-                        maxInputTokens: litellm.maxInputTokens,
-                        maxOutputTokens: litellm.maxOutputTokens,
-                        capabilities: ModelCapabilitiesOverride(
-                            toolUse: litellm.supportsToolUse ? true : nil,
-                            vision: litellm.supportsVision ? true : nil,
-                            reasoning: litellm.supportsReasoning ? true : nil,
-                            promptCaching: litellm.supportsPromptCaching ? true : nil,
-                            computerUse: litellm.supportsComputerUse ? true : nil,
-                            audioInput: litellm.supportsAudioInput ? true : nil,
-                            audioOutput: litellm.supportsAudioOutput ? true : nil,
-                            videoInput: litellm.supportsVideoInput ? true : nil,
-                            responseSchema: litellm.supportsResponseSchema ? true : nil,
-                            parallelToolCalls: litellm.supportsParallelToolCalls ? true : nil,
-                            pdfInput: litellm.supportsPdfInput ? true : nil,
-                            webSearch: litellm.supportsWebSearch ? true : nil,
-                            systemMessages: litellm.supportsSystemMessages ? true : nil,
-                            assistantPrefill: litellm.supportsAssistantPrefill ? true : nil,
-                            toolChoice: litellm.supportsToolChoice ? true : nil
-                        ),
-                        pricing: litellm.pricing,
-                        supportsChatCompletions: litellm.supportsChatCompletions ? nil : false
-                    )
-                    litellmOverride.apply(to: &providerModels[i], forceReplace: false)
-                    // Assigned rather than layered: `mode` is purely LiteLLM's classification of
-                    // the model's kind. No provider API reports it and nothing overrides it, so
-                    // there is nothing to merge against.
-                    providerModels[i].mode = litellm.mode
+                    enrichment = litellm.asFacts
                 }
 
-                // Layer 3: Provider API data is already the base (providerModels[i]).
-
-                // Layer 4: User overrides (force-replace — user always wins)
-                let userKey = "\(provider.id)/\(modelID)"
-                if let userOverride = userOverrides[userKey] {
-                    userOverride.apply(to: &providerModels[i], forceReplace: true)
+                var userFacts = ModelFacts()
+                if let userOverride = userOverrides["\(provider.id)/\(modelID)"] {
+                    userFacts = userOverride.asFacts
                 }
+
+                let composition = ModelFactsMerger.merge(
+                    authoritative: decoded.facts,
+                    downloadedOverrides: downloadedOverrides,
+                    enrichment: enrichment,
+                    userOverrides: userFacts
+                )
+                metadataCompositions["\(provider.id)/\(modelID)"] = composition
+                providerModels.append(composition.merged.materialize(providerID: provider.id, modelID: modelID))
             }
 
             logger.info("Fetched \(providerModels.count, privacy: .public) models from \(provider.name, privacy: .public)")

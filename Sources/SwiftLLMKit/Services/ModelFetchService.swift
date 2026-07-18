@@ -16,10 +16,31 @@ public struct ModelFetchService: Sendable {
     ///   - provider: The provider to query.
     ///   - apiKey: The API key for authentication (from Keychain).
     /// - Returns: Array of `ModelInfo` with `providerID` populated.
+    ///
+    /// Convenience over ``fetchModelFacts(from:apiKey:)``: materializes each tri-state record into
+    /// the flattened `ModelInfo` shape (unknown capability → `false`, unknown chat → `true`).
+    /// Callers that care about the stated/unknown distinction — the merge pipeline, the probe
+    /// seeder — should use the facts variant instead.
     public func fetchModels(
         from provider: ModelProvider,
         apiKey: String?
     ) async throws -> [ModelInfo] {
+        try await fetchModelFacts(from: provider, apiKey: apiKey)
+            .map { $0.facts.materialize(providerID: provider.id, modelID: $0.modelID) }
+    }
+
+    /// Fetches the provider's `/models` and decodes it into per-model ``ModelFacts`` — the
+    /// tri-state records where `nil` means "the vendor did not say", never "no".
+    ///
+    /// This is the authoritative layer's source of truth: each decoder emits ONLY what its vendor
+    /// actually stated, per the stated-facts audit (Anthropic's capabilities block has no tool key,
+    /// so `toolUse` stays nil; Mistral states each capability leaf both directions; OpenRouter's
+    /// modality/parameter arrays are bidirectional when non-empty; plain OpenAI states almost
+    /// nothing). Getting this right is what makes "authoritative wins for fields it supplies" sound.
+    public func fetchModelFacts(
+        from provider: ModelProvider,
+        apiKey: String?
+    ) async throws -> [DecodedModelFacts] {
         let modelsURL: URL
         switch provider.apiType {
         case .ollama:
@@ -95,61 +116,60 @@ public struct ModelFetchService: Sendable {
             LLMRequestLogger.logResponse(label: label, statusCode: http.statusCode, data: data)
         }
 
-        let decoded: [ModelInfo]
+        let decoded: [DecodedModelFacts]
         switch provider.apiType {
         case .ollama:
-            decoded = try decodeOllamaModels(from: data, providerID: provider.id)
+            decoded = try decodeOllamaFacts(from: data)
         case .anthropic:
-            decoded = try decodeAnthropicModels(from: data, providerID: provider.id)
+            decoded = try decodeAnthropicFacts(from: data)
         case .xAI:
-            decoded = try decodeXAIModels(from: data, providerID: provider.id)
+            decoded = try decodeXAIFacts(from: data)
         case .openRouter:
-            decoded = try decodeOpenRouterModels(from: data, providerID: provider.id)
+            decoded = try decodeOpenRouterFacts(from: data)
         case .huggingFace:
-            decoded = try decodeHuggingFaceModels(from: data, providerID: provider.id)
+            decoded = try decodeHuggingFaceFacts(from: data)
         case .openAICompatible, .lmStudio, .zAI, .metaLlama, .alibabaCloud:
-            decoded = try decodeOpenAIModels(from: data, providerID: provider.id)
+            decoded = try decodeOpenAIFacts(from: data)
         case .mistral:
-            decoded = try decodeMistralModels(from: data, providerID: provider.id)
+            decoded = try decodeMistralFacts(from: data)
         case .gemini:
-            decoded = try decodeGeminiModels(from: data, providerID: provider.id)
+            decoded = try decodeGeminiFacts(from: data)
         }
 
-        // Deduplicate by composite ID (providerID/modelID). Some APIs return
-        // the same model ID multiple times (e.g. Mistral aliases).
+        // Deduplicate by model ID. Some APIs return the same model ID multiple
+        // times (e.g. Mistral aliases).
         var seen = Set<String>()
-        return decoded.filter { seen.insert($0.id).inserted }
+        return decoded.filter { seen.insert($0.modelID).inserted }
     }
 
     // MARK: - Ollama
 
     func decodeOllamaModelsForTesting(from data: Data, providerID: String) throws -> [ModelInfo] {
-        try decodeOllamaModels(from: data, providerID: providerID)
+        try decodeOllamaFacts(from: data).map { $0.facts.materialize(providerID: providerID, modelID: $0.modelID) }
     }
 
-    private func decodeOllamaModels(from data: Data, providerID: String) throws -> [ModelInfo] {
+    private func decodeOllamaFacts(from data: Data) throws -> [DecodedModelFacts] {
         let decoded = try JSONDecoder().decode(OllamaTagsResponse.self, from: data)
         return decoded.models
             .map { model in
-                let quant = model.details?.quantizationLevel ?? ""
-                var caps = ModelCapabilities()
-                if let capabilities = model.capabilities {
-                    caps.toolUse = capabilities.contains("tools")
+                var facts = ModelFacts()
+                // Tool use is POSITIVE-ONLY on purpose: the tags capability list reliably names
+                // "tools" when present, but absence is a manifest hint, not a vendor statement of
+                // "cannot" — and a wrong stated-false in the authoritative layer would mask a probed
+                // true forever under authoritative-wins. Unknown costs one probe; wrong costs a model.
+                if let capabilities = model.capabilities, capabilities.contains("tools") {
+                    facts.capabilities.toolUse = true
                 }
                 // Prefer the stated parameter count ("397B") over a byte-size label: `size` is the
                 // on-disk weight file in BYTES, and formatBytes renders it with a "B" suffix that
                 // reads like a parameter count but isn't. parameter_size is the real thing.
-                let sizeLabel = model.details?.parameterSize ?? formatBytes(model.size)
-                return ModelInfo(
-                    providerID: providerID,
-                    modelID: model.name,
-                    createdAt: parseISODate(model.modifiedAt),
-                    // Only local Ollama's payload carries a context window; cloud omits it (nil).
-                    maxInputTokens: model.details?.contextLength,
-                    capabilities: caps,
-                    sizeLabel: sizeLabel,
-                    quantizationLabel: quant.isEmpty ? nil : quant
-                )
+                facts.sizeLabel = model.details?.parameterSize ?? formatBytes(model.size)
+                let quant = model.details?.quantizationLevel ?? ""
+                facts.quantizationLabel = quant.isEmpty ? nil : quant
+                facts.createdAt = parseISODate(model.modifiedAt)
+                // Only local Ollama's payload carries a context window; cloud omits it (nil).
+                facts.maxInputTokens = model.details?.contextLength
+                return DecodedModelFacts(modelID: model.name, facts: facts)
             }
             .sorted { $0.modelID < $1.modelID }
     }
@@ -158,63 +178,57 @@ public struct ModelFetchService: Sendable {
 
     /// Test seam: exercises the private decoder against captured payload shapes without a fetch.
     func decodeAnthropicModelsForTesting(from data: Data, providerID: String) throws -> [ModelInfo] {
-        try decodeAnthropicModels(from: data, providerID: providerID)
+        try decodeAnthropicFacts(from: data).map { $0.facts.materialize(providerID: providerID, modelID: $0.modelID) }
     }
 
-    private func decodeAnthropicModels(from data: Data, providerID: String) throws -> [ModelInfo] {
+    private func decodeAnthropicFacts(from data: Data) throws -> [DecodedModelFacts] {
         let decoded = try JSONDecoder().decode(AnthropicModelsResponse.self, from: data)
         return decoded.data
             .map { model in
-                // The vendor describing its own models is the one source with standing to — so
-                // the capabilities block is decoded and believed, not discarded (as it was until
-                // 2026-07: image_input and pdf_input were being thrown away and re-derived from
-                // LiteLLM's third-party claims instead).
-                var caps = ModelCapabilities()
-                var flags = BehaviorFlags()
-                var effortLevels: [String] = []
+                var facts = ModelFacts()
+                facts.displayName = model.displayName
+                facts.createdAt = model.createdAt.flatMap { parseISODate($0) }
+                facts.maxInputTokens = model.maxInputTokens
+                facts.maxOutputTokens = model.maxTokens
 
+                // The vendor describing its own models is the one source with standing to — the
+                // capabilities block states each leaf explicitly, BOTH directions, so a present
+                // leaf becomes a stated true/false. A missing leaf stays nil ("didn't say"), and
+                // tool use is NEVER set: the block has no tool key, and writing false here would
+                // mask a probed true forever under authoritative-wins.
                 if let capabilities = model.capabilities {
-                    caps.vision = capabilities.imageInput?.supported ?? false
-                    caps.pdfInput = capabilities.pdfInput?.supported ?? false
-                    caps.reasoning = capabilities.thinking?.supported ?? false
-                    caps.codeExecution = capabilities.codeExecution?.supported ?? false
-                    caps.responseSchema = capabilities.structuredOutputs?.supported ?? false
+                    facts.capabilities.vision = capabilities.imageInput?.supported
+                    facts.capabilities.pdfInput = capabilities.pdfInput?.supported
+                    facts.capabilities.reasoning = capabilities.thinking?.supported
+                    facts.capabilities.codeExecution = capabilities.codeExecution?.supported
+                    facts.capabilities.responseSchema = capabilities.structuredOutputs?.supported
 
                     // The payload's own per-model level list, ordered by our rank table (the
-                    // payload is a JSON object, so it carries no order itself).
-                    if capabilities.effort?.supported == true {
-                        effortLevels = capabilities.effort?.levels
-                            .filter { $0.value }
-                            .map(\.key)
-                            .sorted { EffortRank.rank(of: $0) < EffortRank.rank(of: $1) } ?? []
+                    // payload is a JSON object, so it carries no order itself). An effort block
+                    // with supported == false is a STATEMENT: "no effort levels" → stated [].
+                    if let effort = capabilities.effort, let supported = effort.supported {
+                        facts.validEffortLevels = supported
+                            ? effort.levels.filter { $0.value }.map(\.key)
+                                .sorted { EffortRank.rank(of: $0) < EffortRank.rank(of: $1) }
+                            : []
                     }
 
                     // DERIVED, not hand-listed: a thinking model whose budget_tokens form is
                     // unsupported (`types.enabled == false`) is adaptive-only — and, verified
                     // live 2026-07-17, adaptive-only models also reject the `temperature`
                     // parameter with HTTP 400 ("deprecated for this model"): opus-4-8 rejects,
-                    // while sonnet-4-6 / opus-4-5 (enabled == true) accept. Deriving both flags
-                    // here means the next adaptive-only model Anthropic ships is handled the day
-                    // it appears, instead of 400-ing until someone edits the bundled JSON. The
-                    // bundled entries remain as gap-fill for cold starts with no fetched catalog.
+                    // while sonnet-4-6 / opus-4-5 (enabled == true) accept. The derivation is
+                    // sound BOTH directions (Anthropic rejects temperature exactly on
+                    // adaptive-only models), so when the leaf is present we state true or false;
+                    // when the thinking block or leaf is absent, we say nothing.
                     if capabilities.thinking?.supported == true,
-                       capabilities.thinking?.types?.enabled?.supported == false {
-                        flags.requiresAdaptiveThinking = true
-                        flags.mustNeverSendTemperatureParam = true
+                       let enabledSupported = capabilities.thinking?.types?.enabled?.supported {
+                        facts.behaviorFlags.requiresAdaptiveThinking = !enabledSupported
+                        facts.behaviorFlags.mustNeverSendTemperatureParam = !enabledSupported
                     }
                 }
 
-                return ModelInfo(
-                    providerID: providerID,
-                    modelID: model.id,
-                    displayName: model.displayName ?? model.id,
-                    createdAt: model.createdAt.flatMap { parseISODate($0) },
-                    maxInputTokens: model.maxInputTokens,
-                    maxOutputTokens: model.maxTokens,
-                    capabilities: caps,
-                    validEffortLevels: effortLevels,
-                    behaviorFlags: flags
-                )
+                return DecodedModelFacts(modelID: model.id, facts: facts)
             }
             .sorted { $0.modelID < $1.modelID }
     }
@@ -222,28 +236,25 @@ public struct ModelFetchService: Sendable {
     // MARK: - OpenAI Compatible (plain)
 
     func decodeOpenAIModelsForTesting(from data: Data, providerID: String) throws -> [ModelInfo] {
-        try decodeOpenAIModels(from: data, providerID: providerID)
+        try decodeOpenAIFacts(from: data).map { $0.facts.materialize(providerID: providerID, modelID: $0.modelID) }
     }
 
-    private func decodeOpenAIModels(from data: Data, providerID: String) throws -> [ModelInfo] {
+    private func decodeOpenAIFacts(from data: Data) throws -> [DecodedModelFacts] {
         let decoded = try JSONDecoder().decode(OpenAIModelsResponse.self, from: data)
         return decoded.data
             .map { model in
+                var facts = ModelFacts()
+                facts.createdAt = model.created.map { Date(timeIntervalSince1970: TimeInterval($0)) }
                 // `context_length` and `prompt_image_token_price` are common OpenAI-compatible
-                // extensions many providers emit and plain OpenAI omits. Decode them when present —
-                // a positive image-token price is a vendor-stated vision signal — and leave every
-                // provider that omits them decoding exactly as before (nil / false).
-                var caps = ModelCapabilities()
+                // extensions many providers emit and plain OpenAI omits. A positive image-token
+                // price is a vendor-stated vision POSITIVE; its absence proves nothing, so vision
+                // is never stated false here. Plain OpenAI states almost nothing — which is the
+                // honest record: nearly every fact about these models must come from elsewhere.
                 if let imagePrice = model.promptImageTokenPrice, imagePrice > 0 {
-                    caps.vision = true
+                    facts.capabilities.vision = true
                 }
-                return ModelInfo(
-                    providerID: providerID,
-                    modelID: model.id,
-                    createdAt: model.created.map { Date(timeIntervalSince1970: TimeInterval($0)) },
-                    maxInputTokens: model.contextLength,
-                    capabilities: caps
-                )
+                facts.maxInputTokens = model.contextLength
+                return DecodedModelFacts(modelID: model.id, facts: facts)
             }
             .sorted { $0.modelID < $1.modelID }
     }
@@ -251,7 +262,7 @@ public struct ModelFetchService: Sendable {
     // MARK: - xAI
 
     func decodeXAIModelsForTesting(from data: Data, providerID: String) throws -> [ModelInfo] {
-        try decodeXAIModels(from: data, providerID: providerID)
+        try decodeXAIFacts(from: data).map { $0.facts.materialize(providerID: providerID, modelID: $0.modelID) }
     }
 
     /// xAI's `/models` is richer than OpenAI's: a context length, an image-token price (which
@@ -259,7 +270,7 @@ public struct ModelFetchService: Sendable {
     /// cents per 100 million tokens" — so USD-per-token = value / 1e10. See
     /// https://docs.x.ai/developers/cost-tracking (which also documents `cost_in_usd_ticks`, where
     /// 1 USD = 1e10 ticks). Prices >= 0 only; xAI uses no sentinel, but guard anyway.
-    private func decodeXAIModels(from data: Data, providerID: String) throws -> [ModelInfo] {
+    private func decodeXAIFacts(from data: Data) throws -> [DecodedModelFacts] {
         // "USD cents per 100 million tokens" -> USD per single token.
         // Per https://docs.x.ai/developers/cost-tracking.
         func usdPerToken(_ centsPer100M: Double?) -> Double? {
@@ -270,15 +281,15 @@ public struct ModelFetchService: Sendable {
         let decoded = try JSONDecoder().decode(XAIModelsResponse.self, from: data)
         return decoded.data
             .map { model in
+                var facts = ModelFacts()
+                facts.createdAt = model.created.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+                facts.maxInputTokens = model.contextLength
                 // A positive image-token price means the model prices — and therefore accepts —
-                // image input: a vendor-stated vision signal, not a LiteLLM guess. Only set true;
-                // absence isn't proof of no vision.
-                var caps = ModelCapabilities()
+                // image input: a vendor-stated vision POSITIVE. Absence proves nothing → stays nil.
                 if let imagePrice = model.promptImageTokenPrice, imagePrice > 0 {
-                    caps.vision = true
+                    facts.capabilities.vision = true
                 }
 
-                var pricing: ModelPricing?
                 let base = PricingTier(
                     input: usdPerToken(model.promptTextTokenPrice),
                     output: usdPerToken(model.completionTextTokenPrice),
@@ -297,17 +308,10 @@ public struct ModelFetchService: Sendable {
                             tiers.append(TokenThresholdTier(tokenThreshold: threshold, rates: longRates))
                         }
                     }
-                    pricing = ModelPricing(base: base, tokenThresholdTiers: tiers)
+                    facts.pricing = ModelPricing(base: base, tokenThresholdTiers: tiers)
                 }
 
-                return ModelInfo(
-                    providerID: providerID,
-                    modelID: model.id,
-                    createdAt: model.created.map { Date(timeIntervalSince1970: TimeInterval($0)) },
-                    maxInputTokens: model.contextLength,
-                    capabilities: caps,
-                    pricing: pricing
-                )
+                return DecodedModelFacts(modelID: model.id, facts: facts)
             }
             .sorted { $0.modelID < $1.modelID }
     }
@@ -315,41 +319,44 @@ public struct ModelFetchService: Sendable {
     // MARK: - OpenRouter
 
     func decodeOpenRouterModelsForTesting(from data: Data, providerID: String) throws -> [ModelInfo] {
-        try decodeOpenRouterModels(from: data, providerID: providerID)
+        try decodeOpenRouterFacts(from: data).map { $0.facts.materialize(providerID: providerID, modelID: $0.modelID) }
     }
 
     /// OpenRouter's `/models` is the richest of the OpenAI-compatible family: it states input
     /// modalities, the parameters each model supports, per-provider limits, and per-token prices.
-    /// All of it is decoded from the vendor rather than guessed. Schema:
-    /// https://openrouter.ai/docs/api-reference/list-available-models
-    private func decodeOpenRouterModels(from data: Data, providerID: String) throws -> [ModelInfo] {
+    /// The modality and parameter ARRAYS are explicit enumerations, so when non-empty they are
+    /// stated BOTH directions (absence from the list = stated no); an absent or empty array says
+    /// nothing. Schema: https://openrouter.ai/docs/api-reference/list-available-models
+    private func decodeOpenRouterFacts(from data: Data) throws -> [DecodedModelFacts] {
         let decoded = try JSONDecoder().decode(OpenRouterModelsResponse.self, from: data)
         return decoded.data
             .map { model in
-                var caps = ModelCapabilities()
+                var facts = ModelFacts()
+                facts.displayName = model.name
+                facts.createdAt = model.created.map { Date(timeIntervalSince1970: TimeInterval($0)) }
 
-                // input_modalities is an explicit list, so both directions are decodable.
+                // input_modalities is an explicit list → bidirectional when non-empty.
                 let inputs = Set(model.architecture?.inputModalities ?? [])
                 if !inputs.isEmpty {
-                    caps.vision = inputs.contains("image")
-                    caps.pdfInput = inputs.contains("file")
-                    caps.audioInput = inputs.contains("audio")
-                    caps.videoInput = inputs.contains("video")
+                    facts.capabilities.vision = inputs.contains("image")
+                    facts.capabilities.pdfInput = inputs.contains("file")
+                    facts.capabilities.audioInput = inputs.contains("audio")
+                    facts.capabilities.videoInput = inputs.contains("video")
                 }
                 let outputs = Set(model.architecture?.outputModalities ?? [])
                 if !outputs.isEmpty {
-                    caps.audioOutput = outputs.contains("audio")
+                    facts.capabilities.audioOutput = outputs.contains("audio")
                 }
 
-                // supported_parameters names the knobs the model honors.
+                // supported_parameters names the knobs the model honors → bidirectional when non-empty.
                 let params = Set(model.supportedParameters ?? [])
                 if !params.isEmpty {
-                    caps.toolUse = params.contains("tools")
-                    caps.toolChoice = params.contains("tool_choice")
-                    caps.parallelToolCalls = params.contains("parallel_tool_calls")
-                    caps.reasoning = params.contains("reasoning") || params.contains("reasoning_effort") || params.contains("include_reasoning")
-                    caps.responseSchema = params.contains("structured_outputs") || params.contains("response_format")
-                    caps.webSearch = params.contains("web_search_options")
+                    facts.capabilities.toolUse = params.contains("tools")
+                    facts.capabilities.toolChoice = params.contains("tool_choice")
+                    facts.capabilities.parallelToolCalls = params.contains("parallel_tool_calls")
+                    facts.capabilities.reasoning = params.contains("reasoning") || params.contains("reasoning_effort") || params.contains("include_reasoning")
+                    facts.capabilities.responseSchema = params.contains("structured_outputs") || params.contains("response_format")
+                    facts.capabilities.webSearch = params.contains("web_search_options")
                 }
 
                 // pricing: decimal USD-per-token strings ("0.000002"); "-1" marks a variable/auto
@@ -358,45 +365,38 @@ public struct ModelFetchService: Sendable {
                     guard let s, let v = Double(s), v >= 0 else { return nil }
                     return v
                 }
-                var pricing: ModelPricing?
                 if let p = model.pricing {
                     let base = PricingTier(input: rate(p.prompt), output: rate(p.completion),
                                            cacheRead: rate(p.inputCacheRead), cacheWrite: rate(p.inputCacheWrite))
-                    if base.hasAnyRate { pricing = ModelPricing(base: base) }
+                    if base.hasAnyRate { facts.pricing = ModelPricing(base: base) }
                 }
 
                 // reasoning.supported_efforts is OpenRouter stating the effort ladder outright — the
-                // one non-Anthropic provider that does, so decode it into validEffortLevels (ordered
-                // shallow→deep) instead of probing each level.
-                let effortLevels = (model.reasoning?.supportedEfforts ?? [])
-                    .sorted { EffortRank.rank(of: $0) < EffortRank.rank(of: $1) }
+                // one non-Anthropic provider that does. An absent reasoning block says nothing (nil),
+                // it is NOT a statement of "no efforts".
+                if let efforts = model.reasoning?.supportedEfforts {
+                    facts.validEffortLevels = efforts.sorted { EffortRank.rank(of: $0) < EffortRank.rank(of: $1) }
+                }
 
                 let dp = model.defaultParameters
                 let defaults = SamplingDefaults(
                     temperature: dp?.temperature, topP: dp?.topP, topK: dp?.topK,
                     frequencyPenalty: dp?.frequencyPenalty, presencePenalty: dp?.presencePenalty,
                     repetitionPenalty: dp?.repetitionPenalty)
+                facts.samplingDefaults = defaults.isEmpty ? nil : defaults
 
-                return ModelInfo(
-                    providerID: providerID,
-                    modelID: model.id,
-                    displayName: model.name ?? model.id,
-                    createdAt: model.created.map { Date(timeIntervalSince1970: TimeInterval($0)) },
-                    // top_provider.context_length is the limit of the route OpenRouter actually
-                    // serves by default and can be smaller than the model's headline context; prefer
-                    // it, falling back to the top-level figure.
-                    maxInputTokens: model.topProvider?.contextLength ?? model.contextLength,
-                    maxOutputTokens: model.topProvider?.maxCompletionTokens,
-                    capabilities: caps,
-                    pricing: pricing,
-                    validEffortLevels: effortLevels,
-                    // expiration_date is OpenRouter's scheduled-removal date; treat like a deprecation.
-                    deprecatedOn: model.expirationDate.flatMap(parseYearMonthDay),
-                    modelDescription: model.description,
-                    samplingDefaults: defaults.isEmpty ? nil : defaults,
-                    benchmarks: (model.benchmarks?.isEmpty ?? true) ? nil : model.benchmarks,
-                    huggingFaceID: model.huggingFaceID
-                )
+                // top_provider.context_length is the limit of the route OpenRouter actually
+                // serves by default and can be smaller than the model's headline context; prefer
+                // it, falling back to the top-level figure.
+                facts.maxInputTokens = model.topProvider?.contextLength ?? model.contextLength
+                facts.maxOutputTokens = model.topProvider?.maxCompletionTokens
+                // expiration_date is OpenRouter's scheduled-removal date; treat like a deprecation.
+                facts.deprecatedOn = model.expirationDate.flatMap(parseYearMonthDay)
+                facts.modelDescription = model.description
+                facts.benchmarks = (model.benchmarks?.isEmpty ?? true) ? nil : model.benchmarks
+                facts.huggingFaceID = model.huggingFaceID
+
+                return DecodedModelFacts(modelID: model.id, facts: facts)
             }
             .sorted { $0.modelID < $1.modelID }
     }
@@ -404,7 +404,7 @@ public struct ModelFetchService: Sendable {
     // MARK: - HuggingFace
 
     func decodeHuggingFaceModelsForTesting(from data: Data, providerID: String) throws -> [ModelInfo] {
-        try decodeHuggingFaceModels(from: data, providerID: providerID)
+        try decodeHuggingFaceFacts(from: data).map { $0.facts.materialize(providerID: providerID, modelID: $0.modelID) }
     }
 
     /// HuggingFace's router lists several concrete inference providers per model, each with its own
@@ -413,8 +413,10 @@ public struct ModelFetchService: Sendable {
     /// and can change per request — we enumerate one model per concrete provider, keyed
     /// `org/model:provider` (HF's documented routing suffix). Providers with no usable data are
     /// skipped rather than given fabricated defaults, and no meta entry is synthesized.
+    /// `supports_tools` / `supports_structured_output` are tri-state: a present leaf is a stated
+    /// true or FALSE (both believed), an absent leaf says nothing.
     /// Pricing is USD per million tokens, so USD-per-token = value / 1e6.
-    private func decodeHuggingFaceModels(from data: Data, providerID: String) throws -> [ModelInfo] {
+    private func decodeHuggingFaceFacts(from data: Data) throws -> [DecodedModelFacts] {
         // USD per million tokens -> USD per single token.
         func usdPerToken(_ perMillion: Double?) -> Double? {
             guard let v = perMillion, v >= 0 else { return nil }
@@ -423,46 +425,38 @@ public struct ModelFetchService: Sendable {
 
         let decoded = try JSONDecoder().decode(HuggingFaceModelsResponse.self, from: data)
         return decoded.data
-            .flatMap { model -> [ModelInfo] in
-                // Modalities are stated at the model level and shared by every provider.
-                var modalityCaps = ModelCapabilities()
+            .flatMap { model -> [DecodedModelFacts] in
+                // Modalities are stated at the model level and shared by every provider;
+                // the arrays are explicit enumerations → bidirectional when non-empty.
+                var shared = ModelFacts()
                 let inputs = Set(model.architecture?.inputModalities ?? [])
                 if !inputs.isEmpty {
-                    modalityCaps.vision = inputs.contains("image")
-                    modalityCaps.pdfInput = inputs.contains("file")
-                    modalityCaps.audioInput = inputs.contains("audio")
-                    modalityCaps.videoInput = inputs.contains("video")
+                    shared.capabilities.vision = inputs.contains("image")
+                    shared.capabilities.pdfInput = inputs.contains("file")
+                    shared.capabilities.audioInput = inputs.contains("audio")
+                    shared.capabilities.videoInput = inputs.contains("video")
                 }
                 let outputs = Set(model.architecture?.outputModalities ?? [])
                 if !outputs.isEmpty {
-                    modalityCaps.audioOutput = outputs.contains("audio")
+                    shared.capabilities.audioOutput = outputs.contains("audio")
                 }
-                let createdAt = model.created.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+                shared.createdAt = model.created.map { Date(timeIntervalSince1970: TimeInterval($0)) }
 
                 return (model.providers ?? [])
                     .filter { $0.status == "live" && $0.hasUsableData }
                     .map { entry in
-                        // Start from the shared modalities; layer this provider's own capabilities.
-                        var caps = modalityCaps
-                        if entry.supportsTools == true { caps.toolUse = true }
-                        if entry.supportsStructuredOutput == true { caps.responseSchema = true }
-
-                        var pricing: ModelPricing?
+                        // Start from the shared modalities; layer this provider's own statements.
+                        var facts = shared
+                        facts.displayName = "\(model.id) (\(entry.provider))"
+                        facts.capabilities.toolUse = entry.supportsTools
+                        facts.capabilities.responseSchema = entry.supportsStructuredOutput
+                        facts.maxInputTokens = entry.contextLength
+                        facts.isFree = entry.isFree
                         if let p = entry.pricing {
                             let base = PricingTier(input: usdPerToken(p.input), output: usdPerToken(p.output))
-                            if base.hasAnyRate { pricing = ModelPricing(base: base) }
+                            if base.hasAnyRate { facts.pricing = ModelPricing(base: base) }
                         }
-
-                        return ModelInfo(
-                            providerID: providerID,
-                            modelID: "\(model.id):\(entry.provider)",
-                            displayName: "\(model.id) (\(entry.provider))",
-                            createdAt: createdAt,
-                            maxInputTokens: entry.contextLength,
-                            capabilities: caps,
-                            pricing: pricing,
-                            isFree: entry.isFree
-                        )
+                        return DecodedModelFacts(modelID: "\(model.id):\(entry.provider)", facts: facts)
                     }
             }
             .sorted { $0.modelID < $1.modelID }
@@ -471,41 +465,35 @@ public struct ModelFetchService: Sendable {
     // MARK: - Mistral
 
     func decodeMistralModelsForTesting(from data: Data, providerID: String) throws -> [ModelInfo] {
-        try decodeMistralModels(from: data, providerID: providerID)
+        try decodeMistralFacts(from: data).map { $0.facts.materialize(providerID: providerID, modelID: $0.modelID) }
     }
 
-    private func decodeMistralModels(from data: Data, providerID: String) throws -> [ModelInfo] {
+    private func decodeMistralFacts(from data: Data) throws -> [DecodedModelFacts] {
         let decoded = try JSONDecoder().decode(MistralModelsResponse.self, from: data)
         // Mistral returns both aliases (e.g. "mistral-large-latest") and specific versions
-        // (e.g. "mistral-large-2512") which share the same `name` field. Use model ID as
-        // display name to avoid visual duplicates in the picker.
+        // (e.g. "mistral-large-2512") which share the same `name` field, so displayName is left
+        // unset (materializes to the model ID) to avoid visual duplicates in the picker.
         return decoded.data
             .map { model in
-                var caps = ModelCapabilities()
-                let supportsChat: Bool
+                var facts = ModelFacts()
+                facts.createdAt = model.created.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+                facts.maxInputTokens = model.maxContextLength
+                // Mistral's capabilities block states each leaf explicitly, BOTH directions —
+                // including function_calling, which almost no vendor publishes. A present leaf is a
+                // stated true/false; an absent leaf stays nil (the old `?? false` fabricated a "no").
                 if let abilities = model.capabilities {
-                    caps.toolUse = abilities.functionCalling ?? false
-                    caps.vision = abilities.vision ?? false
-                    caps.reasoning = abilities.reasoning ?? false
-                    caps.audioInput = abilities.audio ?? false
-                    caps.audioOutput = abilities.audioSpeech ?? false
-                    supportsChat = abilities.completionChat ?? true
-                } else {
-                    supportsChat = true
+                    facts.capabilities.toolUse = abilities.functionCalling
+                    facts.capabilities.vision = abilities.vision
+                    facts.capabilities.reasoning = abilities.reasoning
+                    facts.capabilities.audioInput = abilities.audio
+                    facts.capabilities.audioOutput = abilities.audioSpeech
+                    facts.supportsChatCompletions = abilities.completionChat
                 }
-                return ModelInfo(
-                    providerID: providerID,
-                    modelID: model.id,
-                    displayName: model.id,
-                    createdAt: model.created.map { Date(timeIntervalSince1970: TimeInterval($0)) },
-                    maxInputTokens: model.maxContextLength,
-                    capabilities: caps,
-                    supportsChatCompletions: supportsChat,
-                    deprecatedOn: model.deprecation.flatMap(parseISODate),
-                    deprecationReplacement: model.deprecationReplacementModel,
-                    modelDescription: model.description,
-                    samplingDefaults: model.defaultModelTemperature.map { SamplingDefaults(temperature: $0) }
-                )
+                facts.deprecatedOn = model.deprecation.flatMap(parseISODate)
+                facts.deprecationReplacement = model.deprecationReplacementModel
+                facts.modelDescription = model.description
+                facts.samplingDefaults = model.defaultModelTemperature.map { SamplingDefaults(temperature: $0) }
+                return DecodedModelFacts(modelID: model.id, facts: facts)
             }
             .sorted { $0.modelID < $1.modelID }
     }
@@ -513,10 +501,10 @@ public struct ModelFetchService: Sendable {
     // MARK: - Gemini
 
     func decodeGeminiModelsForTesting(from data: Data, providerID: String) throws -> [ModelInfo] {
-        try decodeGeminiModels(from: data, providerID: providerID)
+        try decodeGeminiFacts(from: data).map { $0.facts.materialize(providerID: providerID, modelID: $0.modelID) }
     }
 
-    private func decodeGeminiModels(from data: Data, providerID: String) throws -> [ModelInfo] {
+    private func decodeGeminiFacts(from data: Data) throws -> [DecodedModelFacts] {
         let decoded = try JSONDecoder().decode(GeminiModelsResponse.self, from: data)
         return decoded.models
             .map { model in
@@ -525,30 +513,42 @@ public struct ModelFetchService: Sendable {
                     ? String(model.name.dropFirst("models/".count))
                     : model.name
 
-                // When the methods list is present, "generateContent" distinguishes chat models
-                // from embedding/image ones. When it's ABSENT we don't know, so fall back to the
-                // codebase's true-by-default convention rather than silently hiding the model.
-                let supportsChat = model.supportedGenerationMethods.map { $0.contains("generateContent") } ?? true
-
-                var caps = ModelCapabilities()
-                caps.reasoning = model.thinking ?? false
-
+                var facts = ModelFacts()
+                facts.displayName = model.displayName
+                // The methods list is an explicit enumeration: when present, "generateContent"
+                // distinguishes chat models from embedding/image ones both directions. Absent →
+                // stays nil (materializes to the true-by-default convention).
+                facts.supportsChatCompletions = model.supportedGenerationMethods
+                    .map { $0.contains("generateContent") }
+                // `thinking` is stated only when present; absent says nothing.
+                facts.capabilities.reasoning = model.thinking
+                facts.maxInputTokens = model.inputTokenLimit
+                facts.maxOutputTokens = model.outputTokenLimit
+                facts.maxTemperature = model.maxTemperature
+                facts.modelDescription = model.description
                 let defaults = SamplingDefaults(temperature: model.temperature, topP: model.topP, topK: model.topK)
-
-                return ModelInfo(
-                    providerID: providerID,
-                    modelID: modelID,
-                    displayName: model.displayName ?? modelID,
-                    maxInputTokens: model.inputTokenLimit,
-                    maxOutputTokens: model.outputTokenLimit,
-                    capabilities: caps,
-                    supportsChatCompletions: supportsChat,
-                    maxTemperature: model.maxTemperature,
-                    modelDescription: model.description,
-                    samplingDefaults: defaults.isEmpty ? nil : defaults
-                )
+                facts.samplingDefaults = defaults.isEmpty ? nil : defaults
+                return DecodedModelFacts(modelID: modelID, facts: facts)
             }
             .sorted { $0.modelID < $1.modelID }
+    }
+
+    // MARK: - Test seams
+
+    /// Tri-state test seam: decodes a captured payload into per-model facts for the given apiType,
+    /// so tests can assert the stated/unknown distinction (`nil` vs `false`) the materialized
+    /// `ModelInfo` seams flatten away.
+    func decodeModelFactsForTesting(from data: Data, apiType: ProviderAPIType) throws -> [DecodedModelFacts] {
+        switch apiType {
+        case .ollama: return try decodeOllamaFacts(from: data)
+        case .anthropic: return try decodeAnthropicFacts(from: data)
+        case .xAI: return try decodeXAIFacts(from: data)
+        case .openRouter: return try decodeOpenRouterFacts(from: data)
+        case .huggingFace: return try decodeHuggingFaceFacts(from: data)
+        case .openAICompatible, .lmStudio, .zAI, .metaLlama, .alibabaCloud: return try decodeOpenAIFacts(from: data)
+        case .mistral: return try decodeMistralFacts(from: data)
+        case .gemini: return try decodeGeminiFacts(from: data)
+        }
     }
 
     // MARK: - Helpers
