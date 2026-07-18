@@ -94,6 +94,14 @@ public enum LLMProviderError: Error, LocalizedError {
             "supports at most *(\\d+) *(?:completion|output) tokens",
             // z.ai / GLM: "max_completion_tokens is limited to 16384 for glm-5.2"
             "max_(?:completion_)?tokens (?:is )?limited to *(\\d+)",
+            // Alibaba Cloud (dashscope): "Range of max_tokens should be [1, 65536]" — the top of
+            // a max_tokens-specific range IS the output ceiling. 212 unparsed occurrences in the
+            // 2026-07-18 log audit, each escalating to a full binary search that tripped the
+            // account rate limit mid-run.
+            "range of max_(?:completion_)?tokens should be *\\[ *\\d+ *, *(\\d+) *\\]",
+            // HuggingFace router: "max_tokens (current value: 100000000) must be between 0 and
+            // 65536" — some builds backtick-quote the parameter name.
+            "max_(?:completion_)?tokens`? *\\(current value: *\\d+\\) *must be between *\\d+ *and *(\\d+)",
             // OpenAI-style (older): "... maximum output tokens (131072)" / "... maximum output tokens is 131072"
             "maximum(?: allowed(?: number of)?)? output tokens(?: is)? *\\(? *(\\d+)"
         ]
@@ -110,13 +118,23 @@ public enum LLMProviderError: Error, LocalizedError {
     /// necessarily the output ceiling, so it must never be reported AS the output ceiling.
     public static func reportedLimitHint(inBody body: String) -> Int? {
         let patterns = [
-            // OpenRouter: "This endpoint's maximum context length is 202752 tokens."
-            "context length is *(\\d+)",
-            // z.ai: "The max_tokens parameter is illegal.：限制数值范围[1,131072]"
-            "范围 *\\[ *1 *, *(\\d+) *\\]",
-            "range *\\[ *1 *, *(\\d+) *\\]"
+            // z.ai: "The max_tokens parameter is illegal.：限制数值范围[1,131072]". Lower bound not
+            // hard-coded — HuggingFace-style ranges start at 0.
+            "范围 *\\[ *\\d+ *, *(\\d+) *\\]",
+            "range *\\[ *\\d+ *, *(\\d+) *\\]"
         ]
         return Self.firstCapture(in: body, patterns: patterns)
+    }
+
+    /// A CONTEXT-LENGTH bound the body reveals ("This endpoint's maximum context length is 202752
+    /// tokens"), kept apart from ``reportedLimitHint(inBody:)`` since the 2026-07-18 audit: proxy
+    /// endpoints (OpenRouter, the HuggingFace router) often bound `max_tokens` ONLY by context
+    /// length, so a binary search "converges" to context-minus-input — a number that overstates
+    /// what a production request with real input can use and must never be recorded as the
+    /// model's output ceiling. Callers use this to recognize that situation and decline to
+    /// search rather than to tighten one.
+    public static func reportedContextLengthBound(inBody body: String) -> Int? {
+        Self.firstCapture(in: body, patterns: ["context length is *(\\d+)"])
     }
 
     /// First capture group of the first matching pattern (case-insensitive), as an Int.

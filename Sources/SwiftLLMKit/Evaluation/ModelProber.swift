@@ -565,13 +565,23 @@ public enum ModelProber {
             guard allowBinarySearch else {
                 return .inconclusive("rejected max_tokens=\(absurd) without a parseable limit: \(CapabilityProbe.rejectionDetail(error))", duration: dur)
             }
-            // Shrink the search when the same error reveals a nearby bound (a context length, a
-            // range's top) — [512, hint] instead of [512, 100M] is a handful of calls, not ~24.
+            // Shrink the search when the same error reveals the top of a max_tokens RANGE —
+            // [512, hint] instead of [512, 100M] is a handful of calls, not ~24.
             var knownBad = absurd
             if let providerError = error as? LLMProviderError,
-               case .httpError(_, let body, _, _) = providerError,
-               let hint = LLMProviderError.reportedLimitHint(inBody: body), hint > 512, hint < absurd {
-                knownBad = hint + 1   // the bound itself may be rejectable; +1 keeps it a known-bad
+               case .httpError(_, let body, _, _) = providerError {
+                if let hint = LLMProviderError.reportedLimitHint(inBody: body), hint > 512, hint < absurd {
+                    knownBad = hint + 1   // the bound itself may be rejectable; +1 keeps it a known-bad
+                } else if let contextBound = LLMProviderError.reportedContextLengthBound(inBody: body) {
+                    // The endpoint bounds max_tokens only by CONTEXT length (OpenRouter, the
+                    // HuggingFace router). A search would "converge" to context-minus-input — the
+                    // audit caught HF accepting max_tokens=4276225 against a 4.29M context — and
+                    // that number overstates what any production request with real input can use.
+                    // No output cap is measurable here; say so instead of recording an artifact.
+                    return .inconclusive(
+                        "endpoint bounds max_tokens only by its context length (\(contextBound)) — no output cap to measure; a search would report a context artifact",
+                        duration: Date().timeIntervalSince(started))
+                }
             }
             return await binarySearchMaxOutput(llm: llm, knownGood: 512, knownBad: knownBad, calls: calls, started: started)
         }

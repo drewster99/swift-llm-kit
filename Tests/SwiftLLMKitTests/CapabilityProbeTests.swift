@@ -524,10 +524,13 @@ struct MaxOutputBinarySearchTests {
 @Suite("Output limit hint extraction")
 struct LimitHintTests {
 
-    @Test("OpenRouter states the context length")
+    @Test("OpenRouter's context length is a context bound, never a search hint")
     func openRouterContextLength() {
         let body = #"{"error":{"code":400,"message":"This endpoint's maximum context length is 202752 tokens. However, you requested about 100000008 tokens (8 of text input, 100000000 in the output)."}}"#
-        #expect(LLMProviderError.reportedLimitHint(inBody: body) == 202752)
+        #expect(LLMProviderError.reportedContextLengthBound(inBody: body) == 202752)
+        // A context length must not feed the max-output search: converging against it records
+        // context-minus-input as an "output cap" (the 2026-07-18 audit's HF 4.27M artifact).
+        #expect(LLMProviderError.reportedLimitHint(inBody: body) == nil)
     }
 
     @Test("z.ai states an allowed range")
@@ -1163,5 +1166,58 @@ struct TextCapabilityFamilyTests {
             llm: QuotaProvider(body: "Rate limit reached for gpt-4o on images per min: Limit 50, Requested 51."),
             modelID: "gpt-4o")
         #expect(busy.status == .inconclusive)
+    }
+}
+
+/// Limit families the 2026-07-18 audit found unparsed (212 Alibaba + 16 HF occurrences, each
+/// escalating to a full binary search), plus the context-only-bound refusal to search.
+@Suite("Limit parsing (audit set 3)")
+struct LimitParsingAuditTests {
+
+    @Test("Alibaba's max_tokens range states the exact ceiling")
+    func alibabaRangeIsExact() {
+        let body = #"{"error":{"message":"<400> InternalError.Algo.InvalidParameter: Range of max_tokens should be [1, 65536]","type":"invalid_request_error"}}"#
+        #expect(LLMProviderError.reportedMaxOutputTokenLimit(inBody: body) == 65536)
+    }
+
+    @Test("HuggingFace's between-bounds message states the exact ceiling")
+    func huggingFaceBetweenIsExact() {
+        // Backtick-quoted parameter names appear in some HF router builds; both shapes parse.
+        let quoted = #"{"error":"Input validation error: `max_tokens` (current value: 100000000) must be between 0 and 65536","error_type":"validation"}"#
+        let plain = "max_tokens (current value: 100000000) must be between 0 and 65536"
+        #expect(LLMProviderError.reportedMaxOutputTokenLimit(inBody: quoted) == 65536)
+        #expect(LLMProviderError.reportedMaxOutputTokenLimit(inBody: plain) == 65536)
+    }
+
+    @Test("Range hints no longer require a lower bound of 1")
+    func rangeHintLowerBoundLoosened() {
+        #expect(LLMProviderError.reportedLimitHint(inBody: "max_tokens must be in range [0, 8192]") == 8192)
+        #expect(LLMProviderError.reportedLimitHint(inBody: "范围[0,131072]") == 131072)
+    }
+
+    @Test("A context-only bound refuses the search instead of recording an artifact")
+    func contextOnlyBoundDeclinesSearch() async {
+        final class CallCounter: @unchecked Sendable {
+            var count = 0
+        }
+        struct ContextBoundProvider: LLMProvider {
+            let counter: CallCounter
+            func send(messages: [LLMMessage], tools: [LLMToolDefinition], overrides: LLMCallOverrides) async throws -> LLMResponse {
+                counter.count += 1
+                if (overrides.maxOutputTokens ?? 512) > 4_292_992 {
+                    throw LLMProviderError.httpError(
+                        statusCode: 400,
+                        body: "This endpoint's maximum context length is 4292992 tokens. However, you requested about 100000008 tokens.",
+                        url: nil, retryAfter: nil)
+                }
+                return LLMResponse(text: "ok")
+            }
+        }
+        let counter = CallCounter()
+        let finding = await ModelProber.probeMaxOutputTokens(
+            llm: ContextBoundProvider(counter: counter), modelID: "proxy-model")
+        #expect(finding.status == .inconclusive)
+        #expect(finding.value == nil)
+        #expect(counter.count == 1, "must not binary search a context-only bound")
     }
 }
