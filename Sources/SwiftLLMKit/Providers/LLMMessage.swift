@@ -4,10 +4,22 @@ import Foundation
 public struct LLMImageContent: Sendable, Equatable {
     public var data: Data
     public var mimeType: String
+    /// OpenAI's `image_url.detail` processing hint ("low" bills a flat ~85 tokens instead of
+    /// tile math over the pixel dimensions). Optional and nil by default so every existing
+    /// caller's wire encoding is byte-identical; senders set it only for endpoints documented
+    /// to accept it (api.openai.com) — OpenAI-compatible hosts with strict deserializers
+    /// reject unknown fields, and a rejection caused by our own hint must never exist to grade.
+    public var detail: Detail?
 
-    public init(data: Data, mimeType: String) {
+    /// OpenAI `image_url.detail` values, verbatim wire strings.
+    public enum Detail: String, Sendable, Equatable {
+        case low, high, auto
+    }
+
+    public init(data: Data, mimeType: String, detail: Detail? = nil) {
         self.data = data
         self.mimeType = mimeType
+        self.detail = detail
     }
 }
 

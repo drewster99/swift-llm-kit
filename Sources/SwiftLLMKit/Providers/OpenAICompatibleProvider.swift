@@ -275,11 +275,15 @@ struct OpenAICompatibleProvider: LLMProvider {
             let documents = message.documents ?? []
             if !images.isEmpty || !documents.isEmpty {
                 var parts: [[String: Any]] = images.map { image in
-                    [
+                    var imageURL: [String: Any] = [
+                        "url": "data:\(image.mimeType);base64,\(image.data.base64EncodedString())"
+                    ]
+                    if let detail = image.detail {
+                        imageURL["detail"] = detail.rawValue
+                    }
+                    return [
                         "type": "image_url",
-                        "image_url": [
-                            "url": "data:\(image.mimeType);base64,\(image.data.base64EncodedString())"
-                        ]
+                        "image_url": imageURL
                     ] as [String: Any]
                 }
                 for document in documents {

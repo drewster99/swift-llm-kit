@@ -41,3 +41,16 @@ public let llmURLSession: URLSession = {
     config.timeoutIntervalForResource = 900
     return URLSession(configuration: config)
 }()
+
+/// Session for CAPABILITY PROBES only — never production traffic. Probe calls are tiny by
+/// construction (512-token caps, one-line prompts), so anything past a minute is a stalled
+/// endpoint, not a long generation: the 2026-07-18 sweep's slowest legitimate call was ~15s
+/// while one gpt-5.4-nano server error held a connection for 301s. 60s is ~4-6x the observed
+/// legitimate ceiling; a timeout surfaces as a transport error, which every probe already
+/// grades as inconclusive — a timeout can never fabricate a verdict.
+public let probeURLSession: URLSession = {
+    let config = URLSessionConfiguration.default
+    config.timeoutIntervalForRequest = 60
+    config.timeoutIntervalForResource = 90
+    return URLSession(configuration: config)
+}()

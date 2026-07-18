@@ -1221,3 +1221,62 @@ struct LimitParsingAuditTests {
         #expect(counter.count == 1, "must not binary search a context-only bound")
     }
 }
+
+/// Efficiency set E1: the probe-scoped 60s session, and the vision `detail: low` hint with its
+/// grading invariant — failures are never graded from a request that carried our optional hint.
+@Suite("Probe efficiency: timeout session and vision detail hint")
+struct ProbeEfficiencyE1Tests {
+
+    @Test("The probe session times out at 60s; the production session is untouched")
+    func probeSessionTimeouts() {
+        #expect(probeURLSession.configuration.timeoutIntervalForRequest == 60)
+        #expect(probeURLSession.configuration.timeoutIntervalForResource == 90)
+        #expect(llmURLSession.configuration.timeoutIntervalForRequest == 600)
+    }
+
+    /// A strict endpoint that rejects the detail hint but answers the hint-free retry: vision
+    /// must establish TRUE from the retry, and the hint-bearing failure must never be graded.
+    @Test("A detail-hint rejection falls back to a hint-free attempt before any grading")
+    func detailRejectionNeverGraded() async {
+        final class CallLog: @unchecked Sendable { var detailValues: [String?] = [] }
+        struct StrictProvider: LLMProvider {
+            let log: CallLog
+            func send(messages: [LLMMessage], tools: [LLMToolDefinition], overrides: LLMCallOverrides) async throws -> LLMResponse {
+                let image = messages.compactMap(\.images).flatMap { $0 }.first
+                log.detailValues.append(image?.detail?.rawValue)
+                if image?.detail != nil {
+                    throw LLMProviderError.httpError(
+                        statusCode: 400,
+                        body: "data did not match any variant of untagged enum MessageContent",
+                        url: nil, retryAfter: nil)
+                }
+                return LLMResponse(text: "A blue triangle.")
+            }
+        }
+        let log = CallLog()
+        // Colour/shape are random per probe; run enough times that every combination appears —
+        // the mock answers "blue triangle", so only matching draws grade true, and what we assert
+        // is the invariant that holds on EVERY draw: two attempts, hint first, hint-free second,
+        // and the verdict (whatever it is) graded from the hint-free response.
+        let finding = await ModelProber.probeVision(
+            llm: StrictProvider(log: log), modelID: "strict", preferLowImageDetail: true)
+        #expect(log.detailValues == ["low", nil])
+        #expect(finding.status == .established)   // graded from the hint-free 200, never the 400
+    }
+
+    @Test("Without the preference no hint is ever sent")
+    func noHintByDefault() async {
+        final class CallLog: @unchecked Sendable { var detailValues: [String?] = [] }
+        struct EchoProvider: LLMProvider {
+            let log: CallLog
+            func send(messages: [LLMMessage], tools: [LLMToolDefinition], overrides: LLMCallOverrides) async throws -> LLMResponse {
+                let image = messages.compactMap(\.images).flatMap { $0 }.first
+                log.detailValues.append(image?.detail?.rawValue)
+                return LLMResponse(text: "A blue triangle.")
+            }
+        }
+        let log = CallLog()
+        _ = await ModelProber.probeVision(llm: EchoProvider(log: log), modelID: "plain")
+        #expect(log.detailValues == [nil])
+    }
+}

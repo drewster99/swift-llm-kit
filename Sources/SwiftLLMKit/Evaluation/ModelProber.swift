@@ -171,7 +171,8 @@ public enum ModelProber {
     public static func probe(
         llm: any LLMProvider,
         seed: ModelProfile,
-        effortLevelsToProbe: [String] = []
+        effortLevelsToProbe: [String] = [],
+        preferLowImageDetail: Bool = false
     ) async -> ModelProfile {
         let started = Date()
         let calls = ProbeCallCounter()
@@ -270,7 +271,8 @@ public enum ModelProber {
 
         // 3. Vision + PDF — only where the payload didn't already say.
         if profile.vision.status == .notAttempted {
-            profile.vision = await probeVision(llm: llm, modelID: modelID, calls: calls)
+            profile.vision = await probeVision(llm: llm, modelID: modelID, calls: calls,
+                                               preferLowImageDetail: preferLowImageDetail)
         }
         if profile.pdfInput.status == .notAttempted {
             profile.pdfInput = await probePDFInput(llm: llm, modelID: modelID, calls: calls)
@@ -437,14 +439,24 @@ public enum ModelProber {
     /// the colour. Only `true` when it names BOTH — a guesser lands both about 1-in-12, and a
     /// model that merely accepts the attachment without reading it can't produce either. Colour
     /// alone was too guessable and too easy to fake by describing the payload's existence.
-    public static func probeVision(llm: any LLMProvider, modelID: String, calls: ProbeCallCounter? = nil) async -> ProbeFinding<Bool> {
+    /// `preferLowImageDetail` requests OpenAI's `image_url.detail: "low"` (flat ~85-token image
+    /// bill instead of tile math — one gpt-4-turbo probe billed 8,542 tokens for a 128px shape).
+    /// Callers set it ONLY for endpoints documented to accept the field (api.openai.com); and the
+    /// grading invariant holds regardless: a failure is never graded from a request that carried
+    /// the hint — on any error the probe retries once hint-free and grades that, so a strict
+    /// deserializer rejecting OUR field can't fabricate vision=false.
+    public static func probeVision(
+        llm: any LLMProvider, modelID: String, calls: ProbeCallCounter? = nil,
+        preferLowImageDetail: Bool = false
+    ) async -> ProbeFinding<Bool> {
         guard let color = ProbeFixtures.namedColors.randomElement(),
               let shape = ProbeFixtures.namedShapes.randomElement() else { return .notAttempted }
         let png = ProbeFixtures.makeShapePNG(shape: shape, red: color.red, green: color.green, blue: color.blue)
-        let image = LLMImageContent(data: png, mimeType: "image/png")
         let started = Date()
-        calls?.increment()
-        do {
+
+        func attempt(detail: LLMImageContent.Detail?) async throws -> ProbeFinding<Bool> {
+            let image = LLMImageContent(data: png, mimeType: "image/png", detail: detail)
+            calls?.increment()
             let response = try await llm.send(messages: [
                 .system("You are a vision test harness. Describe the image in a few words."),
                 .user("What shape is in this image, and what colour is it? Answer briefly.", images: [image])
@@ -460,6 +472,17 @@ public enum ModelProber {
             // actually said, so an auditor can tell a hallucination from a partial read.
             let got = [sawColor ? "colour✓" : "colour✗", sawShape ? "shape✓" : "shape✗"].joined(separator: " ")
             return .established(false, "expected '\(color.name) \(shape.rawValue)' — \(got); said '\(text.prefix(50))'", duration: dur)
+        }
+
+        if preferLowImageDetail {
+            do {
+                return try await attempt(detail: .low)
+            } catch {
+                // Fall through to the hint-free attempt below; this failure is never graded.
+            }
+        }
+        do {
+            return try await attempt(detail: nil)
         } catch {
             return attachmentRejection(error, attachment: "image", started: started)
         }

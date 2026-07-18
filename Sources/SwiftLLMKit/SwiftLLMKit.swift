@@ -1184,6 +1184,9 @@ public final class LLMKitManager {
     ///   (OpenAI o-series) 400 with the word "tool" in the body — which the tool probe's
     ///   classifier read as "cannot call tools", writing false verdicts for eight o-series
     ///   models in the 2026-07-18 audit. An un-sent parameter cannot poison a verdict.
+    /// - **A probe-scoped 60s timeout** (`probeURLSession`): probe calls are tiny, so a stall is
+    ///   an endpoint fault, not a long generation — and a timeout grades inconclusive, never a
+    ///   verdict. Production providers keep the standard long-generation session untouched.
     public func makeProbeProvider(
         configuration config: ModelConfiguration,
         provider modelProvider: ModelProvider
@@ -1191,13 +1194,15 @@ public final class LLMKitManager {
         var probeFlags = behaviorFlags(forProviderID: modelProvider.id, modelID: config.modelID)
         probeFlags.mustNeverSendTemperatureParam = false
         probeFlags.disableParallelToolCalls = true
-        return makeProvider(configuration: config, provider: modelProvider, behaviorFlags: probeFlags)
+        return makeProvider(configuration: config, provider: modelProvider,
+                            behaviorFlags: probeFlags, session: probeURLSession)
     }
 
     public func makeProvider(
         configuration config: ModelConfiguration,
         provider modelProvider: ModelProvider,
-        behaviorFlags flagsOverride: BehaviorFlags? = nil
+        behaviorFlags flagsOverride: BehaviorFlags? = nil,
+        session: URLSession = llmURLSession
     ) -> any LLMProvider {
         // Resolve the merged behavior flags for this (provider, model) so providers can read
         // knobs without reaching back into the manager. Keyed on the ModelProvider's ID, so it
@@ -1223,6 +1228,7 @@ public final class LLMKitManager {
             return AnthropicProvider(
                 configuration: config, provider: modelProvider,
                 readAPIKey: readAPIKey, verboseLogging: verbose,
+                session: session,
                 behaviorFlags: flags
             )
         case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaLlama, .alibabaCloud, .openRouter:
@@ -1236,7 +1242,8 @@ public final class LLMKitManager {
                 configuration: config, provider: modelProvider,
                 readAPIKey: readAPIKey, verboseLogging: verbose,
                 parallelToolCalls: enableParallel,
-                behaviorFlags: flags
+                behaviorFlags: flags,
+                session: session
             )
         case .ollama:
             // Ollama Cloud (ollama.com) proxies to upstream model backends that enforce
@@ -1258,18 +1265,21 @@ public final class LLMKitManager {
                     configuration: config, provider: cloudProvider,
                     readAPIKey: readAPIKey, verboseLogging: verbose,
                     parallelToolCalls: enableParallel,
-                    behaviorFlags: flags
+                    behaviorFlags: flags,
+                    session: session
                 )
             }
             return OllamaProvider(
                 configuration: config, provider: modelProvider,
                 readAPIKey: readAPIKey, verboseLogging: verbose,
-                behaviorFlags: flags
+                behaviorFlags: flags,
+                session: session
             )
         case .gemini:
             return GeminiProvider(
                 configuration: config, provider: modelProvider,
-                readAPIKey: readAPIKey, verboseLogging: verbose
+                readAPIKey: readAPIKey, verboseLogging: verbose,
+                session: session
             )
         }
     }
