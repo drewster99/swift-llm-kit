@@ -189,14 +189,21 @@ extension ModelProfile {
         carry(\.vision); carry(\.pdfInput); carry(\.acceptsTemperature)
         carry(\.maxOutputTokens); carry(\.maxContextTokens)
         carry(\.isAvailable); carry(\.isAccessDenied)
+        // Same rule as carry(): a prior probed finding is taken unless the seed ALREADY holds a
+        // probed one. A decoded presumption (e.g. Anthropic's decoded effort ladder) does NOT
+        // block it — probing outranks a catalog echo — which the earlier status-only / nil checks
+        // got wrong for these two non-scalar fields.
         if let bound = prior.maxOutputBoundedByContext,
-           bound.status == .established, bound.source == .probed,
-           (maxOutputBoundedByContext?.status ?? .notAttempted) != .established {
-            maxOutputBoundedByContext = bound
+           bound.status == .established, bound.source == .probed {
+            let current = maxOutputBoundedByContext
+            let alreadyProbed = current?.status == .established && current?.source == .probed
+            if !alreadyProbed { maxOutputBoundedByContext = bound }
         }
         for (level, finding) in prior.effortLevels
         where finding.status == .established && finding.source == .probed {
-            if effortLevels[level] == nil { effortLevels[level] = finding }
+            let current = effortLevels[level]
+            let alreadyProbed = current?.status == .established && current?.source == .probed
+            if !alreadyProbed { effortLevels[level] = finding }
         }
     }
 

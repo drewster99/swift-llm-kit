@@ -511,13 +511,16 @@ public enum ModelProber {
 
         func attempt(detail: LLMImageContent.Detail?) async throws -> ProbeFinding<Bool> {
             let image = LLMImageContent(data: png, mimeType: "image/png", detail: detail)
+            let attemptStarted = Date()
             calls?.increment()
             let response = try await llm.send(messages: [
                 .system("You are a vision test harness. Describe the image in a few words."),
                 .user("What shape is in this image, and what colour is it? Answer briefly.", images: [image])
             ], tools: [])
             let text = (response.text ?? "").lowercased()
-            let dur = Date().timeIntervalSince(started)
+            // Per-attempt duration: a graded verdict times only its own call, not a discarded
+            // detail-hint attempt that failed before it.
+            let dur = Date().timeIntervalSince(attemptStarted)
             let (sawColor, sawShape) = gradeVisionAnswer(text, colorName: color.name, shape: shape)
             if sawColor && sawShape {
                 return .established(true, "named '\(color.name) \(shape.rawValue)'", duration: dur)

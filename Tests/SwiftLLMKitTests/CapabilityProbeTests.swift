@@ -1581,6 +1581,31 @@ struct StoreSeededResweepTests {
         #expect(seed.chat.evidence == "fresh probe this run")           // existing probe not clobbered
     }
 
+    /// The agy-review regression: an Anthropic seed carries DECODED effort levels, and a prior
+    /// record may hold a PROBED verdict for the same level. The probed one must win — a decoded
+    /// presence must not block it (the earlier `== nil` / status-only checks let it through).
+    @Test("A prior probed finding replaces a decoded effort/context-bound seed value")
+    func probedReplacesDecodedNonScalars() {
+        var seed = ModelProfile(providerID: "p", modelID: "m")
+        seed.effortLevels["high"] = .decoded(true, "stated in /models")     // decoded presumption
+        seed.maxOutputBoundedByContext = nil
+
+        var prior = ModelProfile(providerID: "p", modelID: "m")
+        prior.effortLevels["high"] = .established(false, "endpoint rejected reasoning_effort=high")  // probed
+        prior.maxOutputBoundedByContext = .established(8192, "bounds by context")                    // probed
+        seed.seedProbedFindings(from: prior)
+
+        #expect(seed.effortLevels["high"]?.value == false)          // probed won over decoded
+        #expect(seed.effortLevels["high"]?.source == .probed)
+        #expect(seed.maxOutputBoundedByContext?.value == 8192)
+
+        // But an already-PROBED seed value is never clobbered.
+        var probedSeed = ModelProfile(providerID: "p", modelID: "m")
+        probedSeed.effortLevels["high"] = .established(true, "freshly probed accepted")
+        probedSeed.seedProbedFindings(from: prior)
+        #expect(probedSeed.effortLevels["high"]?.evidence == "freshly probed accepted")
+    }
+
     @Test("Through the sweep: a fully-seeded profile makes zero calls")
     func fullySeededMakesNoCalls() async {
         struct BombProvider: LLMProvider {
