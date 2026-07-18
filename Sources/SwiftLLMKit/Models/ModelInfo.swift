@@ -82,6 +82,16 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
     /// Presentation flag from the override layers: pickers filter models marked hidden, but the
     /// data underneath survives — hiding is never deletion. `nil`/`false` = visible.
     public var hidden: Bool?
+    /// Empirical reachability: `false` when a probe established the model is GONE (a 404
+    /// "no longer available" / workspace-unsupported — never a transient failure), `true` when a
+    /// probe got a live response, `nil` when never determined. The `/models` listing is NOT proof
+    /// of availability (retired models stay listed), so nothing defaults this to true.
+    public var isAvailable: Bool?
+    /// Empirical, ACCOUNT-scoped: `true` when a probe by the composing provider's own key was
+    /// refused for access reasons (e.g. Alibaba's Model.AccessDenied). Only a record probed by
+    /// THIS provider projects here — a shared host probed under a different key says nothing
+    /// about this one. `nil` = never determined.
+    public var isAccessDenied: Bool?
 
     // MARK: - Backward-compatible pricing accessors
 
@@ -128,7 +138,9 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
         isFree: Bool? = nil,
         benchmarks: ModelBenchmarks? = nil,
         huggingFaceID: String? = nil,
-        hidden: Bool? = nil
+        hidden: Bool? = nil,
+        isAvailable: Bool? = nil,
+        isAccessDenied: Bool? = nil
     ) {
         self.providerID = providerID
         self.modelID = modelID
@@ -153,6 +165,8 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
         self.benchmarks = benchmarks
         self.huggingFaceID = huggingFaceID
         self.hidden = hidden
+        self.isAvailable = isAvailable
+        self.isAccessDenied = isAccessDenied
     }
 
     /// Whether the model was created/modified within the last 90 days.
@@ -177,7 +191,7 @@ extension ModelInfo: Codable {
         case sizeLabel, quantizationLabel, pricing, supportsChatCompletions
         case mode, validEffortLevels, behaviorFlags
         case deprecatedOn, deprecationReplacement, maxTemperature, modelDescription
-        case samplingDefaults, isFree, benchmarks, huggingFaceID, hidden
+        case samplingDefaults, isFree, benchmarks, huggingFaceID, hidden, isAvailable, isAccessDenied
         // Legacy keys for reading old persisted data
         case inputCostPerMillionTokens, outputCostPerMillionTokens
     }
@@ -207,6 +221,8 @@ extension ModelInfo: Codable {
         benchmarks = try container.decodeIfPresent(ModelBenchmarks.self, forKey: .benchmarks)
         huggingFaceID = try container.decodeIfPresent(String.self, forKey: .huggingFaceID)
         hidden = try container.decodeIfPresent(Bool.self, forKey: .hidden)
+        isAvailable = try container.decodeIfPresent(Bool.self, forKey: .isAvailable)
+        isAccessDenied = try container.decodeIfPresent(Bool.self, forKey: .isAccessDenied)
 
         // Read new pricing field, or fall back to legacy flat cost fields.
         if let p = try container.decodeIfPresent(ModelPricing.self, forKey: .pricing) {
@@ -257,6 +273,8 @@ extension ModelInfo: Codable {
         try container.encodeIfPresent(benchmarks, forKey: .benchmarks)
         try container.encodeIfPresent(huggingFaceID, forKey: .huggingFaceID)
         try container.encodeIfPresent(hidden, forKey: .hidden)
+        try container.encodeIfPresent(isAvailable, forKey: .isAvailable)
+        try container.encodeIfPresent(isAccessDenied, forKey: .isAccessDenied)
         // Legacy fields intentionally not written — new format only.
     }
 }

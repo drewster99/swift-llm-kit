@@ -15,7 +15,7 @@ struct ProbeProjectionTests {
         profile.pdfInput = .inconclusive("rate limited")                     // learned nothing
         profile.maxOutputTokens = .established(97922, "binary search")
 
-        let facts = profile.asEmpiricalFacts
+        let facts = profile.asEmpiricalFacts(includeAccountScoped: false)
         #expect(facts.capabilities.toolUse == true)
         #expect(facts.capabilities.vision == nil, "decoded echoes must not wear empirical authority")
         #expect(facts.capabilities.pdfInput == nil)
@@ -26,22 +26,44 @@ struct ProbeProjectionTests {
     func temperatureProjection() {
         var rejects = ModelProfile(providerID: "p", modelID: "m")
         rejects.acceptsTemperature = .established(false, "400 naming temperature")
-        #expect(rejects.asEmpiricalFacts.behaviorFlags.mustNeverSendTemperatureParam == true)
+        #expect(rejects.asEmpiricalFacts(includeAccountScoped: false).behaviorFlags.mustNeverSendTemperatureParam == true)
 
         // A probed TRUE is conditional on the flags active at probe time — never projected.
         var accepts = ModelProfile(providerID: "p", modelID: "m")
         accepts.acceptsTemperature = .established(true, "accepted temperature")
-        #expect(accepts.asEmpiricalFacts.behaviorFlags.mustNeverSendTemperatureParam == nil)
+        #expect(accepts.asEmpiricalFacts(includeAccountScoped: false).behaviorFlags.mustNeverSendTemperatureParam == nil)
     }
 
-    @Test("Record-only fields (isAvailable, round-trip, efforts) never enter the merged facts")
-    func recordOnlyFieldsExcluded() {
+    @Test("Promoted fields: model-scoped always project; account-scoped only when gated in")
+    func promotionRules() {
         var profile = ModelProfile(providerID: "p", modelID: "m")
         profile.isAvailable = .established(false, "404 no longer available")
         profile.toolResultRoundTrip = .established(false, "no identifier")
-        profile.effortLevels = ["high": .established(true, "accepted")]
-        let facts = profile.asEmpiricalFacts
-        #expect(facts.isSilent, "none of these fields have a ModelFacts home yet — record-only")
+        profile.isAccessDenied = .established(true, "Model.AccessDenied")
+        profile.effortLevels = ["high": .established(true, "accepted")]   // PARTIAL ladder
+
+        // Model-scoped: always. Account-scoped: excluded without the gate.
+        let modelScoped = profile.asEmpiricalFacts(includeAccountScoped: false)
+        #expect(modelScoped.isAvailable == false)
+        #expect(modelScoped.capabilities.toolResultRoundTrip == false)
+        #expect(modelScoped.isAccessDenied == nil)
+        #expect(modelScoped.validEffortLevels == nil)
+
+        // Account-scoped gate on: isAccessDenied projects; the PARTIAL effort ladder still
+        // must not (it would understate validEffortLevels).
+        let accountScoped = profile.asEmpiricalFacts(includeAccountScoped: true)
+        #expect(accountScoped.isAccessDenied == true)
+        #expect(accountScoped.validEffortLevels == nil, "a partial ladder must never project")
+    }
+
+    @Test("Effort levels project only from a COMPLETE-ladder probe")
+    func completeLadderProjection() {
+        var profile = ModelProfile(providerID: "p", modelID: "m")
+        for level in EffortRank.allKnown {
+            profile.effortLevels[level] = .established(["low", "medium", "high"].contains(level), "probed")
+        }
+        let facts = profile.asEmpiricalFacts(includeAccountScoped: true)
+        #expect(facts.validEffortLevels == ["low", "medium", "high"])
     }
 
     @Test("The completeness gate: decoded-only or inconclusive-only profiles are not persistable")
@@ -161,7 +183,7 @@ struct ProbeEvidenceCombinerTests {
         // newer never attempted vision (policy halt) — older's established survives.
 
         let combined = ProbeEvidenceCombiner.combinedFacts(
-            local: record(newer, at: 1000), downloaded: record(older, at: 0))
+            local: record(newer, at: 1000), downloaded: record(older, at: 0), forProviderID: "builtin.zai")
         #expect(combined.capabilities.toolUse == false)   // newer established wins
         #expect(combined.capabilities.vision == true)      // established never loses to unknown
     }
@@ -174,7 +196,7 @@ struct ProbeEvidenceCombinerTests {
         downloaded.pdfInput = .established(true, "probed with the fixed encoder")
 
         let combined = ProbeEvidenceCombiner.combinedFacts(
-            local: record(local, at: 0), downloaded: record(downloaded, at: 1000))
+            local: record(local, at: 0), downloaded: record(downloaded, at: 1000), forProviderID: "builtin.zai")
         #expect(combined.capabilities.pdfInput == true)
     }
 
@@ -182,8 +204,8 @@ struct ProbeEvidenceCombinerTests {
     func degenerateCases() {
         var profile = ModelProfile(providerID: "p", modelID: "m")
         profile.chat = .established(true, "echoed")
-        #expect(ProbeEvidenceCombiner.combinedFacts(local: record(profile, at: 0), downloaded: nil).supportsChatCompletions == true)
-        #expect(ProbeEvidenceCombiner.combinedFacts(local: nil, downloaded: nil).isSilent)
+        #expect(ProbeEvidenceCombiner.combinedFacts(local: record(profile, at: 0), downloaded: nil, forProviderID: "builtin.zai").supportsChatCompletions == true)
+        #expect(ProbeEvidenceCombiner.combinedFacts(local: nil, downloaded: nil, forProviderID: "builtin.zai").isSilent)
     }
 }
 
@@ -200,7 +222,7 @@ struct GoldenProbeMergeTests {
         profile.toolCalling = .established(true, "returned the identifier")
         profile.maxOutputTokens = .established(97922, "binary search")
 
-        let result = ModelFactsMerger.merge(authoritative: authoritative, empirical: profile.asEmpiricalFacts)
+        let result = ModelFactsMerger.merge(authoritative: authoritative, empirical: profile.asEmpiricalFacts(includeAccountScoped: true))
         #expect(result.merged.capabilities.toolUse == true)
         #expect(result.merged.maxOutputTokens == 97922)
         #expect(result.provenance["capabilities.toolUse"] == .empirical)
@@ -217,21 +239,23 @@ struct GoldenProbeMergeTests {
         authoritative.maxInputTokens = 1_048_576
 
         // The probe halted at the reachability gate: isAvailable=false established, everything
-        // else untouched. The projection has no mergeable fields — so the merge must carry ZERO
-        // empirical claims, and isAvailable stays on the record for the inspector.
+        // else untouched. The ONLY empirical claim that may flow is the honest isAvailable=false
+        // (now promoted into the merge); no capability may be fabricated.
         var profile = ModelProfile(providerID: "builtin.gemini", modelID: "gemini-2.0-flash-lite")
         profile.chat = .decoded(true, "supportedGenerationMethods")
         profile.isAvailable = .established(false, "HTTP 404 no longer available")
 
-        let empirical = profile.asEmpiricalFacts
-        #expect(empirical.isSilent)
+        let empirical = profile.asEmpiricalFacts(includeAccountScoped: true)
+        #expect(empirical.isAvailable == false)
+        #expect(empirical.capabilities.vision == nil)
 
         let result = ModelFactsMerger.merge(authoritative: authoritative, empirical: empirical)
         #expect(result.merged.supportsChatCompletions == true)   // the listing's claim, unchanged
         #expect(result.merged.capabilities.vision == nil)         // nothing fabricated
-        #expect(result.provenance.values.allSatisfy { $0 == .authoritative })
-        // The empirical truth is preserved on the record itself (hasEstablishedProbedFindings
-        // means this run IS persistable — the reachability verdict is real evidence).
+        #expect(result.merged.isAvailable == false)               // the dead model IS marked dead
+        #expect(result.provenance["isAvailable"] == .empirical)
+        let info = result.merged.materialize(providerID: "builtin.gemini", modelID: "gemini-2.0-flash-lite")
+        #expect(info.isAvailable == false, "the merged catalog now carries the death certificate")
         #expect(profile.hasEstablishedProbedFindings)
     }
 }
@@ -280,7 +304,7 @@ struct ProberVersionPrecedenceTests {
 
         let combined = ProbeEvidenceCombiner.combinedFacts(
             local: record(fixedProber, at: 500, proberVersion: 2),
-            downloaded: record(brokenProber, at: 1000, proberVersion: 1))
+            downloaded: record(brokenProber, at: 1000, proberVersion: 1), forProviderID: "builtin.zai")
         #expect(combined.capabilities.pdfInput == true, "proberVersion outranks recency")
     }
 
@@ -292,7 +316,7 @@ struct ProberVersionPrecedenceTests {
         newer.vision = .established(false, "new")
         let combined = ProbeEvidenceCombiner.combinedFacts(
             local: record(older, at: 0, proberVersion: 1),
-            downloaded: record(newer, at: 1000, proberVersion: 1))
+            downloaded: record(newer, at: 1000, proberVersion: 1), forProviderID: "builtin.zai")
         #expect(combined.capabilities.vision == false)
     }
 }

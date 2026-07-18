@@ -20,6 +20,7 @@ public struct ModelCapabilitiesOverride: Codable, Sendable, Equatable {
     public var systemMessages: Bool?
     public var assistantPrefill: Bool?
     public var toolChoice: Bool?
+    public var toolResultRoundTrip: Bool?
 
     public init(
         toolUse: Bool? = nil,
@@ -37,7 +38,8 @@ public struct ModelCapabilitiesOverride: Codable, Sendable, Equatable {
         webSearch: Bool? = nil,
         systemMessages: Bool? = nil,
         assistantPrefill: Bool? = nil,
-        toolChoice: Bool? = nil
+        toolChoice: Bool? = nil,
+        toolResultRoundTrip: Bool? = nil
     ) {
         self.toolUse = toolUse
         self.vision = vision
@@ -55,6 +57,7 @@ public struct ModelCapabilitiesOverride: Codable, Sendable, Equatable {
         self.systemMessages = systemMessages
         self.assistantPrefill = assistantPrefill
         self.toolChoice = toolChoice
+        self.toolResultRoundTrip = toolResultRoundTrip
     }
 
     /// Applies this override to a ``ModelCapabilities`` value.
@@ -80,6 +83,7 @@ public struct ModelCapabilitiesOverride: Codable, Sendable, Equatable {
         if let v = systemMessages, (forceReplace || v) { capabilities.systemMessages = v }
         if let v = assistantPrefill, (forceReplace || v) { capabilities.assistantPrefill = v }
         if let v = toolChoice, (forceReplace || v) { capabilities.toolChoice = v }
+        if let v = toolResultRoundTrip, (forceReplace || v) { capabilities.toolResultRoundTrip = v }
     }
 }
 
@@ -111,6 +115,10 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
     /// Hide this model from pickers. Hiding is presentation, never deletion — every record
     /// underneath survives, and un-hiding is removing this one field.
     public var hidden: Bool?
+    /// Override the empirical availability verdict (e.g. clear a stale probed `false`).
+    public var isAvailable: Bool?
+    /// Override the empirical access-denial verdict.
+    public var isAccessDenied: Bool?
 
     public init(
         displayName: String? = nil,
@@ -120,7 +128,9 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
         pricing: ModelPricing? = nil,
         supportsChatCompletions: Bool? = nil,
         behaviorFlags: BehaviorFlagsOverride? = nil,
-        hidden: Bool? = nil
+        hidden: Bool? = nil,
+        isAvailable: Bool? = nil,
+        isAccessDenied: Bool? = nil
     ) {
         self.displayName = displayName
         self.maxInputTokens = maxInputTokens
@@ -130,6 +140,8 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
         self.supportsChatCompletions = supportsChatCompletions
         self.behaviorFlags = behaviorFlags
         self.hidden = hidden
+        self.isAvailable = isAvailable
+        self.isAccessDenied = isAccessDenied
     }
 
     /// Applies this override to a ``ModelInfo`` value.
@@ -168,6 +180,12 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
         }
         if let v = hidden, (forceReplace || model.hidden == nil) {
             model.hidden = v
+        }
+        if let v = isAvailable, (forceReplace || model.isAvailable == nil) {
+            model.isAvailable = v
+        }
+        if let v = isAccessDenied, (forceReplace || model.isAccessDenied == nil) {
+            model.isAccessDenied = v
         }
     }
 }

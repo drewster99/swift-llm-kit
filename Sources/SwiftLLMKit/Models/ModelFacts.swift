@@ -50,6 +50,12 @@ public struct ModelFacts: Codable, Sendable, Equatable {
     /// downloaded override hiding a known-broken entry). Hiding is never deletion — the records
     /// underneath survive, and un-hiding is removing one override field.
     public var hidden: Bool?
+    /// Empirical reachability (see ``ModelInfo/isAvailable``). Supplied by the probe layer;
+    /// the authoritative listing is deliberately never a source (retired models stay listed).
+    public var isAvailable: Bool?
+    /// Empirical, account-scoped access denial (see ``ModelInfo/isAccessDenied``). Projected only
+    /// from records probed by the composing provider's own key.
+    public var isAccessDenied: Bool?
 
     public init() {
         self.capabilities = ModelCapabilitiesOverride()
@@ -95,7 +101,9 @@ public struct ModelFacts: Codable, Sendable, Equatable {
             isFree: isFree,
             benchmarks: benchmarks,
             huggingFaceID: huggingFaceID,
-            hidden: hidden
+            hidden: hidden,
+            isAvailable: isAvailable,
+            isAccessDenied: isAccessDenied
         )
     }
 }
@@ -126,6 +134,8 @@ extension ModelMetadataOverride {
         facts.supportsChatCompletions = supportsChatCompletions
         if let behaviorFlags { facts.behaviorFlags = behaviorFlags }
         facts.hidden = hidden
+        facts.isAvailable = isAvailable
+        facts.isAccessDenied = isAccessDenied
         return facts
     }
 }

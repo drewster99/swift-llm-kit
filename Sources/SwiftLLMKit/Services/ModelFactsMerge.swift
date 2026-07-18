@@ -73,6 +73,8 @@ public enum ModelFactsFieldTable {
         .field("benchmarks", \ModelFacts.benchmarks),             // atomic composite
         .field("huggingFaceID", \ModelFacts.huggingFaceID),
         .field("hidden", \ModelFacts.hidden),
+        .field("isAvailable", \ModelFacts.isAvailable),
+        .field("isAccessDenied", \ModelFacts.isAccessDenied),
     ]
 
     private static let capabilityFlags: [ModelFactsField] = [
@@ -92,6 +94,7 @@ public enum ModelFactsFieldTable {
         .field("capabilities.systemMessages", \ModelFacts.capabilities.systemMessages),
         .field("capabilities.assistantPrefill", \ModelFacts.capabilities.assistantPrefill),
         .field("capabilities.toolChoice", \ModelFacts.capabilities.toolChoice),
+        .field("capabilities.toolResultRoundTrip", \ModelFacts.capabilities.toolResultRoundTrip),
     ]
 
     private static let behaviorFlagFields: [ModelFactsField] = [

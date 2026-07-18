@@ -786,7 +786,8 @@ public final class LLMKitManager {
         let probeKey = ProbeRecordKey(apiType: provider.apiType, endpoint: provider.endpoint, modelID: modelID)
         let empirical = ProbeEvidenceCombiner.combinedFacts(
             local: localProbeRecords[probeKey],
-            downloaded: downloadedProbeRecords[probeKey]
+            downloaded: downloadedProbeRecords[probeKey],
+            forProviderID: provider.id
         )
 
         let composition = ModelFactsMerger.merge(

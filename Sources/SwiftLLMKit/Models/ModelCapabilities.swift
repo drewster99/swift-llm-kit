@@ -18,6 +18,9 @@ public struct ModelCapabilities: Sendable, Equatable {
     public var systemMessages: Bool
     public var assistantPrefill: Bool
     public var toolChoice: Bool
+    /// Empirical-only: the model called a tool AND consumed the tool result (returned the probe's
+    /// identifier). The half an agent actually depends on; no vendor publishes it.
+    public var toolResultRoundTrip: Bool
 
     public init(
         toolUse: Bool = false,
@@ -35,7 +38,8 @@ public struct ModelCapabilities: Sendable, Equatable {
         webSearch: Bool = false,
         systemMessages: Bool = false,
         assistantPrefill: Bool = false,
-        toolChoice: Bool = false
+        toolChoice: Bool = false,
+        toolResultRoundTrip: Bool = false
     ) {
         self.toolUse = toolUse
         self.vision = vision
@@ -53,6 +57,7 @@ public struct ModelCapabilities: Sendable, Equatable {
         self.systemMessages = systemMessages
         self.assistantPrefill = assistantPrefill
         self.toolChoice = toolChoice
+        self.toolResultRoundTrip = toolResultRoundTrip
     }
 
     /// Human-readable labels for capabilities that are enabled.
@@ -74,6 +79,7 @@ public struct ModelCapabilities: Sendable, Equatable {
         if systemMessages { labels.append("System Msgs") }
         if assistantPrefill { labels.append("Prefill") }
         if toolChoice { labels.append("Tool Choice") }
+        if toolResultRoundTrip { labels.append("Tool Round-Trip") }
         return labels
     }
 }
@@ -86,6 +92,7 @@ extension ModelCapabilities: Codable {
         case computerUse, audioInput, audioOutput, videoInput
         case responseSchema, parallelToolCalls
         case pdfInput, webSearch, systemMessages, assistantPrefill, toolChoice
+        case toolResultRoundTrip
     }
 
     public init(from decoder: Decoder) throws {
@@ -106,5 +113,6 @@ extension ModelCapabilities: Codable {
         systemMessages = try container.decodeIfPresent(Bool.self, forKey: .systemMessages) ?? false
         assistantPrefill = try container.decodeIfPresent(Bool.self, forKey: .assistantPrefill) ?? false
         toolChoice = try container.decodeIfPresent(Bool.self, forKey: .toolChoice) ?? false
+        toolResultRoundTrip = try container.decodeIfPresent(Bool.self, forKey: .toolResultRoundTrip) ?? false
     }
 }

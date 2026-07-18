@@ -174,15 +174,21 @@ extension ModelProfile {
     /// launder catalog claims into empirical authority (they are already represented, fresher,
     /// by the authoritative layer).
     ///
-    /// Deliberately NOT projected (kept on the record for the inspector, never merged):
-    /// - `isAvailable`, `isAccessDenied`, `toolResultRoundTrip`: no `ModelFacts` home yet;
-    ///   promoting them into the merged catalog is a separate, explicit decision.
-    /// - `effortLevels`: a partial probe understates the ladder, and `validEffortLevels == []`
-    ///   reads as "no effort knob" downstream — an understated list would break validation.
+    /// `includeAccountScoped` gates the findings that are facts about the PROBING KEY rather than
+    /// the model — `isAccessDenied` and effort-level acceptance (account-tier-gated on some
+    /// providers). The combiner passes true only when the record was probed by the provider being
+    /// composed; a shared host probed under a different key says nothing about this one.
+    ///
+    /// Projection rules for the trickier fields:
+    /// - `effortLevels`: projected ONLY when the run attempted the complete known ladder — a
+    ///   partial probe would understate `validEffortLevels`, and `[]` reads as "no effort knob"
+    ///   downstream, making validation reject levels the model accepts.
     /// - `acceptsTemperature == true`: conditional on the behavior flags active at probe time
     ///   (with mustNeverSendTemperatureParam set, the provider omits the parameter and the probe
     ///   trivially "passes"), so only the NEGATIVE is projected, as the flag derivation.
-    public var asEmpiricalFacts: ModelFacts {
+    /// - `isAvailable`: only the probe supplies it (the listing is not proof), and only explicit
+    ///   gone-signals ever established false — a transient failure never reaches `established`.
+    public func asEmpiricalFacts(includeAccountScoped: Bool) -> ModelFacts {
         var facts = ModelFacts()
         func probed<T>(_ finding: ProbeFinding<T>) -> T? {
             guard finding.status == .established, finding.source == .probed else { return nil }
@@ -190,12 +196,26 @@ extension ModelProfile {
         }
         facts.supportsChatCompletions = probed(chat)
         facts.capabilities.toolUse = probed(toolCalling)
+        facts.capabilities.toolResultRoundTrip = probed(toolResultRoundTrip)
         facts.capabilities.vision = probed(vision)
         facts.capabilities.pdfInput = probed(pdfInput)
         facts.maxOutputTokens = probed(maxOutputTokens)
         facts.maxInputTokens = probed(maxContextTokens)
+        facts.isAvailable = probed(isAvailable)
         if probed(acceptsTemperature) == false {
             facts.behaviorFlags.mustNeverSendTemperatureParam = true
+        }
+        if includeAccountScoped {
+            facts.isAccessDenied = probed(isAccessDenied)
+            // Complete-ladder gate: every known level must have an established probed answer
+            // (accepted or rejected) before the set of accepted levels can claim to BE the ladder.
+            let established = effortLevels.filter { $0.value.status == .established && $0.value.source == .probed }
+            if Set(established.keys).isSuperset(of: EffortRank.table.keys) {
+                facts.validEffortLevels = established
+                    .filter { $0.value.value == true }
+                    .map(\.key)
+                    .sorted { EffortRank.rank(of: $0) < EffortRank.rank(of: $1) }
+            }
         }
         return facts
     }
@@ -220,17 +240,25 @@ extension ProbeRecord {
 // MARK: - Combining local + downloaded probe evidence
 
 public enum ProbeEvidenceCombiner {
-    /// Combines the local and downloaded records for one key into the empirical layer's facts.
+    /// Combines the local and downloaded records for one key into the empirical layer's facts,
+    /// composed for the given provider.
     ///
     /// Records are whole complete runs, so "newest established wins per field" reduces to:
     /// project both, take the newer record's facts, and gap-fill from the older — an established
     /// finding never loses to the newer run's unknown, and where both established, newer wins.
-    public static func combinedFacts(local: ProbeRecord?, downloaded: ProbeRecord?) -> ModelFacts {
+    ///
+    /// Account-scoped findings (isAccessDenied, effort acceptance) project only from a record
+    /// probed by `providerID`'s own key; downloaded records never include them (export-stripped,
+    /// and the gate here is the belt to that strip's suspenders).
+    public static func combinedFacts(local: ProbeRecord?, downloaded: ProbeRecord?, forProviderID providerID: String) -> ModelFacts {
+        func facts(of record: ProbeRecord) -> ModelFacts {
+            record.profile.asEmpiricalFacts(includeAccountScoped: record.providerID == providerID)
+        }
         switch (local, downloaded) {
         case (nil, nil):
             return ModelFacts()
         case (let one?, nil), (nil, let one?):
-            return one.profile.asEmpiricalFacts
+            return facts(of: one)
         case (let local?, let downloaded?):
             // A higher proberVersion beats a newer timestamp: a record from a FIXED prober
             // outranks a later run of a prober whose request-forming code was wrong (the
@@ -240,8 +268,8 @@ public enum ProbeEvidenceCombiner {
             let localWins = (local.proberVersion, local.recordedAt.timeIntervalSince1970)
                 >= (downloaded.proberVersion, downloaded.recordedAt.timeIntervalSince1970)
             let (newer, older) = localWins ? (local, downloaded) : (downloaded, local)
-            var combined = newer.profile.asEmpiricalFacts
-            let olderFacts = older.profile.asEmpiricalFacts
+            var combined = facts(of: newer)
+            let olderFacts = facts(of: older)
             for field in ModelFactsFieldTable.fields
             where !field.isSet(combined) && field.isSet(olderFacts) {
                 field.copy(olderFacts, &combined)
