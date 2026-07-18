@@ -43,6 +43,15 @@ public final class LLMKitManager {
     /// each layer's own record, which layer won each field, and where layers disagreed. In-memory
     /// only — recomputed on every refresh — and the data the provenance inspector reads.
     public private(set) var metadataCompositions: [String: MergedModelComposition] = [:]
+
+    /// The discovery ledger: every `providerID/modelID` ever observed in a `/models` listing.
+    /// Persisted; seeded silently from the existing catalog on first load (see ``SeenModelsLedger``).
+    private var seenModels = SeenModelsLedger()
+
+    /// Model keys first observed during THIS session's refreshes — genuinely new to this install,
+    /// never populated by the seeding pass. Nothing consumes it automatically yet (probing is
+    /// manual by design); the coming probe queue and inspector read it.
+    public private(set) var newlyDiscoveredModelKeys: Set<String> = []
     /// Incremented every time any provider's API key is written via `addProvider`,
     /// `updateProvider`, or `setBuiltInProviderAPIKey`. Observable so SwiftUI views
     /// that read from `apiKey(for:)` (which goes through Keychain and is therefore
@@ -134,6 +143,24 @@ public final class LLMKitManager {
             logger.error("\(msg, privacy: .public)")
             persistenceError = msg
         }
+        do {
+            seenModels = try storage.loadSeenModels()
+        } catch {
+            // Non-fatal: a fresh ledger re-seeds silently from the current catalog below.
+            logger.error("Failed to load seen-models ledger: \(error.localizedDescription, privacy: .public)")
+        }
+        // Seed the ledger from the persisted catalog when it has never been seeded — the whole
+        // existing install base must start with its catalog marked seen (per provider), not
+        // "all new".
+        if seenModels.seededAt == nil, !models.isEmpty {
+            let byProvider = Dictionary(grouping: models, by: \.providerID)
+            let now = Date()
+            for (providerID, providerModels) in byProvider {
+                seenModels.observe(providerID: providerID, keys: providerModels.map(\.id), at: now)
+            }
+            saveSeenModels()
+            logger.info("Seeded seen-models ledger with \(self.models.count, privacy: .public) existing catalog entries across \(byProvider.count, privacy: .public) providers")
+        }
 
         seedBuiltInProviders()
     }
@@ -163,6 +190,16 @@ public final class LLMKitManager {
             try storage.saveModelCatalog(models)
         } catch {
             let msg = "Failed to save model catalog: \(error.localizedDescription)"
+            logger.error("\(msg, privacy: .public)")
+            errors.append(msg)
+        }
+        // The ledger's own save path only logs on failure; retrying here means a transiently
+        // failed ledger write heals on the next general save instead of resurrecting
+        // already-reported discoveries after a restart.
+        do {
+            try storage.saveSeenModels(seenModels)
+        } catch {
+            let msg = "Failed to save seen-models ledger: \(error.localizedDescription)"
             logger.error("\(msg, privacy: .public)")
             errors.append(msg)
         }
@@ -465,6 +502,31 @@ public final class LLMKitManager {
         }
     }
 
+    /// Records a successful `/models` listing in the discovery ledger. Lives on the ONE path every
+    /// refresh flavor shares (`fetchAndEnrich`) so a full refresh and a single-provider refresh
+    /// cannot diverge — an earlier draft recorded only in the per-slice path, and the full-refresh
+    /// path silently bypassed the ledger. A provider's first-ever listing seeds silently and
+    /// reports nothing as new (see ``SeenModelsLedger``).
+    private func recordModelObservation(providerID: String, keys: [String], providerName: String) {
+        let wasSeeded = seenModels.seededProviders.contains(providerID)
+        let fresh = seenModels.observe(providerID: providerID, keys: keys, at: Date())
+        if !fresh.isEmpty {
+            newlyDiscoveredModelKeys.formUnion(fresh)
+            logger.info("Discovered \(fresh.count, privacy: .public) new models from \(providerName, privacy: .public)")
+        }
+        if !wasSeeded || !fresh.isEmpty {
+            saveSeenModels()
+        }
+    }
+
+    private func saveSeenModels() {
+        do {
+            try storage.saveSeenModels(seenModels)
+        } catch {
+            logger.error("Failed to save seen-models ledger: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
     /// Whether it's worth automatically attempting a refresh for this provider:
     /// either a non-empty API key is in the Keychain, or the provider's API type is
     /// one that works without authentication (local servers).
@@ -589,6 +651,8 @@ public final class LLMKitManager {
                 metadataCompositions["\(provider.id)/\(modelID)"] = composition
                 providerModels.append(composition.merged.materialize(providerID: provider.id, modelID: modelID))
             }
+
+            recordModelObservation(providerID: provider.id, keys: providerModels.map(\.id), providerName: provider.name)
 
             logger.info("Fetched \(providerModels.count, privacy: .public) models from \(provider.name, privacy: .public)")
             return (providerModels, nil)
