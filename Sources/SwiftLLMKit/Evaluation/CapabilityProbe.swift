@@ -152,10 +152,18 @@ public enum CapabilityProbe {
             first = try await llm.send(messages: messages, tools: [tool],
                                        overrides: LLMCallOverrides(toolChoice: .required))
         } catch {
+            let detail = Self.rejectionDetail(error)
+            // A body that SAYS "tools is not supported in this model" is the endpoint answering
+            // the question, whatever status it rides on (OpenAI ships it as 404) — but only when
+            // it isn't really saying the model is gone or this account is denied.
+            if !Self.textIndicatesModelGone(detail), !Self.textIndicatesAccessDenied(detail),
+               Self.textIndicatesToolsUnsupported(detail) {
+                return fail(.rejected, detail, forced: true)
+            }
             switch Self.classifyFailure(error) {
             case .noAnswer:
                 logger.error("Probe \(modelID, privacy: .public): no answer — \(error.localizedDescription, privacy: .public)")
-                return fail(.inconclusive, Self.rejectionDetail(error), forced: true)
+                return fail(.inconclusive, detail, forced: true)
             case .refusedTools, .refusedOurRequest:
                 // Either way, retry with the choice free. A refusal naming tools might still only
                 // be about tool_choice; a refusal about something else might be cured by dropping
@@ -166,12 +174,17 @@ public enum CapabilityProbe {
                     calls?.increment()
                     first = try await llm.send(messages: messages, tools: [tool], overrides: LLMCallOverrides())
                 } catch {
+                    let retryDetail = Self.rejectionDetail(error)
+                    if !Self.textIndicatesModelGone(retryDetail), !Self.textIndicatesAccessDenied(retryDetail),
+                       Self.textIndicatesToolsUnsupported(retryDetail) {
+                        return fail(.rejected, retryDetail, forced: false)
+                    }
                     switch Self.classifyFailure(error) {
                     case .refusedTools:
-                        return fail(.rejected, Self.rejectionDetail(error), forced: false)
+                        return fail(.rejected, retryDetail, forced: false)
                     case .refusedOurRequest, .noAnswer:
                         // It refused, but not over tools — so we learned nothing about tools.
-                        return fail(.inconclusive, Self.rejectionDetail(error), forced: false)
+                        return fail(.inconclusive, retryDetail, forced: false)
                     }
                 }
             }
@@ -310,7 +323,33 @@ public enum CapabilityProbe {
                 // Alibaba Cloud: a model listed in /models but not enabled for this workspace/region
                 // returns "Model is not supported in current workspace service". Treated as
                 // unavailable (per product decision) rather than access-denied.
-                "not supported in current workspace", "not supported in this workspace"]
+                "not supported in current workspace", "not supported in this workspace",
+                // Mistral serves its gone/not-routable answer as HTTP 400 "Invalid model: <id>"
+                // (type invalid_model) — without a text rule, a coherent 400 like that graded
+                // the chat probe established(false) instead of unavailable. The colon guards
+                // against unrelated phrases like "invalid model configuration".
+                "invalid model:", "unknown model"]
+            .contains { lowered.contains($0) }
+    }
+
+    /// Whether an error body affirmatively states the model is NOT a chat model — OpenAI's
+    /// completion-era and audio models answer chat/completions with "This is not a chat model
+    /// and thus not supported in the v1/chat/completions endpoint" behind an HTTP 404. The
+    /// status alone reads as "unreachable" and the definitive capability statement was lost:
+    /// no verdict, no record, and the model re-probed on every sweep. The phrase is a statement
+    /// about the MODEL (the endpoint recognized it), so it cannot fire on the wrong-URL or
+    /// retired-model 404s the status exclusion exists to guard.
+    public static func textIndicatesNotAChatModel(_ text: String) -> Bool {
+        text.lowercased().contains("not a chat model")
+    }
+
+    /// Whether an error body affirmatively states the model does not support tools. OpenAI's
+    /// search-preview/search-api models answer a tools-bearing request with "tools is not
+    /// supported in this model" behind an HTTP 404 — a first-party capability statement the
+    /// status-code gate discarded, leaving toolCalling permanently inconclusive.
+    public static func textIndicatesToolsUnsupported(_ text: String) -> Bool {
+        let lowered = text.lowercased()
+        return ["tools is not supported in this model", "tools are not supported in this model"]
             .contains { lowered.contains($0) }
     }
 

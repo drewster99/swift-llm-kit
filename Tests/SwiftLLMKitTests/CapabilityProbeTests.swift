@@ -1071,3 +1071,97 @@ struct ToolProbeAuditRegressionTests {
         #expect(result.verdict == .noToolCall)
     }
 }
+
+/// Text families the 2026-07-18 audit found losing definitive answers behind status codes:
+/// OpenAI ships "not a chat model" and "tools is not supported in this model" as 404s (which the
+/// status gate reads as unreachable), and Mistral ships its gone answer as a 400 "Invalid model".
+@Suite("Text capability families (audit set 2)")
+struct TextCapabilityFamilyTests {
+    private func httpError(_ status: Int, _ body: String) -> LLMProviderError {
+        .httpError(statusCode: status, body: body, url: nil, retryAfter: nil)
+    }
+
+    @Test("OpenAI's completion-era body is recognized as a chat answer")
+    func notAChatModelIsRecognized() {
+        #expect(CapabilityProbe.textIndicatesNotAChatModel(
+            "This is not a chat model and thus not supported in the v1/chat/completions endpoint. Did you mean to use v1/completions?"))
+        #expect(!CapabilityProbe.textIndicatesNotAChatModel("model not found"))
+    }
+
+    @Test("Chat probe settles false on a 404 that says 'not a chat model'")
+    func chatProbeSettlesOnNotAChatModel() async {
+        struct NotAChatProvider: LLMProvider {
+            func send(messages: [LLMMessage], tools: [LLMToolDefinition], overrides: LLMCallOverrides) async throws -> LLMResponse {
+                throw LLMProviderError.httpError(
+                    statusCode: 404,
+                    body: #"{"error":{"message":"This is not a chat model and thus not supported in the v1/chat/completions endpoint. Did you mean to use v1/completions?","type":"invalid_request_error","code":null}}"#,
+                    url: nil, retryAfter: nil)
+            }
+        }
+        let finding = await ModelProber.probeChat(llm: NotAChatProvider(), modelID: "babbage-002")
+        #expect(finding.status == .established)
+        #expect(finding.value == false)
+    }
+
+    @Test("A plain 404 still establishes nothing for chat")
+    func plain404StaysInconclusiveForChat() async {
+        struct MissingProvider: LLMProvider {
+            func send(messages: [LLMMessage], tools: [LLMToolDefinition], overrides: LLMCallOverrides) async throws -> LLMResponse {
+                throw LLMProviderError.httpError(statusCode: 404, body: "model not found", url: nil, retryAfter: nil)
+            }
+        }
+        let finding = await ModelProber.probeChat(llm: MissingProvider(), modelID: "ghost")
+        #expect(finding.status == .inconclusive)
+    }
+
+    @Test("Tool probe settles rejected on 404 'tools is not supported in this model'")
+    func toolProbeSettlesOnToolsUnsupported() async {
+        struct NoToolsProvider: LLMProvider {
+            func send(messages: [LLMMessage], tools: [LLMToolDefinition], overrides: LLMCallOverrides) async throws -> LLMResponse {
+                throw LLMProviderError.httpError(
+                    statusCode: 404,
+                    body: #"{"error":{"message":"tools is not supported in this model","type":"invalid_request_error"}}"#,
+                    url: nil, retryAfter: nil)
+            }
+        }
+        let result = await CapabilityProbe.probeToolCalling(
+            llm: NoToolsProvider(), providerID: "test", modelID: "gpt-5-search-api")
+        #expect(result.verdict == .rejected)
+    }
+
+    @Test("Mistral's 'Invalid model' 400 reads as gone, not as a chat refusal")
+    func mistralInvalidModelIsGone() async {
+        #expect(CapabilityProbe.textIndicatesModelGone(#"{"detail":"Invalid model: voxtral-mini-latest","type":"invalid_model","code":1500}"#))
+        #expect(!CapabilityProbe.textIndicatesModelGone("invalid model configuration value"))
+        struct InvalidModelProvider: LLMProvider {
+            func send(messages: [LLMMessage], tools: [LLMToolDefinition], overrides: LLMCallOverrides) async throws -> LLMResponse {
+                throw LLMProviderError.httpError(
+                    statusCode: 400,
+                    body: #"{"detail":"Invalid model: voxtral-mini-latest","type":"invalid_model"}"#,
+                    url: nil, retryAfter: nil)
+            }
+        }
+        let finding = await ModelProber.probeChat(llm: InvalidModelProvider(), modelID: "voxtral-mini-latest")
+        #expect(finding.status == .inconclusive)
+    }
+
+    @Test("A zero image quota settles vision false; a real rate limit stays inconclusive")
+    func zeroImageQuotaIsStructural() async {
+        struct QuotaProvider: LLMProvider {
+            let body: String
+            func send(messages: [LLMMessage], tools: [LLMToolDefinition], overrides: LLMCallOverrides) async throws -> LLMResponse {
+                throw LLMProviderError.httpError(statusCode: 429, body: body, url: nil, retryAfter: nil)
+            }
+        }
+        let zeroQuota = await ModelProber.probeVision(
+            llm: QuotaProvider(body: "Request too large for gpt-4o-search-preview in organization org-x on input-images per min: Limit 0, Requested 1."),
+            modelID: "gpt-4o-search-preview")
+        #expect(zeroQuota.status == .established)
+        #expect(zeroQuota.value == false)
+
+        let busy = await ModelProber.probeVision(
+            llm: QuotaProvider(body: "Rate limit reached for gpt-4o on images per min: Limit 50, Requested 51."),
+            modelID: "gpt-4o")
+        #expect(busy.status == .inconclusive)
+    }
+}

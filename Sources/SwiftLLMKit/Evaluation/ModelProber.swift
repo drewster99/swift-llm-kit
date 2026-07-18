@@ -514,6 +514,13 @@ public enum ModelProber {
         if CapabilityProbe.textIndicatesModelGone(detail) || CapabilityProbe.textIndicatesAccessDenied(detail) {
             return .inconclusive("model unavailable/denied, not a \(attachment) rejection: \(detail)", duration: dur)
         }
+        // OpenAI encodes "this model takes no image input at all" as a 429 whose per-minute image
+        // budget is literally zero ("on input-images per min: Limit 0, Requested 1"). The blanket
+        // 429-is-transient rule left vision permanently unsettleable on such models — the identical
+        // request can never succeed against a structural zero quota, so it IS the answer.
+        if detail.lowercased().contains("input-images per min: limit 0") {
+            return .established(false, "zero image quota — the endpoint accepts no image input: \(detail)", duration: dur)
+        }
         switch CapabilityProbe.classifyFailure(error) {
         case .noAnswer:
             return .inconclusive(detail, duration: dur)
@@ -688,6 +695,14 @@ public enum ModelProber {
         // not "not a chat model."
         if CapabilityProbe.textIndicatesModelGone(detail) || CapabilityProbe.textIndicatesAccessDenied(detail) {
             return .inconclusive(detail, duration: dur)
+        }
+        // "This is not a chat model ... not supported in the v1/chat/completions endpoint" is the
+        // definitive answer to the chat question, but OpenAI ships it as a 404, which the status
+        // gate below reads as unreachable — the audit found babbage/davinci/instruct/tts/transcribe
+        // models establishing nothing and re-probing forever. The phrase is a statement about the
+        // model (the endpoint recognized it), so it settles chat=false on any status.
+        if capabilityKeywords.isEmpty, CapabilityProbe.textIndicatesNotAChatModel(detail) {
+            return .established(false, detail, duration: dur)
         }
         switch CapabilityProbe.classifyFailure(error) {
         case .noAnswer:
