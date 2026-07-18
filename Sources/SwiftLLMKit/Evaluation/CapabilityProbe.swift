@@ -346,6 +346,13 @@ public enum CapabilityProbe {
     /// specific enough not to fire on a normal capability refusal.
     public static func textIndicatesModelGone(_ text: String) -> Bool {
         let lowered = text.lowercased()
+        // A METHOD/VERSION limitation means the model EXISTS but doesn't serve this call — Gemini
+        // answers a chat request to an embedding/imagen/veo/audio model with 404 "models/X is not
+        // found for API version v1beta, or is not supported for generateContent". The bare "is not
+        // found" / "not_found" substrings below would otherwise read that as GONE and stamp a live
+        // model isAvailable=false. It is "not a chat model", handled by the chat=false path, not a
+        // retirement — so never treat a method-limitation body as gone.
+        if lowered.contains("not supported for generatecontent") { return false }
         return ["no longer available", "is not found", "does not exist", "model not found",
                 "not_found", "has been deprecated and is no longer",
                 // Alibaba Cloud: a model listed in /models but not enabled for this workspace/region
@@ -368,7 +375,12 @@ public enum CapabilityProbe {
     /// about the MODEL (the endpoint recognized it), so it cannot fire on the wrong-URL or
     /// retired-model 404s the status exclusion exists to guard.
     public static func textIndicatesNotAChatModel(_ text: String) -> Bool {
-        text.lowercased().contains("not a chat model")
+        let lowered = text.lowercased()
+        // "not a chat model" — OpenAI's completion-era 404s. "not supported for generatecontent" —
+        // Gemini's method-limitation 404 for a non-chat model (embeddings, imagen, veo, audio):
+        // the model exists but doesn't serve the chat method, which is chat=false, not gone.
+        return lowered.contains("not a chat model")
+            || lowered.contains("not supported for generatecontent")
     }
 
     /// Whether an error body affirmatively states the model does not support tools. OpenAI's

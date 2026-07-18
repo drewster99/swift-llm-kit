@@ -1624,3 +1624,35 @@ struct StoreSeededResweepTests {
         #expect(profile.chat.value == true)
     }
 }
+
+/// Fresh-audit finding: Gemini's method-limitation 404 for a non-chat model must not read as
+/// "gone" (the broad "is not found" substring did that, stamping live models isAvailable=false).
+@Suite("Gemini method-limitation 404")
+struct GeminiMethodLimitationTests {
+    private let body404 = "models/gemini-embedding-001 is not found for API version v1beta, or is not supported for generateContent. Call ListModels to see the list of available models and their supported methods."
+
+    @Test("A 'not supported for generateContent' 404 is NOT gone")
+    func methodLimitationIsNotGone() {
+        #expect(!CapabilityProbe.textIndicatesModelGone(body404))
+        // But a genuinely retired Gemini model still reads as gone.
+        #expect(CapabilityProbe.textIndicatesModelGone("models/gemini-2.0-flash-lite is no longer available"))
+    }
+
+    @Test("It reads as 'not a chat model' so chat settles false, not unavailable")
+    func methodLimitationIsNotAChatModel() {
+        #expect(CapabilityProbe.textIndicatesNotAChatModel(body404))
+    }
+
+    @Test("Through the temperature probe, a method-limitation 404 stays inconclusive (not gone)")
+    func temperatureProbeDoesNotMarkGone() async {
+        struct EmbeddingProvider: LLMProvider {
+            let body: String
+            func send(messages: [LLMMessage], tools: [LLMToolDefinition], overrides: LLMCallOverrides) async throws -> LLMResponse {
+                throw LLMProviderError.httpError(statusCode: 404, body: body, url: nil, retryAfter: nil)
+            }
+        }
+        let finding = await ModelProber.probeTemperature(llm: EmbeddingProvider(body: body404), modelID: "gemini-embedding-001")
+        #expect(finding.status == .inconclusive)                       // 404 → noAnswer → inconclusive
+        #expect(!CapabilityProbe.textIndicatesModelGone(finding.evidence ?? ""))  // the gate won't stamp gone
+    }
+}
