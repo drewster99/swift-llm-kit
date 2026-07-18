@@ -361,3 +361,109 @@ struct OverlayOrderingTests {
         #expect(folded.behaviorFlags.useMaxCompletionTokens == true) // untouched fields survive
     }
 }
+
+/// Decoder fixes from the 2026-07-18 log audit: OpenRouter's sparse parameter keys and
+/// long-context pricing tiers, its far-future expiration sentinel, ollama.com's empty-string
+/// parameter_size, xAI's alias arrays, and exhaustive effort-set seeding.
+@Suite("Decoder audit fixes (set 4)")
+struct DecoderAuditFixTests {
+    private let service = ModelFetchService()
+
+    @Test("OpenRouter: parallel_tool_calls and web_search_options are positive-only")
+    func openRouterSparseKeysArePositiveOnly() throws {
+        let body = #"""
+        {"data":[{"id":"a/omits","supported_parameters":["tools","tool_choice"]},
+                 {"id":"b/lists","supported_parameters":["tools","parallel_tool_calls","web_search_options"]}]}
+        """#
+        let decoded = try service.decodeModelFactsForTesting(from: Data(body.utf8), apiType: .openRouter)
+        let omits = try #require(decoded.first { $0.modelID == "a/omits" }).facts
+        // Only 4 of 344 payload models list parallel_tool_calls — absence is not a statement.
+        #expect(omits.capabilities.parallelToolCalls == nil)
+        #expect(omits.capabilities.webSearch == nil)
+        #expect(omits.capabilities.toolUse == true)         // well-enumerated keys stay bidirectional
+        let lists = try #require(decoded.first { $0.modelID == "b/lists" }).facts
+        #expect(lists.capabilities.parallelToolCalls == true)
+        #expect(lists.capabilities.webSearch == true)
+    }
+
+    @Test("OpenRouter: pricing overrides become token-threshold tiers")
+    func openRouterPricingOverrides() throws {
+        let body = #"""
+        {"data":[{"id":"openai/tiered","pricing":{"prompt":"0.000001","completion":"0.000006",
+          "input_cache_read":"0.0000001","input_cache_write":"0.00000125",
+          "overrides":[{"min_prompt_tokens":272000,"prompt":"0.000002","completion":"0.000009",
+                        "input_cache_read":"0.0000002","input_cache_write":"0.0000025"}]}}]}
+        """#
+        let facts = try #require(try service.decodeModelFactsForTesting(from: Data(body.utf8), apiType: .openRouter).first).facts
+        let pricing = try #require(facts.pricing)
+        #expect(pricing.base.input == 0.000001)
+        let tier = try #require(pricing.tokenThresholdTiers.first)
+        #expect(tier.tokenThreshold == 272000)
+        #expect(tier.rates.input == 0.000002)
+        #expect(tier.rates.output == 0.000009)
+        #expect(tier.rates.cacheWrite == 0.0000025)
+    }
+
+    @Test("OpenRouter: a far-future expiration is a sentinel, not a deprecation")
+    func openRouterExpirationSentinel() throws {
+        let body = #"""
+        {"data":[{"id":"z-ai/active","expiration_date":"2098-12-31"},
+                 {"id":"z-ai/sunsetting","expiration_date":"2026-08-10"}]}
+        """#
+        let decoded = try service.decodeModelFactsForTesting(from: Data(body.utf8), apiType: .openRouter)
+        #expect(try #require(decoded.first { $0.modelID == "z-ai/active" }).facts.deprecatedOn == nil)
+        #expect(try #require(decoded.first { $0.modelID == "z-ai/sunsetting" }).facts.deprecatedOn != nil)
+    }
+
+    @Test("Ollama: empty parameter_size falls through to the byte label, and zero size to nil")
+    func ollamaEmptySizeLabel() throws {
+        let body = #"""
+        {"models":[{"name":"cloud-model","size":595148192736,"modified_at":"2026-01-01T00:00:00Z","details":{"parameter_size":"","quantization_level":""}},
+                   {"name":"stated","size":1000,"modified_at":"2026-01-01T00:00:00Z","details":{"parameter_size":"397B","quantization_level":"Q4"}},
+                   {"name":"nothing","size":0,"modified_at":"2026-01-01T00:00:00Z","details":{"parameter_size":"","quantization_level":""}}]}
+        """#
+        let decoded = try service.decodeModelFactsForTesting(from: Data(body.utf8), apiType: .ollama)
+        #expect(try #require(decoded.first { $0.modelID == "cloud-model" }).facts.sizeLabel == "595B")
+        #expect(try #require(decoded.first { $0.modelID == "stated" }).facts.sizeLabel == "397B")
+        #expect(try #require(decoded.first { $0.modelID == "nothing" }).facts.sizeLabel == nil)
+    }
+
+    @Test("xAI: aliases become catalog entries carrying the canonical facts")
+    func xaiAliasesEmitted() throws {
+        let body = #"""
+        {"data":[{"id":"grok-build-0.1","context_length":256000,
+                  "aliases":["grok-code-fast-1","grok-code-fast"],
+                  "prompt_text_token_price":2000,"completion_text_token_price":10000}]}
+        """#
+        let decoded = try service.decodeModelFactsForTesting(from: Data(body.utf8), apiType: .xAI)
+        #expect(decoded.map(\.modelID).sorted() == ["grok-build-0.1", "grok-code-fast", "grok-code-fast-1"])
+        let canonical = try #require(decoded.first { $0.modelID == "grok-build-0.1" }).facts
+        let alias = try #require(decoded.first { $0.modelID == "grok-code-fast-1" }).facts
+        #expect(alias.maxInputTokens == 256000)
+        #expect(alias.pricing?.base.input == canonical.pricing?.base.input)
+        #expect(alias.pricing?.base.input != nil)
+    }
+
+    @Test("Seeding: a stated effort set is exhaustive — unlisted known levels seed as stated no")
+    func seedingStatedEffortSetIsExhaustive() {
+        var facts = ModelFacts()
+        facts.validEffortLevels = ["high", "max"]
+        let profile = ModelProber.seedProfile(
+            fromDecodedFacts: DecodedModelFacts(modelID: "m", facts: facts), providerID: "p")
+        #expect(profile.effortLevels["high"]?.value == true)
+        #expect(profile.effortLevels["max"]?.value == true)
+        #expect(profile.effortLevels["xhigh"]?.value == false)
+        #expect(profile.effortLevels["none"]?.value == false)
+        #expect(profile.effortLevels["xhigh"]?.source == .decoded)
+
+        var statedNone = ModelFacts()
+        statedNone.validEffortLevels = []
+        let noneProfile = ModelProber.seedProfile(
+            fromDecodedFacts: DecodedModelFacts(modelID: "m2", facts: statedNone), providerID: "p")
+        #expect(EffortRank.table.keys.allSatisfy { noneProfile.effortLevels[$0]?.value == false })
+
+        let silent = ModelProber.seedProfile(
+            fromDecodedFacts: DecodedModelFacts(modelID: "m3", facts: ModelFacts()), providerID: "p")
+        #expect(silent.effortLevels.isEmpty)
+    }
+}

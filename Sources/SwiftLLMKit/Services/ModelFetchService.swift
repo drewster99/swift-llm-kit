@@ -162,8 +162,14 @@ public struct ModelFetchService: Sendable {
                 }
                 // Prefer the stated parameter count ("397B") over a byte-size label: `size` is the
                 // on-disk weight file in BYTES, and formatBytes renders it with a "B" suffix that
-                // reads like a parameter count but isn't. parameter_size is the real thing.
-                facts.sizeLabel = model.details?.parameterSize ?? formatBytes(model.size)
+                // reads like a parameter count but isn't. parameter_size is the real thing — but
+                // ollama.com states it as "" (present-but-empty, same convention as
+                // quantization_level below), which must fall through to the byte label, and an
+                // empty byte label (size 0) must record nil, not "".
+                let statedSize = model.details?.parameterSize ?? ""
+                let byteSizeLabel = formatBytes(model.size)
+                facts.sizeLabel = !statedSize.isEmpty ? statedSize
+                    : (byteSizeLabel.isEmpty ? nil : byteSizeLabel)
                 let quant = model.details?.quantizationLevel ?? ""
                 facts.quantizationLabel = quant.isEmpty ? nil : quant
                 facts.createdAt = parseISODate(model.modifiedAt)
@@ -311,8 +317,17 @@ public struct ModelFetchService: Sendable {
                     facts.pricing = ModelPricing(base: base, tokenThresholdTiers: tiers)
                 }
 
-                return DecodedModelFacts(modelID: model.id, facts: facts)
+                // xAI publishes alternate callable IDs per entry (the public name
+                // "grok-code-fast-1" is an alias of canonical "grok-build-0.1"; every "-latest"
+                // is an alias too — 42 IDs across the 2026-07-18 payload). Mistral ships aliases
+                // as their own entries; xAI ships an array, so emit each alias as an entry
+                // carrying the same facts or publicly documented IDs resolve to nothing.
+                // Cross-entry collisions dedupe upstream (first wins).
+                let canonical = DecodedModelFacts(modelID: model.id, facts: facts)
+                let aliases = (model.aliases ?? []).map { DecodedModelFacts(modelID: $0, facts: facts) }
+                return [canonical] + aliases
             }
+            .flatMap { $0 }
             .sorted { $0.modelID < $1.modelID }
     }
 
@@ -348,15 +363,20 @@ public struct ModelFetchService: Sendable {
                     facts.capabilities.audioOutput = outputs.contains("audio")
                 }
 
-                // supported_parameters names the knobs the model honors → bidirectional when non-empty.
+                // supported_parameters names the knobs the model honors → bidirectional when
+                // non-empty — EXCEPT for keys OpenRouter provably does not enumerate exhaustively.
+                // In the 2026-07-18 payload only 4 of 344 models list parallel_tool_calls (none of
+                // the 74 tool-capable OpenAI/Anthropic routes, whose native APIs demonstrably
+                // support it) and web_search_options is similarly sparse — for those, absence is
+                // not a statement, so they seed positive-only.
                 let params = Set(model.supportedParameters ?? [])
                 if !params.isEmpty {
                     facts.capabilities.toolUse = params.contains("tools")
                     facts.capabilities.toolChoice = params.contains("tool_choice")
-                    facts.capabilities.parallelToolCalls = params.contains("parallel_tool_calls")
+                    if params.contains("parallel_tool_calls") { facts.capabilities.parallelToolCalls = true }
                     facts.capabilities.reasoning = params.contains("reasoning") || params.contains("reasoning_effort") || params.contains("include_reasoning")
                     facts.capabilities.responseSchema = params.contains("structured_outputs") || params.contains("response_format")
-                    facts.capabilities.webSearch = params.contains("web_search_options")
+                    if params.contains("web_search_options") { facts.capabilities.webSearch = true }
                 }
 
                 // pricing: decimal USD-per-token strings ("0.000002"); "-1" marks a variable/auto
@@ -368,7 +388,23 @@ public struct ModelFetchService: Sendable {
                 if let p = model.pricing {
                     let base = PricingTier(input: rate(p.prompt), output: rate(p.completion),
                                            cacheRead: rate(p.inputCacheRead), cacheWrite: rate(p.inputCacheWrite))
-                    if base.hasAnyRate { facts.pricing = ModelPricing(base: base) }
+                    if base.hasAnyRate {
+                        // pricing.overrides states higher rates above a prompt-length threshold
+                        // (gpt-5.6-luna-pro: 2x input past 272k tokens) — the same shape as xAI's
+                        // long_context_threshold. Dropping them recorded flat rates that
+                        // understate long-context cost by 1.5-2x on 43 models.
+                        var tiers: [TokenThresholdTier] = []
+                        for override in p.overrides ?? [] {
+                            guard let threshold = override.minPromptTokens else { continue }
+                            let rates = PricingTier(
+                                input: rate(override.prompt), output: rate(override.completion),
+                                cacheRead: rate(override.inputCacheRead), cacheWrite: rate(override.inputCacheWrite))
+                            if rates.hasAnyRate {
+                                tiers.append(TokenThresholdTier(tokenThreshold: threshold, rates: rates))
+                            }
+                        }
+                        facts.pricing = ModelPricing(base: base, tokenThresholdTiers: tiers.sorted())
+                    }
                 }
 
                 // reasoning.supported_efforts is OpenRouter stating the effort ladder outright — the
@@ -390,8 +426,12 @@ public struct ModelFetchService: Sendable {
                 // it, falling back to the top-level figure.
                 facts.maxInputTokens = model.topProvider?.contextLength ?? model.contextLength
                 facts.maxOutputTokens = model.topProvider?.maxCompletionTokens
-                // expiration_date is OpenRouter's scheduled-removal date; treat like a deprecation.
+                // expiration_date is OpenRouter's scheduled-removal date; treat like a
+                // deprecation — but far-future placeholders ("2098-12-31" on active flagship
+                // models) mean "no scheduled removal", not a deprecation. Genuine removals in the
+                // same payload are dated months out, so anything past a decade is a sentinel.
                 facts.deprecatedOn = model.expirationDate.flatMap(parseYearMonthDay)
+                    .flatMap { $0.timeIntervalSinceNow > 10 * 365.25 * 86400 ? nil : $0 }
                 facts.modelDescription = model.description
                 facts.benchmarks = (model.benchmarks?.isEmpty ?? true) ? nil : model.benchmarks
                 facts.huggingFaceID = model.huggingFaceID
@@ -764,8 +804,9 @@ private struct XAIModelsResponse: Decodable {
         let completionTextTokenPriceLongContext: Double?
         let cachedPromptTextTokenPriceLongContext: Double?
         let longContextThreshold: Int?
+        let aliases: [String]?
         enum CodingKeys: String, CodingKey {
-            case id, created
+            case id, created, aliases
             case contextLength = "context_length"
             case promptImageTokenPrice = "prompt_image_token_price"
             case promptTextTokenPrice = "prompt_text_token_price"
@@ -799,8 +840,23 @@ private struct OpenRouterModelsResponse: Decodable {
         let completion: String?
         let inputCacheRead: String?
         let inputCacheWrite: String?
+        let overrides: [PricingOverride]?
+        enum CodingKeys: String, CodingKey {
+            case prompt, completion, overrides
+            case inputCacheRead = "input_cache_read"
+            case inputCacheWrite = "input_cache_write"
+        }
+    }
+    /// One long-context pricing tier: rates that replace the base above `min_prompt_tokens`.
+    struct PricingOverride: Decodable {
+        let minPromptTokens: Int?
+        let prompt: String?
+        let completion: String?
+        let inputCacheRead: String?
+        let inputCacheWrite: String?
         enum CodingKeys: String, CodingKey {
             case prompt, completion
+            case minPromptTokens = "min_prompt_tokens"
             case inputCacheRead = "input_cache_read"
             case inputCacheWrite = "input_cache_write"
         }

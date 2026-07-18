@@ -68,6 +68,14 @@ public enum ModelProber {
         if let value = facts.capabilities.pdfInput { profile.pdfInput = .decoded(value, evidence) }
         if let levels = facts.validEffortLevels {
             for level in levels { profile.effortLevels[level] = .decoded(true, evidence) }
+            // A non-nil list is the vendor enumerating THE valid set (Anthropic's per-level
+            // supported flags; a stated [] means "no effort levels at all"), so every known level
+            // not listed is a stated "no" — without this, vendor denials (xhigh on sonnet-4-6,
+            // everything on haiku-4-5) were indistinguishable from "nobody asked" and the ladder
+            // re-probed levels the vendor already answered.
+            for level in EffortRank.table.keys where !levels.contains(level) {
+                profile.effortLevels[level] = .decoded(false, evidence + " (not in the model's stated effort set)")
+            }
         }
         // Listed in /models ⇒ presumed reachable, but only presumed — a live probe can overturn it.
         profile.isAvailable = .decoded(true, "present in provider /models listing")
