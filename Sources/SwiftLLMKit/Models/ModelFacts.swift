@@ -125,6 +125,7 @@ extension ModelMetadataOverride {
         facts.pricing = pricing
         facts.supportsChatCompletions = supportsChatCompletions
         if let behaviorFlags { facts.behaviorFlags = behaviorFlags }
+        facts.hidden = hidden
         return facts
     }
 }

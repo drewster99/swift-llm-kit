@@ -56,6 +56,48 @@ struct BundledModelMetadataRegistry: Sendable {
         }
     }
 
+    /// Loads a registry from an external file in the SAME schema as the bundled resource — the
+    /// downloaded-overrides slot. Returns nil when the file is absent; logs and returns nil when
+    /// it is unreadable (a bad downloaded file must never take out the bundled layer).
+    public static func load(from url: URL) -> BundledModelMetadataRegistry? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        do {
+            let wrapper = try JSONDecoder().decode(BundledWrapper.self, from: data)
+            logger.info("Loaded downloaded overrides v\(wrapper.version): \(wrapper.entries.count) by-apiType, \(wrapper.providerEntries?.count ?? 0) by-providerID, \(wrapper.providerDefaults?.count ?? 0) provider defaults")
+            return BundledModelMetadataRegistry(
+                entries: wrapper.entries,
+                providerEntries: wrapper.providerEntries ?? [:],
+                providerDefaults: wrapper.providerDefaults ?? [:]
+            )
+        } catch {
+            logger.error("Downloaded overrides at \(url.lastPathComponent, privacy: .public) unreadable, ignoring: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    /// This registry with `newer`'s entries laid over it — same-key entries in `newer` replace
+    /// this registry's. Used to let a downloaded overrides file supersede the bundled one inside
+    /// the single downloaded-overrides layer (fresher curation wins; both remain one layer).
+    public func overlaying(_ newer: BundledModelMetadataRegistry) -> BundledModelMetadataRegistry {
+        BundledModelMetadataRegistry(
+            entries: entries.merging(newer.entries) { _, new in new },
+            providerEntries: providerEntries.merging(newer.providerEntries) { _, new in new },
+            providerDefaults: providerDefaults.merging(newer.providerDefaults) { _, new in new }
+        )
+    }
+
+    /// Model IDs this registry pinpoints for one provider — the enumerable axis behind
+    /// union-of-layers existence (an override-only entry materializes a model the provider's
+    /// `/models` no longer lists, e.g. a delisted-but-callable snapshot). Only the
+    /// providerID axis enumerates: an apiType-scoped entry applies to every provider of that
+    /// type, and materializing a model on all of them from one entry would fabricate listings.
+    public func providerScopedModelIDs(providerID: String) -> [String] {
+        let prefix = "\(providerID)/"
+        return providerEntries.keys
+            .filter { $0.hasPrefix(prefix) }
+            .map { String($0.dropFirst(prefix.count)) }
+    }
+
     /// Looks up an override by provider API type and model ID.
     public func override(providerAPIType: String, modelID: String) -> ModelMetadataOverride? {
         entries["\(providerAPIType)/\(modelID)"]

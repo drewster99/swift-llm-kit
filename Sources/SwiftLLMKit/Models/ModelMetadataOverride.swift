@@ -108,6 +108,9 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
     public var supportsChatCompletions: Bool?
     /// Override per-(provider+model) runtime behavior flags. Per-flag, not all-or-nothing.
     public var behaviorFlags: BehaviorFlagsOverride?
+    /// Hide this model from pickers. Hiding is presentation, never deletion — every record
+    /// underneath survives, and un-hiding is removing this one field.
+    public var hidden: Bool?
 
     public init(
         displayName: String? = nil,
@@ -116,7 +119,8 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
         capabilities: ModelCapabilitiesOverride? = nil,
         pricing: ModelPricing? = nil,
         supportsChatCompletions: Bool? = nil,
-        behaviorFlags: BehaviorFlagsOverride? = nil
+        behaviorFlags: BehaviorFlagsOverride? = nil,
+        hidden: Bool? = nil
     ) {
         self.displayName = displayName
         self.maxInputTokens = maxInputTokens
@@ -125,6 +129,7 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
         self.pricing = pricing
         self.supportsChatCompletions = supportsChatCompletions
         self.behaviorFlags = behaviorFlags
+        self.hidden = hidden
     }
 
     /// Applies this override to a ``ModelInfo`` value.
@@ -160,6 +165,9 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
         }
         if let flagsOverride = behaviorFlags {
             flagsOverride.apply(to: &model.behaviorFlags, forceReplace: forceReplace)
+        }
+        if let v = hidden, (forceReplace || model.hidden == nil) {
+            model.hidden = v
         }
     }
 }

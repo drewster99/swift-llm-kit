@@ -80,8 +80,14 @@ public final class LLMKitManager {
 
     // MARK: - Override Layers
 
-    /// App-bundled model metadata overrides (gap-fill priority above LiteLLM).
+    /// App-bundled model metadata overrides — the shipped half of the downloaded-overrides layer.
     private let bundledRegistry: BundledModelMetadataRegistry
+
+    /// The EFFECTIVE downloaded-overrides registry: the bundled registry with
+    /// `downloaded_overrides.json` (same schema, App Support) laid over it when present —
+    /// fresher curation supersedes shipped curation inside the one layer. Recomputed at load
+    /// and at every refresh so a newly downloaded file takes effect without a restart.
+    private var overridesRegistry: BundledModelMetadataRegistry
 
     /// User-provided model metadata overrides (highest priority, force-replaces).
     /// Keyed by `"providerID/modelID"`.
@@ -115,6 +121,7 @@ public final class LLMKitManager {
             userDefaultsSuiteName: suiteName
         )
         self.bundledRegistry = BundledModelMetadataRegistry.load()
+        self.overridesRegistry = self.bundledRegistry
         self.probeStore = ProbeRecordStore(baseDirectory: storage.baseDirectory)
     }
 
@@ -177,8 +184,20 @@ public final class LLMKitManager {
 
         // The empirical layer: locally-probed records plus the downloaded slot (absent = empty).
         reloadProbeRecords()
+        reloadOverridesRegistry()
 
         seedBuiltInProviders()
+    }
+
+    /// Recomputes the effective downloaded-overrides registry from the bundled data plus
+    /// `downloaded_overrides.json` when present. Same cadence as `reloadProbeRecords()`.
+    private func reloadOverridesRegistry() {
+        let url = storage.baseDirectory.appendingPathComponent("downloaded_overrides.json")
+        if let downloaded = BundledModelMetadataRegistry.load(from: url) {
+            overridesRegistry = bundledRegistry.overlaying(downloaded)
+        } else {
+            overridesRegistry = bundledRegistry
+        }
     }
 
     /// Re-reads the probe evidence from disk. Called at load and at the start of every refresh —
@@ -541,9 +560,11 @@ public final class LLMKitManager {
         defer { isRefreshing = false }
 
         // Refresh metadata first so enrichment uses the latest LiteLLM data, and pick up probe
-        // records another process (the headless eval runner) may have written since our load.
+        // records another process (the headless eval runner) may have written since our load,
+        // plus any newly downloaded overrides file.
         await metadataService.forceRefresh()
         reloadProbeRecords()
+        reloadOverridesRegistry()
 
         await refreshProviderSliceLocked(provider)
         saveModelCatalog()
@@ -633,9 +654,11 @@ public final class LLMKitManager {
         isRefreshing = true
         defer { isRefreshing = false }
 
-        // 1. Refresh LiteLLM metadata, and pick up probe records another process may have written.
+        // 1. Refresh LiteLLM metadata, and pick up probe records another process may have
+        // written, plus any newly downloaded overrides file.
         await metadataService.forceRefresh()
         reloadProbeRecords()
+        reloadOverridesRegistry()
 
         // 2. Fetch models from each provider
         var allModels: [ModelInfo] = []
@@ -686,49 +709,26 @@ public final class LLMKitManager {
             var providerModels: [ModelInfo] = []
             providerModels.reserveCapacity(decodedFacts.count)
             for decoded in decodedFacts {
-                let modelID = decoded.modelID
+                providerModels.append(await composeModel(
+                    modelID: decoded.modelID, authoritative: decoded.facts, provider: provider
+                ))
+            }
 
-                // Downloaded-overrides layer: three key axes, least specific applied first so the
-                // most specific wins — provider-wide defaults (e.g. all-OpenAI
-                // useMaxCompletionTokens), then (apiType, modelID), then (providerID, modelID).
-                var downloadedOverrides = ModelFacts()
-                if let providerWide = bundledRegistry.defaults(providerID: provider.id) {
-                    downloadedOverrides.overlay(providerWide.asFacts)
-                }
-                if let apiTypeScoped = bundledRegistry.override(providerAPIType: provider.apiType.rawValue, modelID: modelID) {
-                    downloadedOverrides.overlay(apiTypeScoped.asFacts)
-                }
-                if let providerScoped = bundledRegistry.override(providerID: provider.id, modelID: modelID) {
-                    downloadedOverrides.overlay(providerScoped.asFacts)
-                }
-
-                var enrichment = ModelFacts()
-                if let litellm = await metadataService.metadata(for: modelID, liteLLMProviderName: provider.liteLLMProviderName) {
-                    enrichment = litellm.asFacts
-                }
-
-                var userFacts = ModelFacts()
-                if let userOverride = userOverrides["\(provider.id)/\(modelID)"] {
-                    userFacts = userOverride.asFacts
-                }
-
-                // Empirical layer: local + downloaded probe evidence for this model's
-                // model-scoped key, combined per-field with the newer record winning.
-                let probeKey = ProbeRecordKey(apiType: provider.apiType, endpoint: provider.endpoint, modelID: modelID)
-                let empirical = ProbeEvidenceCombiner.combinedFacts(
-                    local: localProbeRecords[probeKey],
-                    downloaded: downloadedProbeRecords[probeKey]
-                )
-
-                let composition = ModelFactsMerger.merge(
-                    authoritative: decoded.facts,
-                    empirical: empirical,
-                    downloadedOverrides: downloadedOverrides,
-                    enrichment: enrichment,
-                    userOverrides: userFacts
-                )
-                metadataCompositions["\(provider.id)/\(modelID)"] = composition
-                providerModels.append(composition.merged.materialize(providerID: provider.id, modelID: modelID))
+            // Union-of-layers existence: a model an override pinpoints but /models no longer
+            // lists still materializes (Anthropic delists old snapshots that remain callable
+            // through their deprecation window; a user override can add an unlisted model).
+            // Only the enumerable providerID axes contribute — see providerScopedModelIDs.
+            let decodedIDs = Set(decodedFacts.map(\.modelID))
+            var overrideOnlyIDs = Set(overridesRegistry.providerScopedModelIDs(providerID: provider.id))
+            overrideOnlyIDs.formUnion(
+                userOverrides.keys
+                    .filter { $0.hasPrefix(providerPrefix) }
+                    .map { String($0.dropFirst(providerPrefix.count)) }
+            )
+            for modelID in overrideOnlyIDs.subtracting(decodedIDs).sorted() {
+                providerModels.append(await composeModel(
+                    modelID: modelID, authoritative: ModelFacts(), provider: provider
+                ))
             }
 
             recordModelObservation(providerID: provider.id, keys: providerModels.map(\.id), providerName: provider.name)
@@ -742,6 +742,55 @@ public final class LLMKitManager {
             let cached = models.filter { $0.providerID == provider.id }
             return (cached, errorMsg)
         }
+    }
+
+
+    /// Composes ONE model through the five-layer merge and records its composition for the
+    /// inspector. `authoritative` is empty for override-only models (union-of-layers existence:
+    /// the merge doesn't care which layer created the key, and the inspector shows the absence
+    /// of provider-stated fields for what it is).
+    private func composeModel(modelID: String, authoritative: ModelFacts, provider: ModelProvider) async -> ModelInfo {
+        // Downloaded-overrides layer: three key axes, least specific applied first so the
+        // most specific wins — provider-wide defaults (e.g. all-OpenAI useMaxCompletionTokens),
+        // then (apiType, modelID), then (providerID, modelID).
+        var downloadedOverrides = ModelFacts()
+        if let providerWide = overridesRegistry.defaults(providerID: provider.id) {
+            downloadedOverrides.overlay(providerWide.asFacts)
+        }
+        if let apiTypeScoped = overridesRegistry.override(providerAPIType: provider.apiType.rawValue, modelID: modelID) {
+            downloadedOverrides.overlay(apiTypeScoped.asFacts)
+        }
+        if let providerScoped = overridesRegistry.override(providerID: provider.id, modelID: modelID) {
+            downloadedOverrides.overlay(providerScoped.asFacts)
+        }
+
+        var enrichment = ModelFacts()
+        if let litellm = await metadataService.metadata(for: modelID, liteLLMProviderName: provider.liteLLMProviderName) {
+            enrichment = litellm.asFacts
+        }
+
+        var userFacts = ModelFacts()
+        if let userOverride = userOverrides["\(provider.id)/\(modelID)"] {
+            userFacts = userOverride.asFacts
+        }
+
+        // Empirical layer: local + downloaded probe evidence for this model's model-scoped key,
+        // combined per-field with the newer record winning.
+        let probeKey = ProbeRecordKey(apiType: provider.apiType, endpoint: provider.endpoint, modelID: modelID)
+        let empirical = ProbeEvidenceCombiner.combinedFacts(
+            local: localProbeRecords[probeKey],
+            downloaded: downloadedProbeRecords[probeKey]
+        )
+
+        let composition = ModelFactsMerger.merge(
+            authoritative: authoritative,
+            empirical: empirical,
+            downloadedOverrides: downloadedOverrides,
+            enrichment: enrichment,
+            userOverrides: userFacts
+        )
+        metadataCompositions["\(provider.id)/\(modelID)"] = composition
+        return composition.merged.materialize(providerID: provider.id, modelID: modelID)
     }
 
     // MARK: - Validation
