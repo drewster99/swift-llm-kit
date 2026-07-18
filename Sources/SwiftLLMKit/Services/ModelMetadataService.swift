@@ -98,7 +98,17 @@ public actor ModelMetadataService {
     /// carry. Every value present in the data is offered by ``allLiteLLMProviderNames()``.
     public func metadata(for modelID: String, liteLLMProviderName: String?) -> LiteLLMEntry? {
         guard let provider = liteLLMProviderName else { return nil }
-        return providerIndex[provider]?[Self.normalize(modelID)]
+        return lookup(provider: provider, modelID: modelID)
+    }
+
+    /// Exact match first, then the `-cloud` alias: LiteLLM catalogues Ollama's HOSTED models with
+    /// a `-cloud` suffix (`ollama/gpt-oss:120b-cloud`) while Ollama Cloud's own /models lists
+    /// them bare (`gpt-oss:120b`). The suffixed key is the same model on the same host, so the
+    /// fallback recovers real data; for providers without that convention it simply never matches.
+    private func lookup(provider: String, modelID: String) -> LiteLLMEntry? {
+        guard let models = providerIndex[provider] else { return nil }
+        let normalized = Self.normalize(modelID)
+        return models[normalized] ?? models[normalized + "-cloud"]
     }
 
     /// Populates the index directly from raw LiteLLM JSON, bypassing the network and disk cache.
@@ -124,8 +134,8 @@ public actor ModelMetadataService {
     /// inspector's "missing metadata for this provider/model" distinction.
     public func resolution(forModelID modelID: String, liteLLMProviderName: String?) -> Resolution {
         guard let provider = liteLLMProviderName else { return .providerNotMapped }
-        guard let models = providerIndex[provider] else { return .providerNotFound }
-        return models[Self.normalize(modelID)] == nil ? .modelNotFound : .resolved
+        guard providerIndex[provider] != nil else { return .providerNotFound }
+        return lookup(provider: provider, modelID: modelID) == nil ? .modelNotFound : .resolved
     }
 
     /// Classifies many models against one provider in a single actor hop — the coverage view
@@ -267,7 +277,10 @@ public actor ModelMetadataService {
             var index: [String: [String: LiteLLMEntry]] = [:]
 
             for (key, value) in rawDict {
-                // Skip the "sample_spec" key and any non-dict entries
+                // "sample_spec" is LiteLLM's schema documentation, not a model — its
+                // litellm_provider is the literal string "one of https://docs.litellm.ai/…",
+                // which sails through the string guard below and minted a phantom provider.
+                if key == "sample_spec" { continue }
                 guard let modelDict = value as? [String: Any] else { continue }
                 // The `litellm_provider` field is the only authoritative provider marker, so an
                 // entry without one is unroutable and is dropped. (Upstream, a nil provider means

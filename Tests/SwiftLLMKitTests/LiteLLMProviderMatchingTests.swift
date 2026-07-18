@@ -336,3 +336,44 @@ struct ChatEndpointTests {
         #expect(try JSONDecoder().decode(ModelInfo.self, from: Data(legacy.utf8)).mode == nil)
     }
 }
+
+/// The two coverage-screen bugs found live: sample_spec minting a phantom provider, and Ollama
+/// Cloud's bare model IDs missing LiteLLM's `-cloud`-suffixed entries.
+@Suite("LiteLLM sample_spec and -cloud alias")
+struct LiteLLMSampleSpecAndCloudAliasTests {
+    private func makeService(ingesting json: String) async -> ModelMetadataService {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("litellm-tests-\(UUID().uuidString)", isDirectory: true)
+        let service = ModelMetadataService(storageDirectory: dir, userDefaultsSuiteName: "litellm-tests-\(UUID().uuidString)")
+        await service.ingestForTesting(Data(json.utf8))
+        return service
+    }
+
+    @Test("sample_spec never becomes a provider or model")
+    func sampleSpecSkipped() async {
+        let json = #"""
+        {"sample_spec": {"litellm_provider": "one of https://docs.litellm.ai/docs/providers",
+                         "max_input_tokens": "set to max input tokens"},
+         "ollama/llama2": {"litellm_provider": "ollama", "max_input_tokens": 4096}}
+        """#
+        let service = await makeService(ingesting: json)
+        let phantom = await service.allLiteLLMProviderNames().first { $0.name.contains("one of") }
+        #expect(phantom == nil, "the schema-doc entry must not mint a phantom provider")
+        #expect(await service.metadata(for: "llama2", liteLLMProviderName: "ollama") != nil)
+    }
+
+    @Test("A bare Ollama Cloud model ID matches LiteLLM's -cloud-suffixed key")
+    func cloudSuffixAlias() async {
+        let json = #"""
+        {"ollama/gpt-oss:120b-cloud": {"litellm_provider": "ollama", "max_input_tokens": 131072,
+                                       "supports_function_calling": true}}
+        """#
+        let service = await makeService(ingesting: json)
+        let entry = await service.metadata(for: "gpt-oss:120b", liteLLMProviderName: "ollama")
+        #expect(entry?.maxInputTokens == 131072)
+        #expect(entry?.supportsToolUse == true)
+        #expect(await service.resolution(forModelID: "gpt-oss:120b", liteLLMProviderName: "ollama") == .resolved)
+        // An exact key still wins over the alias, and a genuinely absent model still misses.
+        #expect(await service.resolution(forModelID: "glm-5.2", liteLLMProviderName: "ollama") == .modelNotFound)
+    }
+}
