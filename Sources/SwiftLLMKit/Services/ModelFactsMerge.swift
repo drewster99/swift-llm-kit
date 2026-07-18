@@ -74,6 +74,7 @@ public enum ModelFactsFieldTable {
         .field("huggingFaceID", \ModelFacts.huggingFaceID),
         .field("hidden", \ModelFacts.hidden),
         .field("isAvailable", \ModelFacts.isAvailable),
+        .field("outputBoundedByContext", \ModelFacts.outputBoundedByContext),
         .field("isAccessDenied", \ModelFacts.isAccessDenied),
     ]
 

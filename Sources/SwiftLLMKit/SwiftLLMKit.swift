@@ -909,6 +909,16 @@ public final class LLMKitManager {
                 configurations[index].validationError = "Max output tokens (\(config.maxOutputTokens)) exceeds model limit (\(modelMax))"
                 return
             }
+            // Context-bound models (gpt-4: "maximum context length is 8192") have no independent
+            // output cap, so the check above is skipped — but the output request still cannot
+            // exceed the whole context. Validate against context instead, closing the hole where
+            // an unbounded output value would silently pass and then 400 at runtime.
+            if modelInfo.outputBoundedByContext, let context = modelInfo.maxInputTokens,
+               config.maxOutputTokens > context {
+                configurations[index].isValid = false
+                configurations[index].validationError = "Max output tokens (\(config.maxOutputTokens)) exceeds this model's context length (\(context)); its output is bounded by context, with no separate cap"
+                return
+            }
         } else {
             // Models not yet loaded — allow starting but warn the user
             configurations[index].isValid = true
@@ -1063,7 +1073,16 @@ public final class LLMKitManager {
             // with `useMaxCompletionTokens: true`; users override per-model. Used to
             // be a hardcoded `provider.id == BuiltInProviders.ID.openai` check.
             let tokenLimitKey = prepFlags.useMaxCompletionTokens ? "max_completion_tokens" : "max_tokens"
-            body[tokenLimitKey] = config.maxOutputTokens
+            // For context-bound models, clamp the outgoing cap to the context length so a config
+            // that predates validation (or was set elsewhere) can never send an impossible
+            // max_tokens. Clamping only ever REDUCES the value — the safe direction — and the
+            // catalog lookup here is the manager's own, no extra fetch.
+            var outgoingMaxTokens = config.maxOutputTokens
+            if let info = modelInfo(providerID: provider.id, modelID: config.modelID),
+               info.outputBoundedByContext, let context = info.maxInputTokens {
+                outgoingMaxTokens = min(outgoingMaxTokens, context)
+            }
+            body[tokenLimitKey] = outgoingMaxTokens
             // OpenAI reasoning_effort — depth control for reasoning models
             // (o-series, GPT-5 family). Gated on `supportsReasoningEffort`
             // because non-reasoning models reject the field with HTTP 400.

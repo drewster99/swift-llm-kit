@@ -1214,11 +1214,57 @@ struct LimitParsingAuditTests {
             }
         }
         let counter = CallCounter()
-        let finding = await ModelProber.probeMaxOutputTokens(
+        let result = await ModelProber.probeMaxOutputTokens(
             llm: ContextBoundProvider(counter: counter), modelID: "proxy-model")
-        #expect(finding.status == .inconclusive)
-        #expect(finding.value == nil)
+        #expect(result.cap.status == .inconclusive)   // no independent output cap
+        #expect(result.cap.value == nil)
+        #expect(result.contextBound?.status == .established)
+        #expect(result.contextBound?.value == 4292992)
         #expect(counter.count == 1, "must not binary search a context-only bound")
+    }
+}
+
+/// Efficiency set E4: the context-bound outcome flows record → projection → materialized fact.
+@Suite("Probe efficiency: context-bound output")
+struct ContextBoundOutputTests {
+    @Test("A context-bound profile projects context length and the outputBoundedByContext fact")
+    func projectionAndMaterialization() {
+        var profile = ModelProfile(providerID: "builtin.openai", modelID: "gpt-4")
+        profile.chat = .established(true, "echoed the identifier")  // so the record is complete
+        profile.maxOutputBoundedByContext = .established(8192, "bounds by context")
+        #expect(profile.hasEstablishedProbedFindings)
+
+        let facts = profile.asEmpiricalFacts(includeAccountScoped: true)
+        #expect(facts.outputBoundedByContext == true)
+        #expect(facts.maxInputTokens == 8192)
+        #expect(facts.maxOutputTokens == nil)  // no output cap projected
+
+        let info = facts.materialize(providerID: "builtin.openai", modelID: "gpt-4")
+        #expect(info.outputBoundedByContext == true)
+        #expect(info.maxInputTokens == 8192)
+    }
+
+    @Test("An explicit context probe wins; the bound never overwrites it")
+    func explicitContextWins() {
+        var profile = ModelProfile(providerID: "p", modelID: "m")
+        profile.chat = .established(true, "ok")
+        profile.maxContextTokens = .established(200000, "explicit context probe")
+        profile.maxOutputBoundedByContext = .established(8192, "bound")
+        let facts = profile.asEmpiricalFacts(includeAccountScoped: true)
+        #expect(facts.maxInputTokens == 200000)      // explicit probe not clobbered
+        #expect(facts.outputBoundedByContext == true)
+    }
+
+    @Test("ModelInfo round-trips the fact and defaults false on legacy JSON")
+    func modelInfoCodable() throws {
+        let info = ModelInfo(providerID: "p", modelID: "m", maxInputTokens: 8192,
+                             outputBoundedByContext: true)
+        let data = try JSONEncoder().encode(info)
+        let back = try JSONDecoder().decode(ModelInfo.self, from: data)
+        #expect(back.outputBoundedByContext == true)
+
+        let legacy = try JSONDecoder().decode(ModelInfo.self, from: Data(#"{"providerID":"p","modelID":"m"}"#.utf8))
+        #expect(legacy.outputBoundedByContext == false)
     }
 }
 

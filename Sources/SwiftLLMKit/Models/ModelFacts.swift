@@ -56,6 +56,11 @@ public struct ModelFacts: Codable, Sendable, Equatable {
     /// Empirical, account-scoped access denial (see ``ModelInfo/isAccessDenied``). Projected only
     /// from records probed by the composing provider's own key.
     public var isAccessDenied: Bool?
+    /// Empirical: the endpoint has no independent output-token cap and bounds output solely by
+    /// context length (gpt-4, some proxy routes). When true, `maxInputTokens` holds that context
+    /// length and validation/clamping treat the output budget as context-relative rather than a
+    /// fixed cap. Projected only from the probe layer.
+    public var outputBoundedByContext: Bool?
 
     public init() {
         self.capabilities = ModelCapabilitiesOverride()
@@ -103,7 +108,8 @@ public struct ModelFacts: Codable, Sendable, Equatable {
             huggingFaceID: huggingFaceID,
             hidden: hidden,
             isAvailable: isAvailable,
-            isAccessDenied: isAccessDenied
+            isAccessDenied: isAccessDenied,
+            outputBoundedByContext: outputBoundedByContext ?? false
         )
     }
 }

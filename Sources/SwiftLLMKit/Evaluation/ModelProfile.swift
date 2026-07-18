@@ -79,6 +79,12 @@ public struct ModelProfile: Sendable, Codable, Equatable {
     public var acceptsTemperature: ProbeFinding<Bool>
     /// The model's real output ceiling, read out of the endpoint's own rejection.
     public var maxOutputTokens: ProbeFinding<Int>
+    /// Set (established) only when the endpoint has NO independent output cap — it bounds
+    /// max_tokens solely by context length (gpt-4's "maximum context length is 8192"). The value
+    /// is that context length. Optional so records written before this field decode as nil. When
+    /// established, `maxOutputTokens` stays inconclusive (there is no output cap to state) and
+    /// this drives the context-based validation/clamp instead.
+    public var maxOutputBoundedByContext: ProbeFinding<Int>?
     /// Per named effort level: accepted or rejected. Keys are the levels attempted.
     public var effortLevels: [String: ProbeFinding<Bool>]
 
@@ -108,6 +114,7 @@ public struct ModelProfile: Sendable, Codable, Equatable {
         pdfInput: ProbeFinding<Bool> = .notAttempted,
         acceptsTemperature: ProbeFinding<Bool> = .notAttempted,
         maxOutputTokens: ProbeFinding<Int> = .notAttempted,
+        maxOutputBoundedByContext: ProbeFinding<Int>? = nil,
         effortLevels: [String: ProbeFinding<Bool>] = [:],
         callCount: Int = 0,
         duration: TimeInterval = 0
@@ -133,6 +140,7 @@ public struct ModelProfile: Sendable, Codable, Equatable {
         self.pdfInput = pdfInput
         self.acceptsTemperature = acceptsTemperature
         self.maxOutputTokens = maxOutputTokens
+        self.maxOutputBoundedByContext = maxOutputBoundedByContext
         self.effortLevels = effortLevels
         self.callCount = callCount
         self.duration = duration

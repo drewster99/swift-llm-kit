@@ -318,9 +318,13 @@ public enum ModelProber {
             profile.pdfInput = await probePDFInput(llm: llm, modelID: modelID, calls: calls)
         }
 
-        // 4. Max output — one call, learned from the endpoint's own rejection.
-        if profile.maxOutputTokens.status == .notAttempted {
-            profile.maxOutputTokens = await probeMaxOutputTokens(llm: llm, modelID: modelID, calls: calls)
+        // 4. Max output — one call, learned from the endpoint's own rejection. Skips once
+        //    either an output cap OR a context-bound outcome has been settled.
+        if profile.maxOutputTokens.status == .notAttempted,
+           (profile.maxOutputBoundedByContext?.status ?? .notAttempted) == .notAttempted {
+            let result = await probeMaxOutputTokens(llm: llm, modelID: modelID, calls: calls)
+            profile.maxOutputTokens = result.cap
+            profile.maxOutputBoundedByContext = result.contextBound
         }
 
         // 5. Effort levels the seed didn't settle.
@@ -678,9 +682,18 @@ public enum ModelProber {
     /// search — that's the fallback for endpoints whose error doesn't state the number, and is
     /// deferred until it's actually needed. When the rejection is in a format we don't parse, the
     /// raw body is kept as `inconclusive` evidence so an unrecognised shape is visible, not lost.
+    /// The result of a max-output probe: an output CAP, or the discovery that the endpoint has
+    /// no independent cap and bounds output only by context length.
+    public struct MaxOutputProbeResult: Sendable {
+        /// The output ceiling finding. `.inconclusive` when `contextBound` is established.
+        public var cap: ProbeFinding<Int>
+        /// Established only when output is bounded solely by context length (value = that length).
+        public var contextBound: ProbeFinding<Int>?
+    }
+
     public static func probeMaxOutputTokens(
         llm: any LLMProvider, modelID: String, calls: ProbeCallCounter? = nil, allowBinarySearch: Bool = true
-    ) async -> ProbeFinding<Int> {
+    ) async -> MaxOutputProbeResult {
         let absurd = 100_000_000
         let started = Date()
         calls?.increment()
@@ -690,22 +703,22 @@ public enum ModelProber {
             ], tools: [], overrides: LLMCallOverrides(maxOutputTokens: absurd))
             // It accepted a preposterous cap. One call can't bound it from above; all we'd know is
             // "at least this", which is never useful. Report inconclusive rather than a fake number.
-            return .inconclusive("accepted max_tokens=\(absurd); true ceiling not revealed", duration: Date().timeIntervalSince(started))
+            return MaxOutputProbeResult(cap: .inconclusive("accepted max_tokens=\(absurd); true ceiling not revealed", duration: Date().timeIntervalSince(started)))
         } catch {
             let dur = Date().timeIntervalSince(started)
             // Preferred: the endpoint stated its ceiling and we parsed it — one call, exact.
             if let limit = (error as? LLMProviderError)?.reportedMaxOutputTokenLimit {
-                return .established(limit, "endpoint reported its maximum", duration: dur)
+                return MaxOutputProbeResult(cap: .established(limit, "endpoint reported its maximum", duration: dur))
             }
             // A non-4xx failure says nothing about the cap.
             guard CapabilityProbe.classifyFailure(error) != .noAnswer else {
-                return .inconclusive(CapabilityProbe.rejectionDetail(error), duration: dur)
+                return MaxOutputProbeResult(cap: .inconclusive(CapabilityProbe.rejectionDetail(error), duration: dur))
             }
             // It rejected the absurd cap but didn't state the exact output limit in a form we
             // parse. Find the ceiling empirically — the same "max_tokens is the only variable"
             // logic the attachment probes use, applied as a search.
             guard allowBinarySearch else {
-                return .inconclusive("rejected max_tokens=\(absurd) without a parseable limit: \(CapabilityProbe.rejectionDetail(error))", duration: dur)
+                return MaxOutputProbeResult(cap: .inconclusive("rejected max_tokens=\(absurd) without a parseable limit: \(CapabilityProbe.rejectionDetail(error))", duration: dur))
             }
             // Shrink the search when the same error reveals the top of a max_tokens RANGE —
             // [512, hint] instead of [512, 100M] is a handful of calls, not ~24.
@@ -715,17 +728,23 @@ public enum ModelProber {
                 if let hint = LLMProviderError.reportedLimitHint(inBody: body), hint > 512, hint < absurd {
                     knownBad = hint + 1   // the bound itself may be rejectable; +1 keeps it a known-bad
                 } else if let contextBound = LLMProviderError.reportedContextLengthBound(inBody: body) {
-                    // The endpoint bounds max_tokens only by CONTEXT length (OpenRouter, the
-                    // HuggingFace router). A search would "converge" to context-minus-input — the
-                    // audit caught HF accepting max_tokens=4276225 against a 4.29M context — and
-                    // that number overstates what any production request with real input can use.
-                    // No output cap is measurable here; say so instead of recording an artifact.
-                    return .inconclusive(
-                        "endpoint bounds max_tokens only by its context length (\(contextBound)) — no output cap to measure; a search would report a context artifact",
-                        duration: Date().timeIntervalSince(started))
+                    // The endpoint bounds max_tokens only by CONTEXT length (gpt-4, OpenRouter,
+                    // the HuggingFace router). A search would "converge" to context-minus-input —
+                    // the audit caught HF accepting max_tokens=4276225 against a 4.29M context —
+                    // an artifact. Record it as an ESTABLISHED context-bound outcome: there is no
+                    // output cap to measure, but "output is bounded by this context length" is a
+                    // real, useful fact (drives context-based validation and clamping downstream),
+                    // and recording it established stops every future sweep re-buying this call.
+                    return MaxOutputProbeResult(
+                        cap: .inconclusive(
+                            "output bounded only by context length (\(contextBound)); no independent output cap",
+                            duration: Date().timeIntervalSince(started)),
+                        contextBound: .established(contextBound,
+                            "endpoint bounds max_tokens only by its context length",
+                            duration: Date().timeIntervalSince(started)))
                 }
             }
-            return await binarySearchMaxOutput(llm: llm, knownGood: 512, knownBad: knownBad, calls: calls, started: started)
+            return MaxOutputProbeResult(cap: await binarySearchMaxOutput(llm: llm, knownGood: 512, knownBad: knownBad, calls: calls, started: started))
         }
     }
 

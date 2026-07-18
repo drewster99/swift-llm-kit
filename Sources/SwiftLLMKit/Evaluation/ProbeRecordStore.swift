@@ -163,6 +163,7 @@ extension ModelProfile {
         return counts(chat) || counts(toolCalling) || counts(toolResultRoundTrip)
             || counts(vision) || counts(pdfInput) || counts(acceptsTemperature)
             || counts(maxOutputTokens) || counts(maxContextTokens)
+            || (maxOutputBoundedByContext.map(counts) ?? false)
             || counts(isAvailable) || counts(isAccessDenied)
             || effortLevels.values.contains { counts($0) }
     }
@@ -201,6 +202,13 @@ extension ModelProfile {
         facts.capabilities.pdfInput = probed(pdfInput)
         facts.maxOutputTokens = probed(maxOutputTokens)
         facts.maxInputTokens = probed(maxContextTokens)
+        // A context-bound outcome is BOTH a context-length statement and the "no output cap"
+        // signal: fill maxInputTokens (unless a dedicated context probe already did) and flag
+        // outputBoundedByContext so validation/clamping become context-relative.
+        if let bound = maxOutputBoundedByContext.flatMap(probed) {
+            if facts.maxInputTokens == nil { facts.maxInputTokens = bound }
+            facts.outputBoundedByContext = true
+        }
         facts.isAvailable = probed(isAvailable)
         if probed(acceptsTemperature) == false {
             facts.behaviorFlags.mustNeverSendTemperatureParam = true

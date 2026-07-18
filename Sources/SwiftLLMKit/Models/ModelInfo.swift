@@ -92,6 +92,12 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
     /// THIS provider projects here — a shared host probed under a different key says nothing
     /// about this one. `nil` = never determined.
     public var isAccessDenied: Bool?
+    /// Empirical: the endpoint has no independent output-token cap and bounds output solely by
+    /// context length. When true, `maxInputTokens` is that context length and validation treats
+    /// the output budget as context-relative (a configured `maxOutputTokens` must fit inside the
+    /// context) rather than comparing against a fixed output cap that doesn't exist. Defaults
+    /// false — the ordinary case where an output cap either exists or is simply unknown.
+    public var outputBoundedByContext: Bool
 
     // MARK: - Backward-compatible pricing accessors
 
@@ -140,7 +146,8 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
         huggingFaceID: String? = nil,
         hidden: Bool? = nil,
         isAvailable: Bool? = nil,
-        isAccessDenied: Bool? = nil
+        isAccessDenied: Bool? = nil,
+        outputBoundedByContext: Bool = false
     ) {
         self.providerID = providerID
         self.modelID = modelID
@@ -167,6 +174,7 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
         self.hidden = hidden
         self.isAvailable = isAvailable
         self.isAccessDenied = isAccessDenied
+        self.outputBoundedByContext = outputBoundedByContext
     }
 
     /// Whether the model was created/modified within the last 90 days.
@@ -192,6 +200,7 @@ extension ModelInfo: Codable {
         case mode, validEffortLevels, behaviorFlags
         case deprecatedOn, deprecationReplacement, maxTemperature, modelDescription
         case samplingDefaults, isFree, benchmarks, huggingFaceID, hidden, isAvailable, isAccessDenied
+        case outputBoundedByContext
         // Legacy keys for reading old persisted data
         case inputCostPerMillionTokens, outputCostPerMillionTokens
     }
@@ -222,6 +231,7 @@ extension ModelInfo: Codable {
         huggingFaceID = try container.decodeIfPresent(String.self, forKey: .huggingFaceID)
         hidden = try container.decodeIfPresent(Bool.self, forKey: .hidden)
         isAvailable = try container.decodeIfPresent(Bool.self, forKey: .isAvailable)
+        outputBoundedByContext = try container.decodeIfPresent(Bool.self, forKey: .outputBoundedByContext) ?? false
         isAccessDenied = try container.decodeIfPresent(Bool.self, forKey: .isAccessDenied)
 
         // Read new pricing field, or fall back to legacy flat cost fields.
@@ -275,6 +285,7 @@ extension ModelInfo: Codable {
         try container.encodeIfPresent(hidden, forKey: .hidden)
         try container.encodeIfPresent(isAvailable, forKey: .isAvailable)
         try container.encodeIfPresent(isAccessDenied, forKey: .isAccessDenied)
+        if outputBoundedByContext { try container.encode(true, forKey: .outputBoundedByContext) }
         // Legacy fields intentionally not written — new format only.
     }
 }
