@@ -1538,3 +1538,64 @@ struct MergedVisionPDFTests {
         #expect(log.kinds.contains("pdf"))
     }
 }
+
+/// Efficiency set E5: store-seeded re-sweeps carry prior probed findings so only gaps re-probe.
+@Suite("Probe efficiency: store-seeded re-sweep")
+struct StoreSeededResweepTests {
+    private func priorRecord() -> ModelProfile {
+        var p = ModelProfile(providerID: "builtin.openai", modelID: "gpt-4o")
+        p.chat = .established(true, "echoed the identifier")
+        p.toolCalling = .established(true, "roundTripCompleted")
+        p.toolResultRoundTrip = .established(true, "returned the identifier")
+        p.vision = .established(true, "named 'blue triangle'")
+        p.pdfInput = .inconclusive("PDF probe timed out")   // a GAP — must re-probe
+        p.acceptsTemperature = .established(false, "temperature rejected")
+        return p
+    }
+
+    @Test("Established probed findings carry; gaps and unprobed stay open")
+    func carriesEstablishedProbedOnly() {
+        var seed = ModelProfile(providerID: "builtin.openai", modelID: "gpt-4o")
+        seed.isAvailable = .decoded(true, "present in provider /models listing")
+        seed.seedProbedFindings(from: priorRecord())
+
+        #expect(seed.chat.value == true)
+        #expect(seed.chat.evidence == "echoed the identifier")   // verbatim, not re-stamped
+        #expect(seed.toolCalling.status == .established)
+        #expect(seed.vision.status == .established)
+        #expect(seed.acceptsTemperature.value == false)
+        #expect(seed.pdfInput.status == .notAttempted)           // the inconclusive gap did NOT carry
+        #expect(seed.maxOutputTokens.status == .notAttempted)    // never probed before → still open
+    }
+
+    @Test("A probed finding replaces a decoded seed value; an already-probed seed is untouched")
+    func probedOutranksDecodedButNotProbed() {
+        var prior = ModelProfile(providerID: "p", modelID: "m")
+        prior.isAvailable = .established(false, "no longer available")   // probed gone
+        var seed = ModelProfile(providerID: "p", modelID: "m")
+        seed.isAvailable = .decoded(true, "listed")                     // decoded presumption
+        seed.chat = .established(true, "fresh probe this run")           // already probed
+        prior.chat = .established(true, "old probe")
+        seed.seedProbedFindings(from: prior)
+        #expect(seed.isAvailable.value == false)                        // probed overrides decoded
+        #expect(seed.chat.evidence == "fresh probe this run")           // existing probe not clobbered
+    }
+
+    @Test("Through the sweep: a fully-seeded profile makes zero calls")
+    func fullySeededMakesNoCalls() async {
+        struct BombProvider: LLMProvider {
+            func send(messages: [LLMMessage], tools: [LLMToolDefinition], overrides: LLMCallOverrides) async throws -> LLMResponse {
+                Issue.record("a fully-seeded re-sweep must make no calls")
+                throw URLError(.badURL)
+            }
+        }
+        var seed = ModelProfile(providerID: "builtin.openai", modelID: "gpt-4o")
+        var prior = priorRecord()
+        prior.pdfInput = .established(true, "returned the embedded code")  // close the gap
+        prior.maxOutputTokens = .established(16384, "endpoint reported its maximum")
+        seed.seedProbedFindings(from: prior)
+        let profile = await ModelProber.probe(llm: BombProvider(), seed: seed)
+        #expect(profile.callCount == 0)
+        #expect(profile.chat.value == true)
+    }
+}

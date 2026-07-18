@@ -168,6 +168,38 @@ extension ModelProfile {
             || effortLevels.values.contains { counts($0) }
     }
 
+    /// Pre-fills this seed with the established, probed findings from a PRIOR record so a
+    /// re-sweep spends calls only on what the store can't already answer (inconclusive last time,
+    /// new since, or invalidated by a prober-version bump — the caller gates version and age).
+    ///
+    /// Honesty rule: each finding is copied VERBATIM — its original evidence and duration ride
+    /// along, never re-stamped as freshly measured. A carried finding is a real prior measurement
+    /// wearing its own timestamp, and the probe loop skips it because its status is `established`.
+    /// A finding already established-by-probing in the seed is never overwritten; a decoded seed
+    /// value IS replaced by a prior probed one (probing outranks a catalog echo).
+    public mutating func seedProbedFindings(from prior: ModelProfile) {
+        func carry<T>(_ keyPath: WritableKeyPath<ModelProfile, ProbeFinding<T>>) {
+            let priorFinding = prior[keyPath: keyPath]
+            guard priorFinding.status == .established, priorFinding.source == .probed else { return }
+            let current = self[keyPath: keyPath]
+            let alreadyProbed = current.status == .established && current.source == .probed
+            if !alreadyProbed { self[keyPath: keyPath] = priorFinding }
+        }
+        carry(\.chat); carry(\.toolCalling); carry(\.toolResultRoundTrip)
+        carry(\.vision); carry(\.pdfInput); carry(\.acceptsTemperature)
+        carry(\.maxOutputTokens); carry(\.maxContextTokens)
+        carry(\.isAvailable); carry(\.isAccessDenied)
+        if let bound = prior.maxOutputBoundedByContext,
+           bound.status == .established, bound.source == .probed,
+           (maxOutputBoundedByContext?.status ?? .notAttempted) != .established {
+            maxOutputBoundedByContext = bound
+        }
+        for (level, finding) in prior.effortLevels
+        where finding.status == .established && finding.source == .probed {
+            if effortLevels[level] == nil { effortLevels[level] = finding }
+        }
+    }
+
     /// Projects this profile into an empirical-layer ``ModelFacts`` record.
     ///
     /// Only findings that are `established` AND `source == .probed` project — decoded findings
