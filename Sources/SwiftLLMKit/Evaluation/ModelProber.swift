@@ -28,7 +28,11 @@ public enum ModelProber {
     /// Bump whenever a probe's request shape changes in a way that could alter its verdicts
     /// (e.g. the PDF encoding switch that made every earlier pdfInput=false suspect) — records
     /// from an older prober are then identifiable as re-probe candidates.
-    public static let proberVersion = 1
+    ///
+    /// v2 (2026-07-18): probe providers strip `mustNeverSendTemperatureParam`
+    /// (`makeProbeProvider`), so temperature is genuinely sent — v1 records' `acceptsTemperature
+    /// = true` on flagged models are artifacts of the suppressed parameter, not measurements.
+    public static let proberVersion = 2
 
     /// Builds a probe seed from a TRI-STATE facts record — the preferred seeding path.
     ///
