@@ -1269,31 +1269,28 @@ public final class LLMKitManager {
         if let info = modelInfo(providerID: providerID, modelID: modelID) {
             return info.behaviorFlags
         }
-        // No catalog entry yet — synthesize from overrides directly, mirroring the
-        // layering rules in `fetchProviderModels`.
+        // No catalog entry yet — synthesize through the SAME fold `composeModel` uses (the
+        // effective registry incl. downloaded_overrides.json, least-specific-first with force
+        // semantics, then user overrides forcing on top). An earlier version read only the
+        // bundled registry with gap-fill ordering and could disagree with the composed catalog —
+        // a downloaded no-temperature fix would vanish exactly for the not-yet-fetched models
+        // that need it most.
+        var facts = ModelFacts()
+        if let providerWide = overridesRegistry.defaults(providerID: providerID) {
+            facts.overlay(providerWide.asFacts)
+        }
+        if let apiType = providers.first(where: { $0.id == providerID })?.apiType.rawValue,
+           let apiTypeScoped = overridesRegistry.override(providerAPIType: apiType, modelID: modelID) {
+            facts.overlay(apiTypeScoped.asFacts)
+        }
+        if let providerScoped = overridesRegistry.override(providerID: providerID, modelID: modelID) {
+            facts.overlay(providerScoped.asFacts)
+        }
+        if let user = userOverrides["\(providerID)/\(modelID)"] {
+            facts.overlay(user.asFacts)
+        }
         var flags = BehaviorFlags()
-        // Layer 0a: provider-wide defaults
-        if let providerWide = bundledRegistry.defaults(providerID: providerID),
-           let wideFlags = providerWide.behaviorFlags {
-            wideFlags.apply(to: &flags, forceReplace: false)
-        }
-        // Layer 0b: per-(providerID, modelID) bundled
-        if let providerScoped = bundledRegistry.override(providerID: providerID, modelID: modelID),
-           let scopedFlags = providerScoped.behaviorFlags {
-            scopedFlags.apply(to: &flags, forceReplace: false)
-        }
-        // Layer 1: per-(apiType, modelID) bundled
-        let providerAPIType = providers.first(where: { $0.id == providerID })?.apiType.rawValue
-        if let apiType = providerAPIType,
-           let bundled = bundledRegistry.override(providerAPIType: apiType, modelID: modelID),
-           let bundledFlags = bundled.behaviorFlags {
-            bundledFlags.apply(to: &flags, forceReplace: false)
-        }
-        // Layer 4: user overrides force-replace
-        let userKey = "\(providerID)/\(modelID)"
-        if let user = userOverrides[userKey], let userFlags = user.behaviorFlags {
-            userFlags.apply(to: &flags, forceReplace: true)
-        }
+        facts.behaviorFlags.apply(to: &flags, forceReplace: true)
         return flags
     }
 

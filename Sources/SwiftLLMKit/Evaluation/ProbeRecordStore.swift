@@ -129,7 +129,12 @@ public struct ProbeRecordStore: Sendable {
         for file in files where file.pathExtension == "json" {
             do {
                 let data = try Data(contentsOf: file)
-                records.append(try JSONDecoder().decode(ProbeRecord.self, from: data))
+                let record = try JSONDecoder().decode(ProbeRecord.self, from: data)
+                guard record.schemaVersion <= ProbeRecord.currentSchemaVersion else {
+                    logger.error("Skipping probe record \(file.lastPathComponent, privacy: .public): schema v\(record.schemaVersion) is newer than supported v\(ProbeRecord.currentSchemaVersion)")
+                    continue
+                }
+                records.append(record)
             } catch {
                 logger.error("Skipping unreadable probe record \(file.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
@@ -139,8 +144,12 @@ public struct ProbeRecordStore: Sendable {
 
     public func record(forKey key: ProbeRecordKey) -> ProbeRecord? {
         let url = directory.appendingPathComponent(key.fileName)
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(ProbeRecord.self, from: data)
+        guard let data = try? Data(contentsOf: url),
+              let record = try? JSONDecoder().decode(ProbeRecord.self, from: data),
+              // A future schema that still happens to decode must not be trusted as current
+              // empirical truth — its field semantics may have changed.
+              record.schemaVersion <= ProbeRecord.currentSchemaVersion else { return nil }
+        return record
     }
 }
 
@@ -223,8 +232,14 @@ public enum ProbeEvidenceCombiner {
         case (let one?, nil), (nil, let one?):
             return one.profile.asEmpiricalFacts
         case (let local?, let downloaded?):
-            let (newer, older) = local.recordedAt >= downloaded.recordedAt
-                ? (local, downloaded) : (downloaded, local)
+            // A higher proberVersion beats a newer timestamp: a record from a FIXED prober
+            // outranks a later run of a prober whose request-forming code was wrong (the
+            // pre-native-PDF prober recorded pdfInput=false that our own encoder caused — a
+            // later shipped record from that prober must not overwrite a corrected local one).
+            // Same version → newest wins; ties → local wins.
+            let localWins = (local.proberVersion, local.recordedAt.timeIntervalSince1970)
+                >= (downloaded.proberVersion, downloaded.recordedAt.timeIntervalSince1970)
+            let (newer, older) = localWins ? (local, downloaded) : (downloaded, local)
             var combined = newer.profile.asEmpiricalFacts
             let olderFacts = older.profile.asEmpiricalFacts
             for field in ModelFactsFieldTable.fields

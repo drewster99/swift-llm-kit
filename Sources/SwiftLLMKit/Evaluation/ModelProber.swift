@@ -30,8 +30,46 @@ public enum ModelProber {
     /// from an older prober are then identifiable as re-probe candidates.
     public static let proberVersion = 1
 
+    /// Builds a probe seed from a TRI-STATE facts record — the preferred seeding path.
+    ///
+    /// No per-apiType switch: the decoders already encode statedness (`nil` = the vendor didn't
+    /// say), so a field seeds as `decoded` exactly when the vendor stated it, both directions.
+    /// This is what the ModelInfo-based overload cannot do — materialization flattens `nil` to
+    /// `false`, and seeding from it fabricates `decoded(false)` for fields the vendor never
+    /// stated, which both skips the probe AND displays a vendor "no" that doesn't exist.
+    public static func seedProfile(fromDecodedFacts decoded: DecodedModelFacts, providerID: String) -> ModelProfile {
+        var profile = ModelProfile(providerID: providerID, modelID: decoded.modelID)
+        let facts = decoded.facts
+        let evidence = "provider /models payload"
+        profile.displayName = facts.displayName ?? decoded.modelID
+        profile.createdAt = facts.createdAt
+        profile.pricing = facts.pricing
+        profile.deprecatedOn = facts.deprecatedOn
+        profile.maxTemperature = facts.maxTemperature
+        profile.samplingDefaults = facts.samplingDefaults
+        profile.isFree = facts.isFree
+        profile.benchmarks = facts.benchmarks
+        if let value = facts.maxInputTokens { profile.maxContextTokens = .decoded(value, evidence) }
+        if let value = facts.maxOutputTokens { profile.maxOutputTokens = .decoded(value, evidence) }
+        if let value = facts.supportsChatCompletions { profile.chat = .decoded(value, evidence) }
+        if let value = facts.capabilities.toolUse { profile.toolCalling = .decoded(value, evidence) }
+        if let value = facts.capabilities.vision { profile.vision = .decoded(value, evidence) }
+        if let value = facts.capabilities.pdfInput { profile.pdfInput = .decoded(value, evidence) }
+        if let levels = facts.validEffortLevels {
+            for level in levels { profile.effortLevels[level] = .decoded(true, evidence) }
+        }
+        // Listed in /models ⇒ presumed reachable, but only presumed — a live probe can overturn it.
+        profile.isAvailable = .decoded(true, "present in provider /models listing")
+        return profile
+    }
+
     /// Builds a profile pre-filled with everything the provider's `/models` payload already told
     /// us, so the driver only spends calls on the gaps.
+    ///
+    /// LEGACY: prefer ``seedProfile(fromDecodedFacts:providerID:)``. This overload consumes the
+    /// flattened `ModelInfo`, where `false` may mean "the vendor didn't say" — its per-apiType
+    /// switch limits the damage but cannot fully recover the lost tri-state (an Anthropic payload
+    /// missing a capability leaf seeds a fabricated `decoded(false)` here).
     ///
     /// **Feed this the freshly-decoded `ModelInfo` from `ModelFetchService.fetchModels`, never the
     /// merged catalog** — the catalog has LiteLLM's third-party claims layered in, and seeding

@@ -258,3 +258,84 @@ struct ProbeRecordExportTests {
         #expect(record.profile.isAccessDenied.value == true)
     }
 }
+
+/// Prober version outranks recency: a fixed prober's findings must not lose to a later run of a
+/// broken one.
+@Suite("Prober version precedence")
+struct ProberVersionPrecedenceTests {
+    private func record(_ profile: ModelProfile, at time: TimeInterval, proberVersion: Int) -> ProbeRecord {
+        ProbeRecord(
+            proberVersion: proberVersion, recordedAt: Date(timeIntervalSince1970: time),
+            key: ProbeRecordKey(apiType: "zai", host: "api.z.ai", modelID: "glm-5.2"),
+            providerID: "builtin.zai", profile: profile
+        )
+    }
+
+    @Test("A newer-TIMESTAMP record from an OLDER prober loses to a fixed prober's record")
+    func versionBeatsTimestamp() {
+        var fixedProber = ModelProfile(providerID: "p", modelID: "m")
+        fixedProber.pdfInput = .established(true, "probed with the fixed encoder")     // v2, older
+        var brokenProber = ModelProfile(providerID: "p", modelID: "m")
+        brokenProber.pdfInput = .established(false, "our own encoder bug")             // v1, newer
+
+        let combined = ProbeEvidenceCombiner.combinedFacts(
+            local: record(fixedProber, at: 500, proberVersion: 2),
+            downloaded: record(brokenProber, at: 1000, proberVersion: 1))
+        #expect(combined.capabilities.pdfInput == true, "proberVersion outranks recency")
+    }
+
+    @Test("Same prober version: newest wins; exact ties go to local")
+    func sameVersionNewestWins() {
+        var older = ModelProfile(providerID: "p", modelID: "m")
+        older.vision = .established(true, "old")
+        var newer = ModelProfile(providerID: "p", modelID: "m")
+        newer.vision = .established(false, "new")
+        let combined = ProbeEvidenceCombiner.combinedFacts(
+            local: record(older, at: 0, proberVersion: 1),
+            downloaded: record(newer, at: 1000, proberVersion: 1))
+        #expect(combined.capabilities.vision == false)
+    }
+}
+
+/// The facts-based seed preserves tri-state: a field seeds as decoded exactly when the vendor
+/// stated it — never fabricated from materialization's nil→false flattening.
+@Suite("Facts-based probe seeding")
+struct FactsSeedTests {
+    @Test("Unstated fields stay notAttempted (the probe will run); stated fields seed both directions")
+    func triStateSeeding() {
+        var facts = ModelFacts()
+        facts.capabilities.vision = true       // stated yes
+        facts.capabilities.pdfInput = nil      // NOT stated (e.g. a payload missing the leaf)
+        facts.capabilities.toolUse = false     // stated NO (e.g. Mistral function_calling=false)
+        facts.supportsChatCompletions = true
+        facts.maxInputTokens = 200_000
+
+        let seed = ModelProber.seedProfile(
+            fromDecodedFacts: DecodedModelFacts(modelID: "m", facts: facts), providerID: "p")
+        #expect(seed.vision.value == true && seed.vision.source == .decoded)
+        #expect(seed.pdfInput.status == .notAttempted, "unstated must stay probe-able — no fabricated decoded(false)")
+        #expect(seed.toolCalling.value == false, "a stated no is believed")
+        #expect(seed.chat.value == true)
+        #expect(seed.maxContextTokens.value == 200_000)
+        #expect(seed.isAvailable.value == true && seed.isAvailable.source == .decoded)
+    }
+
+    @Test("Future-schema probe records are rejected, not trusted")
+    func futureSchemaRejected() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("schema-tests-\(UUID().uuidString)", isDirectory: true)
+        let store = ProbeRecordStore(baseDirectory: dir)
+        var profile = ModelProfile(providerID: "p", modelID: "m")
+        profile.chat = .established(true, "echoed")
+        let key = ProbeRecordKey(apiType: "zai", host: "h", modelID: "m")
+        _ = try store.upsert(profile: profile, key: key, providerID: "p", proberVersion: 1)
+
+        // Rewrite the record claiming a future schema; it must be skipped by both readers.
+        let url = store.directory.appendingPathComponent(key.fileName)
+        var text = try String(contentsOf: url, encoding: .utf8)
+        text = text.replacingOccurrences(of: "\"schemaVersion\" : 1", with: "\"schemaVersion\" : 99")
+        try text.write(to: url, atomically: true, encoding: .utf8)
+        #expect(store.record(forKey: key) == nil)
+        #expect(store.loadAll().isEmpty)
+    }
+}

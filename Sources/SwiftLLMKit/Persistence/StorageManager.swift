@@ -141,10 +141,17 @@ struct StorageManager: Sendable {
     }
 
     /// Element wrapper that swallows a single bad record so the rest of the array survives.
+    /// Also rejects records whose schemaVersion is newer than this build understands — a future
+    /// format that happens to decode must not be merged as current empirical truth.
     private struct FailableRecord: Decodable {
         let record: ProbeRecord?
         init(from decoder: Decoder) {
-            record = try? ProbeRecord(from: decoder)
+            if let decoded = try? ProbeRecord(from: decoder),
+               decoded.schemaVersion <= ProbeRecord.currentSchemaVersion {
+                record = decoded
+            } else {
+                record = nil
+            }
         }
     }
 
