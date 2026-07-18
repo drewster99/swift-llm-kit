@@ -183,10 +183,12 @@ public enum ModelProber {
         //    call with temperature: 0 settles both. Only a temperature rejection costs a second,
         //    temperature-free call. If chat can't be reached at all, every later probe fails the
         //    same way — stop once.
+        var chatDeferred = false
         if profile.chat.status == .notAttempted {
             let combined = await probeChatAndTemperature(llm: llm, modelID: modelID, calls: calls)
             profile.chat = combined.chat
             profile.acceptsTemperature = combined.temperature
+            chatDeferred = combined.chatDeferred
         } else if profile.acceptsTemperature.status == .notAttempted {
             // Chat came decoded; temperature still needs its own (cheap) probe.
             profile.acceptsTemperature = await probeTemperature(llm: llm, modelID: modelID, calls: calls)
@@ -213,7 +215,7 @@ public enum ModelProber {
             logger.error("Probe \(modelID, privacy: .public): access denied — halting")
             return finish(&profile, calls: calls, started: started)
         }
-        if profile.chat.status == .inconclusive {
+        if profile.chat.status == .inconclusive, !chatDeferred {
             logger.error("Probe \(modelID, privacy: .public): chat inconclusive — halting")
             return finish(&profile, calls: calls, started: started)
         }
@@ -239,10 +241,12 @@ public enum ModelProber {
         profile.isAccessDenied = .established(false, "responded to a live call")
 
         // 2. Tool calling, then the result round-trip. The reason the probe exists.
+        var toolBattery: CapabilityProbe.ToolCallResult?
         if profile.toolCalling.status == .notAttempted || profile.toolResultRoundTrip.status == .notAttempted {
             let toolResult = await CapabilityProbe.probeToolCalling(
                 llm: llm, providerID: profile.providerID, modelID: modelID, calls: calls
             )
+            toolBattery = toolResult
             if profile.toolCalling.status == .notAttempted {
                 profile.toolCalling = toolResult.toolUse
                     .map { ProbeFinding<Bool>.established($0, toolResult.errorDescription ?? toolResult.verdict.rawValue) }
@@ -257,6 +261,33 @@ public enum ModelProber {
                 case .inconclusive:            return .inconclusive(toolResult.errorDescription ?? "no answer")
                 }
             }()
+        }
+
+        // Deferred-chat resolution (replay elision). A temperature rejection consumed call 1
+        // before chat could be observed; any 200 from the tool battery is the same proof a replay
+        // would buy — a chat/completions request was served for this model — and the round-trip's
+        // identifier echo is stronger (it followed an instruction through a tool result). Only
+        // when the battery produced no 200 do we pay for the dedicated chat call, with the same
+        // gone/denied evidence scan step 1 applies.
+        if chatDeferred {
+            if toolBattery?.sawSuccessfulResponse == true {
+                profile.chat = .established(true, toolBattery?.verdict == .roundTripCompleted
+                    ? "echoed the identifier via the tool round-trip (chat replay elided)"
+                    : "tool battery answered a chat/completions request (chat replay elided)")
+            } else {
+                profile.chat = await probeChat(llm: llm, modelID: modelID, calls: calls)
+                if profile.chat.status == .inconclusive, let evidence = profile.chat.evidence {
+                    if CapabilityProbe.textIndicatesModelGone(evidence) {
+                        profile.isAvailable = .established(false, evidence)
+                    } else if CapabilityProbe.textIndicatesAccessDenied(evidence) {
+                        profile.isAccessDenied = .established(true, evidence)
+                    }
+                }
+            }
+            if profile.chat.value != true {
+                logger.error("Probe \(modelID, privacy: .public): chat unresolved after deferral — halting")
+                return finish(&profile, calls: calls, started: started)
+            }
         }
 
         // Tool calling is the capability this whole system exists to establish, and a model that
@@ -337,9 +368,15 @@ public enum ModelProber {
     /// The only branch that costs a second call is a temperature rejection: a 400 naming
     /// temperature settles `temperature = false` but leaves chat unknown, so chat is re-probed
     /// without the parameter. Every other outcome is one call.
+    /// `chatDeferred` is true only on the temperature-rejection path: the 400 settles
+    /// temperature=false but consumed the call before chat could be observed. The old behavior
+    /// re-probed chat immediately; the 2026-07-18 efficiency audit measured that replay at 20
+    /// billed calls and ~45% of the sweep's reasoning-token burn per OpenAI run, all spent
+    /// re-learning what the tool battery's own 200 proves anyway. The sweep now resolves a
+    /// deferred chat from the tool battery and only replays when no 200 ever arrives.
     public static func probeChatAndTemperature(
         llm: any LLMProvider, modelID: String, calls: ProbeCallCounter? = nil
-    ) async -> (chat: ProbeFinding<Bool>, temperature: ProbeFinding<Bool>) {
+    ) async -> (chat: ProbeFinding<Bool>, temperature: ProbeFinding<Bool>, chatDeferred: Bool) {
         let nonce = CapabilityProbe.makeIdentifier()
         let messages: [LLMMessage] = [
             .system("You are a test harness. Reply with exactly what is asked and nothing else."),
@@ -353,7 +390,8 @@ public enum ModelProber {
             // Success with temperature present: both facts settled at once.
             return (chatFinding(response.text, nonce: nonce, started: started),
                     .established(true, "accepted temperature alongside a successful chat call",
-                                 duration: Date().timeIntervalSince(started)))
+                                 duration: Date().timeIntervalSince(started)),
+                    false)
         } catch {
             let detail = CapabilityProbe.rejectionDetail(error)
             // "Temperature is the culprit" only when a GENUINE refusal (a coherent 4xx) names it. A
@@ -366,13 +404,17 @@ public enum ModelProber {
                 // Not a temperature problem — chat failed for some other reason, and we learned
                 // nothing about temperature.
                 return (finding(fromError: error, capabilityKeywords: [], started: started),
-                        .inconclusive(detail, duration: Date().timeIntervalSince(started)))
+                        .inconclusive(detail, duration: Date().timeIntervalSince(started)),
+                        false)
             }
-            // Temperature is the culprit: settle it false, then re-probe chat without it so the
-            // model still gets a fair chat reading.
+            // Temperature is the culprit: settle it false and DEFER chat — the tool battery's own
+            // 200 (or its round-trip identifier echo) is at least as much proof as a replay, and
+            // the sweep falls back to a dedicated chat call only if no 200 ever arrives.
             let temperature = ProbeFinding<Bool>.established(false, detail, duration: Date().timeIntervalSince(started))
-            let chat = await probeChat(llm: llm, modelID: modelID, calls: calls)
-            return (chat, temperature)
+            let deferredChat = ProbeFinding<Bool>.inconclusive(
+                "temperature rejected; chat deferred to the tool battery",
+                duration: Date().timeIntervalSince(started))
+            return (deferredChat, temperature, true)
         }
     }
 

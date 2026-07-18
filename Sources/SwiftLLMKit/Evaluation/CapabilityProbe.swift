@@ -60,6 +60,29 @@ public enum CapabilityProbe {
         public let calledTools: [String]
         public let errorDescription: String?
         public let duration: TimeInterval
+        /// Whether the probe's FIRST request returned an HTTP 200 at all — regardless of what it
+        /// contained. Any 200 from a chat/completions request proves the endpoint serves chat for
+        /// this model, which lets the sweep resolve a deferred chat verdict from the tool battery
+        /// instead of spending a dedicated replay call. Optional: nil on records from before the
+        /// field existed ("not recorded"), never assumed.
+        public let sawSuccessfulResponse: Bool?
+
+        public init(
+            providerID: String, modelID: String, verdict: ToolCallVerdict, toolChoiceForced: Bool,
+            expectedIdentifier: String, returnedText: String?, calledTools: [String],
+            errorDescription: String?, duration: TimeInterval, sawSuccessfulResponse: Bool? = nil
+        ) {
+            self.providerID = providerID
+            self.modelID = modelID
+            self.verdict = verdict
+            self.toolChoiceForced = toolChoiceForced
+            self.expectedIdentifier = expectedIdentifier
+            self.returnedText = returnedText
+            self.calledTools = calledTools
+            self.errorDescription = errorDescription
+            self.duration = duration
+            self.sawSuccessfulResponse = sawSuccessfulResponse
+        }
 
         /// Whether this run proved tool calling. Only the two positive verdicts count; note that
         /// `inconclusive` maps to `nil`, not `false`.
@@ -132,12 +155,14 @@ public enum CapabilityProbe {
             """)
         ]
 
-        func fail(_ verdict: ToolCallVerdict, _ error: String?, forced: Bool) -> ToolCallResult {
+        func fail(_ verdict: ToolCallVerdict, _ error: String?, forced: Bool,
+                  sawSuccess: Bool = false) -> ToolCallResult {
             ToolCallResult(
                 providerID: providerID, modelID: modelID, verdict: verdict,
                 toolChoiceForced: forced, expectedIdentifier: identifier,
                 returnedText: nil, calledTools: [], errorDescription: error,
-                duration: Date().timeIntervalSince(started)
+                duration: Date().timeIntervalSince(started),
+                sawSuccessfulResponse: sawSuccess
             )
         }
 
@@ -202,13 +227,14 @@ public enum CapabilityProbe {
                 let reasoningNote = (first.usage?.reasoningTokens).map { " (\($0) reasoning tokens)" } ?? ""
                 return fail(.inconclusive,
                             "no tool call, but the response was \(truncated ? "truncated at the token budget" : "empty")\(reasoningNote) — not evidence of declining",
-                            forced: forced)
+                            forced: forced, sawSuccess: true)
             }
             return ToolCallResult(
                 providerID: providerID, modelID: modelID, verdict: .noToolCall,
                 toolChoiceForced: forced, expectedIdentifier: identifier,
                 returnedText: first.text, calledTools: [], errorDescription: nil,
-                duration: Date().timeIntervalSince(started)
+                duration: Date().timeIntervalSince(started),
+                sawSuccessfulResponse: true
             )
         }
 
@@ -235,7 +261,8 @@ public enum CapabilityProbe {
                 toolChoiceForced: forced, expectedIdentifier: identifier,
                 returnedText: nil, calledTools: first.toolCalls.map(\.name),
                 errorDescription: error.localizedDescription,
-                duration: Date().timeIntervalSince(started)
+                duration: Date().timeIntervalSince(started),
+                sawSuccessfulResponse: true
             )
         }
 
@@ -245,7 +272,8 @@ public enum CapabilityProbe {
             verdict: echoed ? .roundTripCompleted : .toolCallOnly,
             toolChoiceForced: forced, expectedIdentifier: identifier,
             returnedText: second.text, calledTools: first.toolCalls.map(\.name),
-            errorDescription: nil, duration: Date().timeIntervalSince(started)
+            errorDescription: nil, duration: Date().timeIntervalSince(started),
+            sawSuccessfulResponse: true
         )
     }
 

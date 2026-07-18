@@ -1280,3 +1280,105 @@ struct ProbeEfficiencyE1Tests {
         #expect(log.detailValues == [nil])
     }
 }
+
+/// Efficiency set E2: the chat replay after a temperature rejection is deferred — the tool
+/// battery's own 200 proves chat, and the dedicated replay call runs only when no 200 arrived.
+@Suite("Probe efficiency: chat replay elision")
+struct ChatReplayElisionTests {
+    /// Distinguishes the sweep's call kinds: temperature-bearing chat+temp call, tool battery,
+    /// and the plain chat replay — and scripts each kind's behavior.
+    private struct ScriptedProvider: LLMProvider {
+        enum ToolBehavior { case completeRoundTrip, transportFail }
+        enum ReplayBehavior { case echo, transportFail }
+        let toolBehavior: ToolBehavior
+        let replayBehavior: ReplayBehavior
+        let log: Log
+        final class Log: @unchecked Sendable {
+            var kinds: [String] = []
+        }
+        func send(messages: [LLMMessage], tools: [LLMToolDefinition], overrides: LLMCallOverrides) async throws -> LLMResponse {
+            if overrides.temperature != nil {
+                log.kinds.append("chat+temp")
+                throw LLMProviderError.httpError(
+                    statusCode: 400,
+                    body: #"{"error":{"message":"Unsupported value: 'temperature' does not support 0 with this model. Only the default (1) value is supported.","param":"temperature","code":"unsupported_value"}}"#,
+                    url: nil, retryAfter: nil)
+            }
+            if !tools.isEmpty {
+                let isFollowUp = messages.contains { if case .toolResult = $0.content { return true }; return false }
+                log.kinds.append(isFollowUp ? "tool-roundtrip" : "tool-call")
+                switch toolBehavior {
+                case .transportFail: throw URLError(.timedOut)
+                case .completeRoundTrip:
+                    if isFollowUp {
+                        let identifier = messages.compactMap { message -> String? in
+                            if case .toolResult(_, let content) = message.content { return content }
+                            return nil
+                        }.first ?? ""
+                        return LLMResponse(text: identifier)
+                    }
+                    return LLMResponse(toolCalls: [LLMToolCall(id: "c1", name: "get_test_identifier", arguments: "{}")])
+                }
+            }
+            let hasAttachments = messages.contains { ($0.images?.isEmpty == false) || ($0.documents?.isEmpty == false) }
+            if hasAttachments || overrides.maxOutputTokens != nil {
+                // Structural probes (vision/pdf/max-output) also carry no tools; they are not
+                // replays. The max-output rejection states a parseable limit so no binary search
+                // muddies the call log.
+                log.kinds.append("structural")
+                if overrides.maxOutputTokens != nil {
+                    throw LLMProviderError.httpError(
+                        statusCode: 400, body: "This model supports at most 4096 completion tokens",
+                        url: nil, retryAfter: nil)
+                }
+                return LLMResponse(text: "A blue triangle.")
+            }
+            log.kinds.append("chat-replay")
+            switch replayBehavior {
+            case .transportFail: throw URLError(.timedOut)
+            case .echo:
+                let nonce = messages.compactMap { message -> String? in
+                    if case .text(let t) = message.content, let last = t.split(separator: " ").last { return String(last) }
+                    return nil
+                }.last ?? ""
+                return LLMResponse(text: nonce)
+            }
+        }
+    }
+
+    @Test("The tool battery's round trip resolves deferred chat with no replay call")
+    func batterySuccessElidesReplay() async {
+        let log = ScriptedProvider.Log()
+        let provider = ScriptedProvider(toolBehavior: .completeRoundTrip, replayBehavior: .echo, log: log)
+        let profile = await ModelProber.probe(
+            llm: provider, seed: ModelProfile(providerID: "p", modelID: "temp-rejector"))
+        #expect(profile.acceptsTemperature.value == false)
+        #expect(profile.chat.value == true)
+        #expect(profile.chat.evidence?.contains("replay elided") == true)
+        #expect(!log.kinds.contains("chat-replay"))
+        #expect(profile.toolResultRoundTrip.value == true)
+    }
+
+    @Test("A battery with no 200 falls back to the dedicated replay")
+    func batteryFailureFallsBackToReplay() async {
+        let log = ScriptedProvider.Log()
+        let provider = ScriptedProvider(toolBehavior: .transportFail, replayBehavior: .echo, log: log)
+        let profile = await ModelProber.probe(
+            llm: provider, seed: ModelProfile(providerID: "p", modelID: "temp-rejector"))
+        #expect(profile.acceptsTemperature.value == false)
+        #expect(log.kinds.contains("chat-replay"))
+        #expect(profile.chat.value == true)
+        #expect(profile.chat.evidence == "echoed the identifier")
+    }
+
+    @Test("Deferral with a dead endpoint halts before the structural probes")
+    func deadEndpointHaltsAfterDeferral() async {
+        let log = ScriptedProvider.Log()
+        let provider = ScriptedProvider(toolBehavior: .transportFail, replayBehavior: .transportFail, log: log)
+        let profile = await ModelProber.probe(
+            llm: provider, seed: ModelProfile(providerID: "p", modelID: "temp-rejector"))
+        #expect(profile.chat.status == .inconclusive)
+        #expect(profile.vision.status == .notAttempted)
+        #expect(profile.pdfInput.status == .notAttempted)
+    }
+}
