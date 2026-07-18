@@ -450,3 +450,32 @@ struct SelfHealingPruneTests {
         #expect(!ModelProfile(providerID: "p", modelID: "m").isAuthoritativelyNonChat)  // notAttempted
     }
 }
+
+/// The app-bundled probe seed: shipped evidence a fresh install starts from.
+@Suite("Bundled probe seed")
+struct BundledProbeSeedTests {
+    @Test("The bundled seed loads and decodes into valid records")
+    func bundledSeedLoads() {
+        let seed = ProbeRecordStore.bundledSeedRecords()
+        #expect(!seed.isEmpty, "bundled_probe_records.json should ship with records")
+        // Every record decoded cleanly and is at or below the current schema.
+        #expect(seed.allSatisfy { $0.schemaVersion <= ProbeRecord.currentSchemaVersion })
+        // The four probed providers are represented.
+        let providers = Set(seed.map(\.providerID))
+        #expect(providers.contains("builtin.openai"))
+        #expect(providers.contains("builtin.anthropic"))
+        // A sample record carries a real profile (chat finding present) and no error-trace refs.
+        if let anthropic = seed.first(where: { $0.providerID == "builtin.anthropic" }) {
+            #expect(anthropic.profile.chat.status != .notAttempted)
+        }
+        #expect(seed.allSatisfy { !($0.profile.isAvailable.evidence ?? "").contains("ref:") },
+                "shipped evidence should have provider error-trace refs stripped")
+    }
+
+    @Test("The seed is account-scoped-stripped: no established isAccessDenied")
+    func seedIsAccountStripped() {
+        let seed = ProbeRecordStore.bundledSeedRecords()
+        #expect(seed.allSatisfy { $0.profile.isAccessDenied.status != .established },
+                "account-scoped access-denial must never ship in the bundled seed")
+    }
+}

@@ -119,6 +119,25 @@ public struct ProbeRecordStore: Sendable {
         return true
     }
 
+    /// The probe records SHIPPED with the app — the bundled half of the downloaded-probe layer,
+    /// so a fresh install has capability evidence before it probes anything. Read from the
+    /// SwiftLLMKit resource bundle (which SPM copies into the app). Decoded leniently element by
+    /// element, and any record whose schemaVersion is newer than this build understands is
+    /// skipped — a future format that happens to decode must not be merged as current truth.
+    /// A real downloaded `downloaded_probes.json` (App Support) is laid OVER this per model.
+    public static func bundledSeedRecords() -> [ProbeRecord] {
+        guard let url = Bundle.module.url(forResource: "bundled_probe_records", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let array = try? JSONSerialization.jsonObject(with: data) as? [Any] else { return [] }
+        let decoder = JSONDecoder()
+        return array.compactMap { element in
+            guard let elementData = try? JSONSerialization.data(withJSONObject: element),
+                  let record = try? decoder.decode(ProbeRecord.self, from: elementData),
+                  record.schemaVersion <= ProbeRecord.currentSchemaVersion else { return nil }
+            return record
+        }
+    }
+
     /// Loads every readable record. Unreadable files are skipped with a log line, never fatal —
     /// one corrupt record must not take down the whole empirical layer.
     public func loadAll() -> [ProbeRecord] {

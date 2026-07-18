@@ -73,9 +73,10 @@ public final class LLMKitManager {
     /// per-record store at startup; updated through ``storeProbeResult(profile:provider:modelID:)``.
     private var localProbeRecords: [ProbeRecordKey: ProbeRecord] = [:]
 
-    /// Downloaded/shipped probe records — the slot the design reserves for server- or
-    /// app-distributed evidence. Loaded from `downloaded_probes.json` when present; an absent
-    /// file is simply an empty layer. Combined with local records per-field, newest wins.
+    /// Downloaded/shipped probe records — server- or app-distributed evidence. Seeded from the
+    /// app BUNDLE (`bundledSeedRecords()`) and overlaid with `downloaded_probes.json` (App
+    /// Support) when present, so a fresh install ships with evidence and a later download refines
+    /// it per model. Combined with local records per-field, newest wins.
     private var downloadedProbeRecords: [ProbeRecordKey: ProbeRecord] = [:]
 
     // MARK: - Override Layers
@@ -208,10 +209,18 @@ public final class LLMKitManager {
             probeStore.loadAll().map { ($0.key, $0) },
             uniquingKeysWith: { a, b in a.recordedAt >= b.recordedAt ? a : b }
         )
-        downloadedProbeRecords = Dictionary(
-            storage.loadDownloadedProbeRecords().map { ($0.key, $0) },
+        // Downloaded layer = the app-BUNDLED seed with App Support `downloaded_probes.json` laid
+        // over it (a real downloaded record supersedes the shipped seed for that model) — mirrors
+        // how the overrides layer overlays downloaded_overrides.json on the bundled registry. A
+        // fresh install therefore starts with shipped probe evidence; a later download refines it.
+        var downloaded = Dictionary(
+            ProbeRecordStore.bundledSeedRecords().map { ($0.key, $0) },
             uniquingKeysWith: { a, b in a.recordedAt >= b.recordedAt ? a : b }
         )
+        for record in storage.loadDownloadedProbeRecords() {
+            downloaded[record.key] = record
+        }
+        downloadedProbeRecords = downloaded
     }
 
     // MARK: - Probe evidence
