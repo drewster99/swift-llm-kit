@@ -32,7 +32,14 @@ public enum ModelProber {
     /// v2 (2026-07-18): probe providers strip `mustNeverSendTemperatureParam`
     /// (`makeProbeProvider`), so temperature is genuinely sent — v1 records' `acceptsTemperature
     /// = true` on flagged models are artifacts of the suppressed parameter, not measurements.
-    public static let proberVersion = 2
+    ///
+    /// v3 (2026-07-18): tool-probe request/grading overhaul after the log audit. Probe providers
+    /// no longer send `parallel_tool_calls` (its rejection poisoned eight o-series verdicts);
+    /// the round-trip follow-up answers EVERY tool_call_id (parallel-calling models were graded
+    /// on a harness-malformed request); truncated/empty 200s no longer grade `noToolCall`; and
+    /// rejections naming our own request knobs no longer read as tool refusals. v2 records'
+    /// `toolCalling`/`toolResultRoundTrip` = false are suspect; re-probe.
+    public static let proberVersion = 3
 
     /// Builds a probe seed from a TRI-STATE facts record — the preferred seeding path.
     ///

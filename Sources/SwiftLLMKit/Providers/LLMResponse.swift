@@ -115,18 +115,28 @@ public struct LLMResponse: Sendable, Equatable {
     /// for multi-turn thinking / tool-use continuity. Most easily preserved via
     /// `LLMMessage.assistant(from: response)` when appending to history.
     public let continuation: ProviderContinuation?
+    /// The provider's raw stop/finish reason for the first choice (e.g. OpenAI's
+    /// `finish_reason`: "stop", "length", "tool_calls"), verbatim and untranslated.
+    /// nil when the provider adapter doesn't surface one. Callers that grade a
+    /// response's COMPLETENESS (the capability prober) need "length" to tell a
+    /// truncated generation from a genuine empty answer — a reasoning model that
+    /// burned its whole token budget thinking never got the chance to emit its
+    /// tool call, and that must not be read as "declined to call the tool".
+    public let finishReason: String?
 
     public init(
         text: String? = nil,
         toolCalls: [LLMToolCall] = [],
         reasoning: String? = nil,
         usage: TokenUsage? = nil,
-        continuation: ProviderContinuation? = nil
+        continuation: ProviderContinuation? = nil,
+        finishReason: String? = nil
     ) {
         self.text = text
         self.toolCalls = toolCalls
         self.reasoning = reasoning
         self.usage = usage
         self.continuation = continuation
+        self.finishReason = finishReason
     }
 }

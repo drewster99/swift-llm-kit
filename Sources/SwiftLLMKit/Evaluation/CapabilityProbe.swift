@@ -177,7 +177,20 @@ public enum CapabilityProbe {
             }
         }
 
-        guard let call = first.toolCalls.first(where: { $0.name == probeToolName }) ?? first.toolCalls.first else {
+        guard first.toolCalls.isEmpty == false else {
+            // A 200 with no tool call is only evidence of declining when the model actually
+            // ANSWERED. A truncated generation (finish_reason "length") or an empty response —
+            // typically a reasoning model that burned the whole token budget thinking
+            // (gpt-5-nano: 512/512 tokens as reasoning, empty content, graded "noToolCall"
+            // while its dated sibling completed the round trip seconds later) — proves nothing.
+            let answered = !(first.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let truncated = first.finishReason == "length"
+            if truncated || !answered {
+                let reasoningNote = (first.usage?.reasoningTokens).map { " (\($0) reasoning tokens)" } ?? ""
+                return fail(.inconclusive,
+                            "no tool call, but the response was \(truncated ? "truncated at the token budget" : "empty")\(reasoningNote) — not evidence of declining",
+                            forced: forced)
+            }
             return ToolCallResult(
                 providerID: providerID, modelID: modelID, verdict: .noToolCall,
                 toolChoiceForced: forced, expectedIdentifier: identifier,
@@ -187,10 +200,13 @@ public enum CapabilityProbe {
         }
 
         // It called. Answer with the identifier and see whether it can use a tool result — the
-        // half an agent actually depends on.
+        // half an agent actually depends on. EVERY tool_call_id gets a result: models are free
+        // to answer a forced call with N parallel calls (gpt-4.1-nano sent 2-3), and OpenAI
+        // 400-rejects a follow-up that leaves any of them unanswered — a harness-made error the
+        // old single-result follow-up recorded as "did not return the identifier".
         let followUp: [LLMMessage] = messages
             + [.assistant(from: first)]
-            + [.toolResult(identifier, callID: call.id)]
+            + first.toolCalls.map { LLMMessage.toolResult(identifier, callID: $0.id) }
 
         let second: LLMResponse
         do {
@@ -260,8 +276,22 @@ public enum CapabilityProbe {
             return .noAnswer
         }
         let lowered = body.lowercased()
-        let mentionsTools = ["tool", "function_call", "function call", "functions"]
-            .contains { lowered.contains($0) }
+        // Refusals of OUR OWN request knobs must never read as tool refusals, no matter what
+        // other words the body contains. `parallel_tool_calls` and `tool_choice` are parameters
+        // the client sends; a body rejecting them says nothing about the model's tool support —
+        // yet both contain the substring "tool", which is how eight o-series models were
+        // recorded toolCalling=false in the 2026-07-18 audit. Likewise the endpoint-combination
+        // family whose text AFFIRMS tool support while naming a remedy ("Function tools with
+        // reasoning_effort are not supported ... use /v1/responses or set reasoning_effort to
+        // 'none'"): an error that says tools work elsewhere is not a tools refusal.
+        let ourRequestMarkers = ["parallel_tool_calls", "tool_choice", "reasoning_effort", "v1/responses"]
+        if ourRequestMarkers.contains(where: { lowered.contains($0) }) {
+            return .refusedOurRequest
+        }
+        // "tool"/"tools" as whole words only (underscores are word characters, so parameter
+        // names like tools[0] still match while parallel_tool_calls cannot).
+        let mentionsTools = lowered.range(of: #"\btools?\b"#, options: .regularExpression) != nil
+            || ["function_call", "function call", "functions"].contains { lowered.contains($0) }
         return mentionsTools ? .refusedTools : .refusedOurRequest
     }
 

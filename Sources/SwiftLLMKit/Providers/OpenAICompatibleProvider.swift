@@ -478,7 +478,8 @@ struct OpenAICompatibleProvider: LLMProvider {
             text: text?.isEmpty == true ? nil : text,
             toolCalls: toolCalls,
             reasoning: reasoningContent,
-            usage: tokenUsage
+            usage: tokenUsage,
+            finishReason: choice["finish_reason"] as? String
         )
     }
 

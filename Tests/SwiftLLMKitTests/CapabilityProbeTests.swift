@@ -948,3 +948,126 @@ struct NoFabricatedNegativesTests {
         #expect(result.toolUse == true)   // the call itself is still proven
     }
 }
+
+// MARK: - 2026-07-18 audit regressions: self-inflicted failures must not grade as verdicts
+
+/// The log audit found eight o-series models recorded `toolCalling=false` because the endpoint
+/// rejected OUR `parallel_tool_calls` parameter — the substring "tool" inside our own knob's name
+/// read as a tools refusal. These tests pin the classifier against every family from that audit.
+@Suite("Tool probe: audit regressions")
+struct ToolProbeAuditRegressionTests {
+    private func httpError(_ status: Int, _ body: String) -> LLMProviderError {
+        .httpError(statusCode: status, body: body, url: nil, retryAfter: nil)
+    }
+
+    @Test("Rejection of our parallel_tool_calls knob is not a tools refusal")
+    func parallelToolCallsRejectionIsOurFault() {
+        #expect(CapabilityProbe.classifyFailure(httpError(400,
+            #"{"error":{"message":"Unsupported parameter: 'parallel_tool_calls' is not supported with this model.","type":"invalid_request_error","param":"parallel_tool_calls","code":"unsupported_parameter"}}"#))
+            == .refusedOurRequest)
+    }
+
+    @Test("Rejection of our tool_choice knob is not a tools refusal")
+    func toolChoiceRejectionIsOurFault() {
+        #expect(CapabilityProbe.classifyFailure(httpError(400,
+            #"{"error":{"message":"Invalid value for 'tool_choice': must be one of 'auto' or 'none'.","param":"tool_choice"}}"#))
+            == .refusedOurRequest)
+    }
+
+    /// gpt-5.6-luna/sol/terra: the 400's own text AFFIRMS tool support and names the remedy.
+    @Test("An endpoint-combination restriction that affirms tools is not a tools refusal")
+    func reasoningEffortCombinationIsOurFault() {
+        #expect(CapabilityProbe.classifyFailure(httpError(400,
+            #"{"error":{"message":"Function tools with reasoning_effort are not supported for gpt-5.6-luna in /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to 'none'.","param":"reasoning_effort"}}"#))
+            == .refusedOurRequest)
+    }
+
+    /// Word-boundary matching must not weaken genuine refusals.
+    @Test("Genuine tools refusals still classify as capability answers")
+    func genuineRefusalsStillClassify() {
+        #expect(CapabilityProbe.classifyFailure(httpError(400, "tools is not supported in this model"))
+            == .refusedTools)
+        #expect(CapabilityProbe.classifyFailure(httpError(400, "This model does not support tool use."))
+            == .refusedTools)
+        #expect(CapabilityProbe.classifyFailure(httpError(400, "function calling is not available for this model"))
+            == .refusedTools)
+    }
+
+    // MARK: Round-trip follow-up answers every parallel call
+
+    /// Models the gpt-4.1-nano exchange: a forced call answered with TWO parallel calls, and an
+    /// endpoint that 400s unless EVERY tool_call_id gets a tool message. The old single-result
+    /// follow-up could never pass this and recorded "did not return the identifier".
+    private struct ParallelCallingProvider: LLMProvider {
+        func send(messages: [LLMMessage], tools: [LLMToolDefinition], overrides: LLMCallOverrides) async throws -> LLMResponse {
+            var answeredCallIDs = Set<String>()
+            var suppliedResult: String?
+            for message in messages {
+                if case .toolResult(let toolCallID, let content) = message.content {
+                    answeredCallIDs.insert(toolCallID)
+                    suppliedResult = content
+                }
+            }
+            guard let suppliedResult else {
+                return LLMResponse(toolCalls: [
+                    LLMToolCall(id: "call_A", name: "get_test_identifier", arguments: "{}"),
+                    LLMToolCall(id: "call_B", name: "get_test_identifier", arguments: "{}"),
+                ])
+            }
+            guard answeredCallIDs == ["call_A", "call_B"] else {
+                throw LLMProviderError.httpError(
+                    statusCode: 400,
+                    body: "An assistant message with 'tool_calls' must be followed by tool messages responding to each 'tool_call_id'.",
+                    url: nil, retryAfter: nil)
+            }
+            return LLMResponse(text: suppliedResult)
+        }
+    }
+
+    @Test("Round-trip answers every parallel tool call")
+    func roundTripAnswersEveryParallelCall() async {
+        let result = await CapabilityProbe.probeToolCalling(
+            llm: ParallelCallingProvider(), providerID: "test", modelID: "parallel-caller")
+        #expect(result.verdict == .roundTripCompleted)
+    }
+
+    // MARK: Truncated / empty 200s are not "declined to call"
+
+    private struct CannedProvider: LLMProvider {
+        let response: LLMResponse
+        func send(messages: [LLMMessage], tools: [LLMToolDefinition], overrides: LLMCallOverrides) async throws -> LLMResponse {
+            response
+        }
+    }
+
+    /// gpt-5-nano: all 512 budgeted tokens consumed as reasoning, empty content,
+    /// finish_reason "length" — the model never got the chance to emit its call.
+    @Test("A length-truncated 200 with no call is inconclusive, not noToolCall")
+    func truncatedResponseIsInconclusive() async {
+        let truncated = LLMResponse(
+            text: nil, toolCalls: [],
+            usage: TokenUsage(inputTokens: 50, outputTokens: 512, reasoningTokens: 512),
+            finishReason: "length")
+        let result = await CapabilityProbe.probeToolCalling(
+            llm: CannedProvider(response: truncated), providerID: "test", modelID: "truncated")
+        #expect(result.verdict == .inconclusive)
+    }
+
+    @Test("An empty 200 with no call is inconclusive even without a finish reason")
+    func emptyResponseIsInconclusive() async {
+        let empty = LLMResponse(text: "  \n", toolCalls: [])
+        let result = await CapabilityProbe.probeToolCalling(
+            llm: CannedProvider(response: empty), providerID: "test", modelID: "empty")
+        #expect(result.verdict == .inconclusive)
+    }
+
+    /// The verdict the guard must NOT weaken: a model that answered with prose instead of
+    /// calling the tool did decline, and that stays noToolCall.
+    @Test("A prose answer with no call still grades noToolCall")
+    func proseAnswerStillGradesNoToolCall() async {
+        let prose = LLMResponse(text: "I cannot call tools, but the identifier is unknown to me.")
+        let result = await CapabilityProbe.probeToolCalling(
+            llm: CannedProvider(response: prose), providerID: "test", modelID: "prose")
+        #expect(result.verdict == .noToolCall)
+    }
+}

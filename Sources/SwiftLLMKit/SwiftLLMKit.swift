@@ -1178,12 +1178,19 @@ public final class LLMKitManager {
     ///   never observe the very rejection the flag encodes. Stripping it lets the probe measure
     ///   the raw endpoint — the rejection re-derives the flag empirically, and a stale flag on a
     ///   model that now accepts temperature becomes detectable instead of self-sealing.
+    /// - **Optional request knobs the probe does not measure are omitted**:
+    ///   `disableParallelToolCalls` is forced ON so probe requests never carry
+    ///   `parallel_tool_calls: true`. No probe measures that knob, and endpoints that reject it
+    ///   (OpenAI o-series) 400 with the word "tool" in the body — which the tool probe's
+    ///   classifier read as "cannot call tools", writing false verdicts for eight o-series
+    ///   models in the 2026-07-18 audit. An un-sent parameter cannot poison a verdict.
     public func makeProbeProvider(
         configuration config: ModelConfiguration,
         provider modelProvider: ModelProvider
     ) -> any LLMProvider {
         var probeFlags = behaviorFlags(forProviderID: modelProvider.id, modelID: config.modelID)
         probeFlags.mustNeverSendTemperatureParam = false
+        probeFlags.disableParallelToolCalls = true
         return makeProvider(configuration: config, provider: modelProvider, behaviorFlags: probeFlags)
     }
 
