@@ -65,6 +65,18 @@ public final class LLMKitManager {
     private let keychain: KeychainService
     private let fetchService: ModelFetchService
     private let metadataService: ModelMetadataService
+    private let probeStore: ProbeRecordStore
+
+    // MARK: - Empirical (probe) layer
+
+    /// Locally-discovered probe records, keyed by their model-scoped identity. Loaded from the
+    /// per-record store at startup; updated through ``storeProbeResult(profile:provider:modelID:)``.
+    private var localProbeRecords: [ProbeRecordKey: ProbeRecord] = [:]
+
+    /// Downloaded/shipped probe records — the slot the design reserves for server- or
+    /// app-distributed evidence. Loaded from `downloaded_probes.json` when present; an absent
+    /// file is simply an empty layer. Combined with local records per-field, newest wins.
+    private var downloadedProbeRecords: [ProbeRecordKey: ProbeRecord] = [:]
 
     // MARK: - Override Layers
 
@@ -103,6 +115,7 @@ public final class LLMKitManager {
             userDefaultsSuiteName: suiteName
         )
         self.bundledRegistry = BundledModelMetadataRegistry.load()
+        self.probeStore = ProbeRecordStore(baseDirectory: storage.baseDirectory)
     }
 
     /// Updates user-provided model metadata overrides at runtime.
@@ -162,7 +175,50 @@ public final class LLMKitManager {
             logger.info("Seeded seen-models ledger with \(self.models.count, privacy: .public) existing catalog entries across \(byProvider.count, privacy: .public) providers")
         }
 
+        // The empirical layer: locally-probed records plus the downloaded slot (absent = empty).
+        reloadProbeRecords()
+
         seedBuiltInProviders()
+    }
+
+    /// Re-reads the probe evidence from disk. Called at load and at the start of every refresh —
+    /// the headless eval runner is a SEPARATE PROCESS writing the same per-record store, so a
+    /// running GUI must pick up its records on the next refresh, not the next restart.
+    private func reloadProbeRecords() {
+        localProbeRecords = Dictionary(
+            probeStore.loadAll().map { ($0.key, $0) },
+            uniquingKeysWith: { a, b in a.recordedAt >= b.recordedAt ? a : b }
+        )
+        downloadedProbeRecords = Dictionary(
+            storage.loadDownloadedProbeRecords().map { ($0.key, $0) },
+            uniquingKeysWith: { a, b in a.recordedAt >= b.recordedAt ? a : b }
+        )
+    }
+
+    // MARK: - Probe evidence
+
+    /// Persists a completed probe run and folds it into the live empirical layer. Returns false
+    /// (and stores nothing) when the profile established no probed findings — an aborted or
+    /// rate-gutted run must not overwrite a real record. The catalog is NOT recomposed here;
+    /// the next refresh reads the updated records. Callers wanting immediacy refresh the provider.
+    @discardableResult
+    public func storeProbeResult(profile: ModelProfile, provider: ModelProvider, modelID: String) throws -> Bool {
+        let key = ProbeRecordKey(apiType: provider.apiType, endpoint: provider.endpoint, modelID: modelID)
+        let stored = try probeStore.upsert(
+            profile: profile, key: key, providerID: provider.id,
+            proberVersion: ModelProber.proberVersion
+        )
+        if stored, let record = probeStore.record(forKey: key) {
+            localProbeRecords[key] = record
+        }
+        return stored
+    }
+
+    /// The probe evidence for a model as the merge sees it: local and downloaded records for its
+    /// model-scoped key. For the inspector; nil entries mean that layer holds nothing.
+    public func probeRecords(provider: ModelProvider, modelID: String) -> (local: ProbeRecord?, downloaded: ProbeRecord?) {
+        let key = ProbeRecordKey(apiType: provider.apiType, endpoint: provider.endpoint, modelID: modelID)
+        return (localProbeRecords[key], downloadedProbeRecords[key])
     }
 
     /// Persists current state to disk.
@@ -473,8 +529,10 @@ public final class LLMKitManager {
         isRefreshing = true
         defer { isRefreshing = false }
 
-        // Refresh metadata first so enrichment uses the latest LiteLLM data.
+        // Refresh metadata first so enrichment uses the latest LiteLLM data, and pick up probe
+        // records another process (the headless eval runner) may have written since our load.
         await metadataService.forceRefresh()
+        reloadProbeRecords()
 
         await refreshProviderSliceLocked(provider)
         saveModelCatalog()
@@ -564,8 +622,9 @@ public final class LLMKitManager {
         isRefreshing = true
         defer { isRefreshing = false }
 
-        // 1. Refresh LiteLLM metadata
+        // 1. Refresh LiteLLM metadata, and pick up probe records another process may have written.
         await metadataService.forceRefresh()
+        reloadProbeRecords()
 
         // 2. Fetch models from each provider
         var allModels: [ModelInfo] = []
@@ -642,8 +701,17 @@ public final class LLMKitManager {
                     userFacts = userOverride.asFacts
                 }
 
+                // Empirical layer: local + downloaded probe evidence for this model's
+                // model-scoped key, combined per-field with the newer record winning.
+                let probeKey = ProbeRecordKey(apiType: provider.apiType, endpoint: provider.endpoint, modelID: modelID)
+                let empirical = ProbeEvidenceCombiner.combinedFacts(
+                    local: localProbeRecords[probeKey],
+                    downloaded: downloadedProbeRecords[probeKey]
+                )
+
                 let composition = ModelFactsMerger.merge(
                     authoritative: decoded.facts,
+                    empirical: empirical,
                     downloadedOverrides: downloadedOverrides,
                     enrichment: enrichment,
                     userOverrides: userFacts

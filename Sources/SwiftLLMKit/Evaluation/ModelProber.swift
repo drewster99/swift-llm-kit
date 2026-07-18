@@ -24,6 +24,12 @@ private let logger = Logger(subsystem: "SwiftLLMKit", category: "ModelProber")
 /// checked on its own without one.
 public enum ModelProber {
 
+    /// The prober's request-forming generation, stamped into every persisted ``ProbeRecord``.
+    /// Bump whenever a probe's request shape changes in a way that could alter its verdicts
+    /// (e.g. the PDF encoding switch that made every earlier pdfInput=false suspect) — records
+    /// from an older prober are then identifiable as re-probe candidates.
+    public static let proberVersion = 1
+
     /// Builds a profile pre-filled with everything the provider's `/models` payload already told
     /// us, so the driver only spends calls on the gaps.
     ///

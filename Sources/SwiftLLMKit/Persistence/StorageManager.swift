@@ -116,6 +116,38 @@ struct StorageManager: Sendable {
         }
     }
 
+    // MARK: - Downloaded probe records (shipped/server slot)
+
+    /// The downloaded-probe layer: evidence distributed with (or later, to) the app. An absent
+    /// file is an empty layer — the slot exists so wiring server distribution later is a data
+    /// change, not a code change. Read-only from the app's side; nothing here writes it.
+    ///
+    /// Decoded LENIENTLY, element by element: one malformed or older-schema record in a shipped
+    /// array must skip that record, not silently discard the entire downloaded layer.
+    func loadDownloadedProbeRecords() -> [ProbeRecord] {
+        let url = baseDirectory.appendingPathComponent("downloaded_probes.json")
+        guard let data = try? Data(contentsOf: url) else { return [] }
+        do {
+            let wrapped = try JSONDecoder().decode([FailableRecord].self, from: data)
+            let records = wrapped.compactMap(\.record)
+            if records.count != wrapped.count {
+                logger.error("downloaded_probes.json: skipped \(wrapped.count - records.count, privacy: .public) unreadable records")
+            }
+            return records
+        } catch {
+            logger.error("downloaded_probes.json unreadable, treating as empty: \(error.localizedDescription, privacy: .public)")
+            return []
+        }
+    }
+
+    /// Element wrapper that swallows a single bad record so the rest of the array survives.
+    private struct FailableRecord: Decodable {
+        let record: ProbeRecord?
+        init(from decoder: Decoder) {
+            record = try? ProbeRecord(from: decoder)
+        }
+    }
+
     // MARK: - URLs
 
     private var providersURL: URL {
