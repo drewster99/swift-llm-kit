@@ -1166,14 +1166,38 @@ public final class LLMKitManager {
     ///
     /// - Note: the configuration is used as given and never stored — nothing is added to
     ///   ``configurations``, no validation runs, nothing is written to disk.
-    public func makeProvider(
+    /// Builds a provider for CAPABILITY PROBING — the one place that decides which behavior
+    /// flags a probe runs under, so the rule lives here and not in each runner:
+    ///
+    /// - **Necessity flags stay** (`useMaxCompletionTokens`, `glmTemplateSalvage`,
+    ///   `requiresAdaptiveThinking`, …): without them, requests fail for reasons unrelated to the
+    ///   capability under test, and the probe would fabricate capability negatives out of our own
+    ///   malformed requests.
+    /// - **Restriction flags the probe MEASURES are stripped**: `mustNeverSendTemperatureParam`
+    ///   makes the provider omit temperature, so a probe run under it "passes" trivially and can
+    ///   never observe the very rejection the flag encodes. Stripping it lets the probe measure
+    ///   the raw endpoint — the rejection re-derives the flag empirically, and a stale flag on a
+    ///   model that now accepts temperature becomes detectable instead of self-sealing.
+    public func makeProbeProvider(
         configuration config: ModelConfiguration,
         provider modelProvider: ModelProvider
     ) -> any LLMProvider {
+        var probeFlags = behaviorFlags(forProviderID: modelProvider.id, modelID: config.modelID)
+        probeFlags.mustNeverSendTemperatureParam = false
+        return makeProvider(configuration: config, provider: modelProvider, behaviorFlags: probeFlags)
+    }
+
+    public func makeProvider(
+        configuration config: ModelConfiguration,
+        provider modelProvider: ModelProvider,
+        behaviorFlags flagsOverride: BehaviorFlags? = nil
+    ) -> any LLMProvider {
         // Resolve the merged behavior flags for this (provider, model) so providers can read
         // knobs without reaching back into the manager. Keyed on the ModelProvider's ID, so it
-        // works for any model that provider serves, saved configuration or not.
-        let flags = behaviorFlags(forProviderID: modelProvider.id, modelID: config.modelID)
+        // works for any model that provider serves, saved configuration or not. An explicit
+        // override skips the resolution — the probe factory below uses it to strip the flags
+        // whose restrictions the probe is trying to measure.
+        let flags = flagsOverride ?? behaviorFlags(forProviderID: modelProvider.id, modelID: config.modelID)
 
         let providerID = modelProvider.id
         let providerName = modelProvider.name

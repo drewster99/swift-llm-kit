@@ -389,9 +389,10 @@ public enum ModelProber {
 
     /// Whether the endpoint tolerates a `temperature` parameter. `established(false)` means it
     /// answered 400 naming temperature — the signal that the model needs
-    /// `mustNeverSendTemperatureParam`. Note: if that flag is already set the provider omits the
-    /// parameter, so a request succeeds and this reports `true` — correct from the app's view
-    /// (requests work) even though the model itself wouldn't accept the field.
+    /// `mustNeverSendTemperatureParam`. Callers must hand this probe a provider that actually
+    /// SENDS temperature — `LLMKitManager.makeProbeProvider` strips the no-temperature flag for
+    /// exactly this reason; a provider built with the flag active omits the parameter and this
+    /// probe would "pass" without measuring anything.
     public static func probeTemperature(llm: any LLMProvider, modelID: String, calls: ProbeCallCounter? = nil) async -> ProbeFinding<Bool> {
         let nonce = CapabilityProbe.makeIdentifier()
         let started = Date()
