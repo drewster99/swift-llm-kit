@@ -300,7 +300,16 @@ public enum ModelProber {
             return finish(&profile, calls: calls, started: started)
         }
 
-        // 3. Vision + PDF — only where the payload didn't already say.
+        // 3. Vision + PDF — only where the payload didn't already say. When BOTH are open, one
+        //    combined call settles the double-positive majority (83% of models reaching this
+        //    stage); on any other outcome it returns nil, nothing is graded, and the separate
+        //    probes below run exactly as before.
+        if profile.vision.status == .notAttempted, profile.pdfInput.status == .notAttempted,
+           let combined = await probeVisionAndPDF(llm: llm, modelID: modelID, calls: calls,
+                                                  preferLowImageDetail: preferLowImageDetail) {
+            profile.vision = combined.vision
+            profile.pdfInput = combined.pdf
+        }
         if profile.vision.status == .notAttempted {
             profile.vision = await probeVision(llm: llm, modelID: modelID, calls: calls,
                                                preferLowImageDetail: preferLowImageDetail)
@@ -541,6 +550,66 @@ public enum ModelProber {
 
     /// Whether the model reads a PDF. Sends a one-page document showing a random code and asks for
     /// it back — text transcription, the hardest signal to fake. `true` only when the code returns.
+    /// One call answering BOTH the vision and PDF questions — but graded ONLY when both answers
+    /// are correct (the double-positive), which is 83% of models that reach this stage. Any other
+    /// outcome — an error, one answer wrong, an ambiguous reply — returns nil and the caller runs
+    /// the two separate probes exactly as before. The signature makes graded failure
+    /// unrepresentable: `attachmentRejection`'s "the attachment is the only new variable" premise
+    /// doesn't hold with two attachments, so failures from this call must never grade.
+    ///
+    /// The reply is requested as JSON (in the system prompt only — never `response_format`, an
+    /// optional knob some endpoints reject) and graded leniently: parse the first JSON object if
+    /// present, else fall back to whole-text grading of the same response. JSON non-compliance
+    /// can only cost the fallback calls, never a verdict.
+    public static func probeVisionAndPDF(
+        llm: any LLMProvider, modelID: String, calls: ProbeCallCounter? = nil,
+        preferLowImageDetail: Bool = false
+    ) async -> (vision: ProbeFinding<Bool>, pdf: ProbeFinding<Bool>)? {
+        guard let color = ProbeFixtures.namedColors.randomElement(),
+              let shape = ProbeFixtures.namedShapes.randomElement() else { return nil }
+        let png = ProbeFixtures.makeShapePNG(shape: shape, red: color.red, green: color.green, blue: color.blue)
+        let code = CapabilityProbe.makeIdentifier()
+        let pdf = ProbeFixtures.makePDF(code: code)
+        let image = LLMImageContent(data: png, mimeType: "image/png",
+                                    detail: preferLowImageDetail ? .low : nil)
+        let document = LLMDocumentContent(data: pdf, mimeType: "application/pdf", filename: "probe.pdf")
+        let started = Date()
+        calls?.increment()
+        do {
+            let response = try await llm.send(messages: [
+                .system("""
+                You are a multimodal test harness. Reply with ONLY a JSON object in exactly this \
+                format, no other text: {"shape": "<shape in the image>", "color": "<its colour>", \
+                "pdf_code": "<the code displayed in the PDF>"}
+                """),
+                .user("Identify the shape and its colour in the attached image, and the code displayed in the attached PDF.",
+                      images: [image], documents: [document])
+            ], tools: [])
+            let raw = response.text ?? ""
+            let dur = Date().timeIntervalSince(started)
+
+            // Layer 1: lenient JSON — first {...} block, if any.
+            var visionText = raw.lowercased()
+            var pdfText = raw
+            if let open = raw.firstIndex(of: "{"), let close = raw.lastIndex(of: "}"), open < close,
+               let object = try? JSONSerialization.jsonObject(with: Data(raw[open...close].utf8)) as? [String: Any] {
+                let shapeField = (object["shape"] as? String ?? "")
+                let colorField = (object["color"] as? String ?? "")
+                visionText = "\(colorField) \(shapeField)".lowercased()
+                pdfText = object["pdf_code"] as? String ?? raw
+            }
+
+            let (sawColor, sawShape) = gradeVisionAnswer(visionText, colorName: color.name, shape: shape)
+            let sawCode = pdfText.contains(code)
+            guard sawColor, sawShape, sawCode else { return nil }
+            return (vision: .established(true, "named '\(color.name) \(shape.rawValue)' (combined vision+PDF call)", duration: dur),
+                    pdf: .established(true, "returned the embedded code (combined vision+PDF call)", duration: dur))
+        } catch {
+            // Never graded: with two attachments a rejection cannot be attributed to either.
+            return nil
+        }
+    }
+
     public static func probePDFInput(llm: any LLMProvider, modelID: String, calls: ProbeCallCounter? = nil) async -> ProbeFinding<Bool> {
         let code = CapabilityProbe.makeIdentifier()
         let pdf = ProbeFixtures.makePDF(code: code)

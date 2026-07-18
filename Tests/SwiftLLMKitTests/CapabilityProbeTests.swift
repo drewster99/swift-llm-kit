@@ -1382,3 +1382,113 @@ struct ChatReplayElisionTests {
         #expect(profile.pdfInput.status == .notAttempted)
     }
 }
+
+/// Efficiency set E3: one combined vision+PDF call, graded only on the double-positive.
+@Suite("Probe efficiency: merged vision+PDF probe")
+struct MergedVisionPDFTests {
+    /// Pulls the embedded code out of the PDF fixture's content stream ("(CODE) Tj").
+    private static func codeInPDF(_ messages: [LLMMessage]) -> String {
+        guard let doc = messages.compactMap(\.documents).flatMap({ $0 }).first,
+              let text = String(data: doc.data, encoding: .isoLatin1),
+              let range = text.range(of: #"\(([A-Z0-9]{9})\) Tj"#, options: .regularExpression) else { return "?" }
+        return String(text[range].dropFirst().dropLast(4))
+    }
+    /// Beats the random draw: names every colour and shape, so grading matches any fixture.
+    private static let allAnswers = "red green blue yellow triangle square circle"
+
+    private struct CombinedProvider: LLMProvider {
+        enum Style { case json, plainText, wrongCode, reject }
+        let style: Style
+        func send(messages: [LLMMessage], tools: [LLMToolDefinition], overrides: LLMCallOverrides) async throws -> LLMResponse {
+            let code = MergedVisionPDFTests.codeInPDF(messages)
+            switch style {
+            case .json:
+                return LLMResponse(text: #"{"shape": "triangle square circle", "color": "red green blue yellow", "pdf_code": "\#(code)"}"#)
+            case .plainText:
+                return LLMResponse(text: "I see a \(MergedVisionPDFTests.allAnswers). The PDF code is \(code).")
+            case .wrongCode:
+                return LLMResponse(text: #"{"shape": "triangle square circle", "color": "red green blue yellow", "pdf_code": "NOPE12345"}"#)
+            case .reject:
+                throw LLMProviderError.httpError(statusCode: 400, body: "too many attachments", url: nil, retryAfter: nil)
+            }
+        }
+    }
+
+    @Test("A JSON double-positive settles both findings in one call")
+    func jsonDoublePositive() async {
+        let result = await ModelProber.probeVisionAndPDF(llm: CombinedProvider(style: .json), modelID: "m")
+        #expect(result?.vision.value == true)
+        #expect(result?.pdf.value == true)
+        #expect(result?.vision.evidence?.contains("combined") == true)
+    }
+
+    @Test("A plain-text double-positive also settles — JSON is a request, not a requirement")
+    func plainTextDoublePositive() async {
+        let result = await ModelProber.probeVisionAndPDF(llm: CombinedProvider(style: .plainText), modelID: "m")
+        #expect(result?.vision.value == true)
+        #expect(result?.pdf.value == true)
+    }
+
+    @Test("Anything short of the double-positive grades nothing")
+    func partialGradesNothing() async {
+        let wrong = await ModelProber.probeVisionAndPDF(llm: CombinedProvider(style: .wrongCode), modelID: "m")
+        #expect(wrong == nil)
+        let rejected = await ModelProber.probeVisionAndPDF(llm: CombinedProvider(style: .reject), modelID: "m")
+        #expect(rejected == nil)
+    }
+
+    /// Through the full sweep: a model that rejects the two-attachment request but supports both
+    /// modalities individually must still end vision=true and pdf=true via the fallback probes.
+    @Test("Combined rejection falls back to the separate probes, never grading the failure")
+    func sweepFallsBackToSeparateProbes() async {
+        final class Log: @unchecked Sendable { var kinds: [String] = [] }
+        struct PickyProvider: LLMProvider {
+            let log: Log
+            func send(messages: [LLMMessage], tools: [LLMToolDefinition], overrides: LLMCallOverrides) async throws -> LLMResponse {
+                let images = messages.compactMap(\.images).flatMap { $0 }
+                let documents = messages.compactMap(\.documents).flatMap { $0 }
+                if !images.isEmpty && !documents.isEmpty {
+                    log.kinds.append("combined")
+                    throw LLMProviderError.httpError(statusCode: 400, body: "one attachment per request", url: nil, retryAfter: nil)
+                }
+                if !images.isEmpty {
+                    log.kinds.append("vision")
+                    return LLMResponse(text: MergedVisionPDFTests.allAnswers)
+                }
+                if !documents.isEmpty {
+                    log.kinds.append("pdf")
+                    return LLMResponse(text: MergedVisionPDFTests.codeInPDF(messages))
+                }
+                if (overrides.maxOutputTokens ?? 0) > 1_000_000 {
+                    log.kinds.append("maxout")
+                    throw LLMProviderError.httpError(statusCode: 400, body: "This model supports at most 4096 completion tokens", url: nil, retryAfter: nil)
+                }
+                if !tools.isEmpty {
+                    log.kinds.append("tools")
+                    let isFollowUp = messages.contains { if case .toolResult = $0.content { return true }; return false }
+                    if isFollowUp {
+                        let id = messages.compactMap { m -> String? in
+                            if case .toolResult(_, let c) = m.content { return c }; return nil
+                        }.first ?? ""
+                        return LLMResponse(text: id)
+                    }
+                    return LLMResponse(toolCalls: [LLMToolCall(id: "c1", name: "get_test_identifier", arguments: "{}")])
+                }
+                log.kinds.append("chat")
+                let nonce = messages.compactMap { m -> String? in
+                    if case .text(let t) = m.content, let last = t.split(separator: " ").last { return String(last) }
+                    return nil
+                }.last ?? ""
+                return LLMResponse(text: nonce)
+            }
+        }
+        let log = Log()
+        let profile = await ModelProber.probe(
+            llm: PickyProvider(log: log), seed: ModelProfile(providerID: "p", modelID: "picky"))
+        #expect(profile.vision.value == true)
+        #expect(profile.pdfInput.value == true)
+        #expect(log.kinds.filter { $0 == "combined" }.count == 1)
+        #expect(log.kinds.contains("vision"))
+        #expect(log.kinds.contains("pdf"))
+    }
+}
