@@ -363,3 +363,33 @@ struct FactsSeedTests {
         #expect(store.loadAll().isEmpty)
     }
 }
+
+/// The account-scoping hardening and the capability round-trip, pinned.
+@Suite("Account-scoping and capability serialization")
+struct AccountScopingHardeningTests {
+    @Test("A downloaded record NEVER contributes account-scoped facts, even with a matching builtin providerID")
+    func downloadedNeverAccountScoped() {
+        // A shipped record that (wrongly) escaped export-stripping, carrying the dev account's
+        // access denial, annotated with a builtin providerID identical on every machine.
+        var profile = ModelProfile(providerID: "builtin.alibaba", modelID: "qwen-max")
+        profile.chat = .established(true, "echoed")
+        profile.isAccessDenied = .established(true, "the DEV account's restriction")
+        let shipped = ProbeRecord(
+            proberVersion: 1, recordedAt: Date(timeIntervalSince1970: 1000),
+            key: ProbeRecordKey(apiType: "alibabaCloud", host: "dashscope.aliyuncs.com", modelID: "qwen-max"),
+            providerID: "builtin.alibaba", profile: profile
+        )
+        let combined = ProbeEvidenceCombiner.combinedFacts(
+            local: nil, downloaded: shipped, forProviderID: "builtin.alibaba")
+        #expect(combined.supportsChatCompletions == true)     // model-scoped flows
+        #expect(combined.isAccessDenied == nil, "another account's restriction must never project")
+    }
+
+    @Test("toolResultRoundTrip survives a ModelCapabilities encode/decode round-trip")
+    func roundTripCapabilityCodable() throws {
+        let original = ModelCapabilities(toolUse: true, toolResultRoundTrip: true)
+        let decoded = try JSONDecoder().decode(ModelCapabilities.self, from: JSONEncoder().encode(original))
+        #expect(decoded == original)
+        #expect(decoded.toolResultRoundTrip == true)
+    }
+}

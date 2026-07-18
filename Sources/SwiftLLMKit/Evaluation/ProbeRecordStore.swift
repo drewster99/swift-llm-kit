@@ -251,14 +251,20 @@ public enum ProbeEvidenceCombiner {
     /// probed by `providerID`'s own key; downloaded records never include them (export-stripped,
     /// and the gate here is the belt to that strip's suspenders).
     public static func combinedFacts(local: ProbeRecord?, downloaded: ProbeRecord?, forProviderID providerID: String) -> ModelFacts {
-        func facts(of record: ProbeRecord) -> ModelFacts {
-            record.profile.asEmpiricalFacts(includeAccountScoped: record.providerID == providerID)
+        // Account-scoped findings come ONLY from the LOCAL record, and only when it was probed by
+        // the composing provider's own key. A downloaded record never qualifies regardless of its
+        // providerID annotation — builtin provider IDs are identical on every machine, so a
+        // shipped record that escaped export-stripping would otherwise sail through the gate.
+        func facts(of record: ProbeRecord, isLocal: Bool) -> ModelFacts {
+            record.profile.asEmpiricalFacts(includeAccountScoped: isLocal && record.providerID == providerID)
         }
         switch (local, downloaded) {
         case (nil, nil):
             return ModelFacts()
-        case (let one?, nil), (nil, let one?):
-            return facts(of: one)
+        case (let localOnly?, nil):
+            return facts(of: localOnly, isLocal: true)
+        case (nil, let downloadedOnly?):
+            return facts(of: downloadedOnly, isLocal: false)
         case (let local?, let downloaded?):
             // A higher proberVersion beats a newer timestamp: a record from a FIXED prober
             // outranks a later run of a prober whose request-forming code was wrong (the
@@ -267,9 +273,12 @@ public enum ProbeEvidenceCombiner {
             // Same version → newest wins; ties → local wins.
             let localWins = (local.proberVersion, local.recordedAt.timeIntervalSince1970)
                 >= (downloaded.proberVersion, downloaded.recordedAt.timeIntervalSince1970)
-            let (newer, older) = localWins ? (local, downloaded) : (downloaded, local)
-            var combined = facts(of: newer)
-            let olderFacts = facts(of: older)
+            var combined = localWins
+                ? facts(of: local, isLocal: true)
+                : facts(of: downloaded, isLocal: false)
+            let olderFacts = localWins
+                ? facts(of: downloaded, isLocal: false)
+                : facts(of: local, isLocal: true)
             for field in ModelFactsFieldTable.fields
             where !field.isSet(combined) && field.isSet(olderFacts) {
                 field.copy(olderFacts, &combined)
