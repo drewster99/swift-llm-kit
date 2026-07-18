@@ -1650,10 +1650,26 @@ struct GeminiMethodLimitationTests {
         let body = "This model models/gemini-2.5-pro is no longer available to new users. Please update your code to use a newer model."
         #expect(!CapabilityProbe.textIndicatesModelGone(body))     // NOT global retirement
         #expect(CapabilityProbe.textIndicatesAccessDenied(body))   // account-scoped denial
-        // A bare "is no longer available" (full retirement) still reads as gone.
-        let retired = "This model models/gemini-2.0-flash is no longer available. Please update your code."
+        // A bare "is no longer available" (full retirement, even mentioning a "newer model")
+        // still reads as gone — the "newer" must not trip the new-user guard.
+        let retired = "This model models/gemini-2.0-flash is no longer available. Please update your code to use a newer model."
         #expect(CapabilityProbe.textIndicatesModelGone(retired))
         #expect(!CapabilityProbe.textIndicatesAccessDenied(retired))
+    }
+
+    /// Wording variants of the new-user restriction must all route to access-denied, not gone —
+    /// the guard matches "available to/for new", not one exact phrase (agy review).
+    @Test("New-user restriction wording variants all read as access-denied, not gone")
+    func newUserWordingVariants() {
+        let variants = [
+            "This model is no longer available to new users.",
+            "This model is no longer available for new projects.",
+            "models/X is no longer available to new API keys. Use a newer model.",
+        ]
+        for body in variants {
+            #expect(!CapabilityProbe.textIndicatesModelGone(body), "should not be gone: \(body)")
+            #expect(CapabilityProbe.textIndicatesAccessDenied(body), "should be access-denied: \(body)")
+        }
     }
 
     @Test("Through the temperature probe, a method-limitation 404 stays inconclusive (not gone)")

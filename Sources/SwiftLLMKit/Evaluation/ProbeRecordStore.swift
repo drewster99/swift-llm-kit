@@ -147,9 +147,15 @@ public struct ProbeRecordStore: Sendable {
     @discardableResult
     public func delete(forKey key: ProbeRecordKey) throws -> Bool {
         let url = directory.appendingPathComponent(key.fileName)
-        guard FileManager.default.fileExists(atPath: url.path) else { return false }
-        try FileManager.default.removeItem(at: url)
-        return true
+        // Try-and-catch rather than fileExists-then-remove: no check/use gap, and deletion is
+        // idempotent (an already-absent file returns false, not a throw).
+        do {
+            try FileManager.default.removeItem(at: url)
+            return true
+        } catch let error as NSError
+            where error.domain == NSCocoaErrorDomain && error.code == NSFileNoSuchFileError {
+            return false
+        }
     }
 
     public func record(forKey key: ProbeRecordKey) -> ProbeRecord? {
@@ -169,13 +175,11 @@ extension ModelProfile {
     /// Whether any finding was actually established BY PROBING — the completeness gate for
     /// persisting a run. Decoded findings don't count: they're echoes of a /models payload.
     public var hasEstablishedProbedFindings: Bool {
-        func counts(_ f: ProbeFinding<some Any>) -> Bool { f.status == .established && f.source == .probed }
-        return counts(chat) || counts(toolCalling) || counts(toolResultRoundTrip)
-            || counts(vision) || counts(pdfInput) || counts(acceptsTemperature)
-            || counts(maxOutputTokens) || counts(maxContextTokens)
-            || (maxOutputBoundedByContext.map(counts) ?? false)
-            || counts(isAvailable) || counts(isAccessDenied)
-            || effortLevels.values.contains { counts($0) }
+        func probed<T>(_ f: ProbeFinding<T>) -> Bool { f.status == .established && f.source == .probed }
+        // The CAPABILITY list lives ONLY in `hasProbedCapabilityFindings` (below) so the two can
+        // never drift; this adds the availability/access flags on top. When you add a probed
+        // finding to ModelProfile, add it there and both predicates stay correct.
+        return hasProbedCapabilityFindings || probed(isAvailable) || probed(isAccessDenied)
     }
 
     /// Pre-fills this seed with the established, probed findings from a PRIOR record so a
@@ -222,6 +226,10 @@ extension ModelProfile {
     /// availability flag holds no real capability measurement (e.g. a since-fixed bug that stamped
     /// isAvailable=false), so it is safe to prune when an authoritative payload supersedes it; a
     /// record with a true capability measurement is not.
+    ///
+    /// SINGLE SOURCE OF TRUTH for "which probed findings are capabilities": `hasEstablishedProbedFindings`
+    /// builds on this. When you add a probed capability to ModelProfile, add it HERE — forgetting
+    /// would let the prune delete a record that measured only the new capability.
     public var hasProbedCapabilityFindings: Bool {
         func probed<T>(_ f: ProbeFinding<T>) -> Bool { f.status == .established && f.source == .probed }
         return probed(chat) || probed(toolCalling) || probed(toolResultRoundTrip)
