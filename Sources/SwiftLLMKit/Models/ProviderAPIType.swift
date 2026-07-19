@@ -15,6 +15,28 @@ public enum ProviderAPIType: String, Codable, Sendable, CaseIterable, Equatable 
     case alibabaCloud
     case openRouter
 
+    // MARK: - Forgiving Codable
+    //
+    // The synthesized `String` decode THROWS on any raw value the running binary doesn't recognize.
+    // Because providers and configurations decode as ARRAYS, one unknown value fails the WHOLE array
+    // and drops every entry. That is exactly the 2026-07-19 "all providers vanished" incident: a
+    // persisted `providers.json` still held apiType `"metaLlama"` after that case was renamed to
+    // `metaModel`; `loadProviders()` threw, so `providersLoadedOK` went false, built-in seeding was
+    // skipped, and the entire provider list — built-in and custom alike — disappeared.
+    //
+    // Decode forgivingly instead: an unrecognized or legacy raw value falls back to
+    // `.openAICompatible`, which is how every non-native provider is already treated internally, so
+    // a single stale/newer value can never nuke the list again. Encoding stays the exact raw value.
+    public init(from decoder: any Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = ProviderAPIType(rawValue: raw) ?? .openAICompatible
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+
     /// Human-readable name for display.
     public var displayName: String {
         switch self {
