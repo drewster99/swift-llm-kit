@@ -104,6 +104,9 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
     public var maxInputTokens: Int?
     /// Override maximum output tokens.
     public var maxOutputTokens: Int?
+    /// Override the parameter-size label (e.g. "397B"). Curation for providers that don't report
+    /// it — Ollama Cloud's /api/tags omits parameter_size for cloud models.
+    public var sizeLabel: String?
     /// Override individual capabilities. Per-flag, not all-or-nothing.
     public var capabilities: ModelCapabilitiesOverride?
     /// Override pricing data. Replaces the entire pricing structure when set.
@@ -124,6 +127,7 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
         displayName: String? = nil,
         maxInputTokens: Int? = nil,
         maxOutputTokens: Int? = nil,
+        sizeLabel: String? = nil,
         capabilities: ModelCapabilitiesOverride? = nil,
         pricing: ModelPricing? = nil,
         supportsChatCompletions: Bool? = nil,
@@ -135,6 +139,7 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
         self.displayName = displayName
         self.maxInputTokens = maxInputTokens
         self.maxOutputTokens = maxOutputTokens
+        self.sizeLabel = sizeLabel
         self.capabilities = capabilities
         self.pricing = pricing
         self.supportsChatCompletions = supportsChatCompletions
@@ -160,6 +165,9 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
         }
         if let v = maxOutputTokens, (forceReplace || model.maxOutputTokens == nil) {
             model.maxOutputTokens = v
+        }
+        if let v = sizeLabel, (forceReplace || model.sizeLabel == nil) {
+            model.sizeLabel = v
         }
         if let v = pricing, (forceReplace || model.pricing == nil) {
             model.pricing = v

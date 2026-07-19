@@ -135,6 +135,7 @@ extension ModelMetadataOverride {
         facts.displayName = displayName
         facts.maxInputTokens = maxInputTokens
         facts.maxOutputTokens = maxOutputTokens
+        facts.sizeLabel = sizeLabel
         if let capabilities { facts.capabilities = capabilities }
         facts.pricing = pricing
         facts.supportsChatCompletions = supportsChatCompletions
