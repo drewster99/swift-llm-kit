@@ -67,12 +67,12 @@
       "liteLLMProviderName": null
     },
     {
-      "id": "builtin.metallama",
-      "displayName": "Meta Llama",
-      "apiType": "metaLlama",
-      "endpoint": "https://api.llama.com/v1",
+      "id": "builtin.meta-model-api",
+      "displayName": "Meta Model API",
+      "apiType": "metaModel",
+      "endpoint": "https://api.meta.ai/v1",
       "popular": false,
-      "liteLLMProviderName": "meta_llama"
+      "liteLLMProviderName": null
     },
     {
       "id": "builtin.mistral",

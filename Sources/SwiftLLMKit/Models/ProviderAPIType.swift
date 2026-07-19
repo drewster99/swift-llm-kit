@@ -11,7 +11,7 @@ public enum ProviderAPIType: String, Codable, Sendable, CaseIterable, Equatable 
     case lmStudio
     case xAI
     case zAI
-    case metaLlama
+    case metaModel
     case alibabaCloud
     case openRouter
 
@@ -27,7 +27,7 @@ public enum ProviderAPIType: String, Codable, Sendable, CaseIterable, Equatable 
         case .lmStudio: return "LM Studio"
         case .xAI: return "xAI (Grok)"
         case .zAI: return "z.ai"
-        case .metaLlama: return "Meta Llama"
+        case .metaModel: return "Meta Model API"
         case .alibabaCloud: return "Alibaba Cloud"
         case .openRouter: return "OpenRouter"
         }
@@ -40,7 +40,7 @@ public enum ProviderAPIType: String, Codable, Sendable, CaseIterable, Equatable 
             return 0...1
         case .gemini:
             return 0...2
-        case .openAICompatible, .xAI, .zAI, .mistral, .huggingFace, .metaLlama, .alibabaCloud, .openRouter:
+        case .openAICompatible, .xAI, .zAI, .mistral, .huggingFace, .metaModel, .alibabaCloud, .openRouter:
             return 0...2
         case .ollama, .lmStudio:
             // Ollama/LM Studio accept wide ranges; models may clip internally
@@ -82,8 +82,8 @@ public enum ProviderAPIType: String, Codable, Sendable, CaseIterable, Equatable 
                 EndpointPreset("z.ai (General)", "https://api.z.ai/api/paas/v4"),
                 EndpointPreset("z.ai (Coding)", "https://api.z.ai/api/coding/paas/v4"),
             ]
-        case .metaLlama:
-            return [EndpointPreset("Meta Llama", "https://api.llama.com/v1")]
+        case .metaModel:
+            return [EndpointPreset("Meta Model API", "https://api.meta.ai/v1")]
         case .alibabaCloud:
             return [
                 EndpointPreset("Alibaba Cloud (US)", "https://dashscope-us.aliyuncs.com/compatible-mode/v1"),

@@ -670,7 +670,7 @@ public final class LLMKitManager {
         case .ollama, .lmStudio:
             return true
         case .anthropic, .openAICompatible, .mistral, .gemini, .huggingFace,
-             .xAI, .zAI, .metaLlama, .alibabaCloud, .openRouter:
+             .xAI, .zAI, .metaModel, .alibabaCloud, .openRouter:
             return false
         }
     }
@@ -900,7 +900,7 @@ public final class LLMKitManager {
                 switch provider.apiType {
                 case .anthropic, .alibabaCloud:
                     return true   // Anthropic emits effort unconditionally; alibaba uses thinking_budget but effort field harmless
-                case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaLlama, .openRouter:
+                case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaModel, .openRouter:
                     return configFlags.supportsReasoningEffort
                 case .gemini, .ollama:
                     return false
@@ -1013,7 +1013,7 @@ public final class LLMKitManager {
         switch provider.apiType {
         case .anthropic:
             url = provider.endpoint.ensureAnthropicV1().appendingPathComponent("messages")
-        case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaLlama, .alibabaCloud, .openRouter:
+        case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaModel, .alibabaCloud, .openRouter:
             url = provider.endpoint.appendingPathComponent("chat/completions")
         case .ollama:
             url = provider.endpoint.appendingPathComponent("chat")
@@ -1041,7 +1041,7 @@ public final class LLMKitManager {
                 request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
             }
             request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaLlama, .alibabaCloud, .openRouter:
+        case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaModel, .alibabaCloud, .openRouter:
             if let apiKey, !apiKey.isEmpty {
                 request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
             }
@@ -1106,7 +1106,7 @@ public final class LLMKitManager {
             body["cache_control"] = config.extendedCacheTTL
                 ? ["type": "ephemeral", "ttl": "1h"] as [String: Any]
                 : ["type": "ephemeral"] as [String: Any]
-        case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaLlama, .alibabaCloud, .openRouter:
+        case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaModel, .alibabaCloud, .openRouter:
             // GPT-5.x and o-series reject `max_tokens` and require
             // `max_completion_tokens`. Bundled-defaults JSON flags affected models
             // with `useMaxCompletionTokens: true`; users override per-model. Used to
@@ -1289,7 +1289,7 @@ public final class LLMKitManager {
                 session: session,
                 behaviorFlags: flags
             )
-        case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaLlama, .alibabaCloud, .openRouter:
+        case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaModel, .alibabaCloud, .openRouter:
             // `parallel_tool_calls: true` is sent by default for every OpenAI-compatible
             // model — the agent loop pairs multi-call turns safely and most endpoints
             // default the param to true anyway, so the (unreliable) per-model catalog

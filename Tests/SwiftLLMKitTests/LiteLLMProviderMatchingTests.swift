@@ -189,7 +189,7 @@ struct BuiltInProviderMappingTests {
             "builtin.ollama-cloud": "ollama",
             "builtin.openrouter": "openrouter",
             "builtin.alibabacloud": "dashscope",    // Alibaba's API is DashScope
-            "builtin.metallama": "meta_llama",      // underscore is the upstream wire value
+            "builtin.meta-model-api": nil,          // Meta Model API (Muse Spark) — not in LiteLLM
             "builtin.huggingface": nil,             // LiteLLM catalogues none
             "builtin.lmstudio": nil                 // local, arbitrary models
         ]

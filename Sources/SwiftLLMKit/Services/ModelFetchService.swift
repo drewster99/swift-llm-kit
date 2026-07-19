@@ -47,7 +47,7 @@ public struct ModelFetchService: Sendable {
             modelsURL = provider.endpoint.appendingPathComponent("tags")
         case .anthropic:
             modelsURL = provider.endpoint.strippingAnthropicV1().appendingPathComponent("v1/models")
-        case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaLlama, .alibabaCloud, .openRouter:
+        case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaModel, .alibabaCloud, .openRouter:
             modelsURL = provider.endpoint.appendingPathComponent("models")
         case .gemini:
             // API key goes in the `x-goog-api-key` header below (not the query
@@ -78,7 +78,7 @@ public struct ModelFetchService: Sendable {
                 request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
             }
             request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaLlama, .alibabaCloud, .openRouter:
+        case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaModel, .alibabaCloud, .openRouter:
             if let apiKey, !apiKey.isEmpty {
                 request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
             }
@@ -128,7 +128,7 @@ public struct ModelFetchService: Sendable {
             decoded = try decodeOpenRouterFacts(from: data)
         case .huggingFace:
             decoded = try decodeHuggingFaceFacts(from: data)
-        case .openAICompatible, .lmStudio, .zAI, .metaLlama, .alibabaCloud:
+        case .openAICompatible, .lmStudio, .zAI, .metaModel, .alibabaCloud:
             decoded = try decodeOpenAIFacts(from: data)
         case .mistral:
             decoded = try decodeMistralFacts(from: data)
@@ -585,7 +585,7 @@ public struct ModelFetchService: Sendable {
         case .xAI: return try decodeXAIFacts(from: data)
         case .openRouter: return try decodeOpenRouterFacts(from: data)
         case .huggingFace: return try decodeHuggingFaceFacts(from: data)
-        case .openAICompatible, .lmStudio, .zAI, .metaLlama, .alibabaCloud: return try decodeOpenAIFacts(from: data)
+        case .openAICompatible, .lmStudio, .zAI, .metaModel, .alibabaCloud: return try decodeOpenAIFacts(from: data)
         case .mistral: return try decodeMistralFacts(from: data)
         case .gemini: return try decodeGeminiFacts(from: data)
         }

@@ -43,7 +43,7 @@ public enum BuiltInProviders {
         public static let alibabaCloud = "builtin.alibabacloud"
         public static let huggingFace = "builtin.huggingface"
         public static let lmStudio = "builtin.lmstudio"
-        public static let metaLlama = "builtin.metallama"
+        public static let metaModel = "builtin.meta-model-api"
         public static let mistral = "builtin.mistral"
         public static let ollama = "builtin.ollama"
         public static let ollamaCloud = "builtin.ollama-cloud"
