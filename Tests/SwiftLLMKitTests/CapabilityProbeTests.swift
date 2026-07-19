@@ -1722,3 +1722,23 @@ struct OllamaCloudRetiredTests {
         #expect(!CapabilityProbe.textIndicatesModelGone("the 'best_of' parameter is retired; use 'n' instead"))
     }
 }
+
+/// z.ai states the exact max-output cap in its rejection ("范围[1,131072]"); it must be parsed as
+/// an EXACT limit (one call), not just a search hint (9-call binary search).
+@Suite("z.ai max-output exact limit")
+struct ZAIMaxOutputTests {
+    @Test("The Chinese max_tokens range parses as the exact output limit")
+    func zaiRangeIsExact() {
+        let body = #"{"error":{"code":"1210","message":"The max_tokens parameter is illegal.：限制数值范围[1,131072]"}}"#
+        #expect(LLMProviderError.reportedMaxOutputTokenLimit(inBody: body) == 131072)
+        let air = #"{"error":{"code":"1210","message":"The max_tokens parameter is illegal.：限制数值范围[1,98304]"}}"#
+        #expect(LLMProviderError.reportedMaxOutputTokenLimit(inBody: air) == 98304)
+    }
+
+    @Test("A context-length range (no max_tokens mention) is NOT read as an output cap here")
+    func contextRangeNotMatched() {
+        // A bare range without the max_tokens context must not be mistaken for the output cap.
+        let context = #"{"error":{"message":"context 范围[1,200000]"}}"#
+        #expect(LLMProviderError.reportedMaxOutputTokenLimit(inBody: context) == nil)
+    }
+}

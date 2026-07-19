@@ -99,6 +99,12 @@ public enum LLMProviderError: Error, LocalizedError {
             // 2026-07-18 log audit, each escalating to a full binary search that tripped the
             // account rate limit mid-run.
             "range of max_(?:completion_)?tokens should be *\\[ *\\d+ *, *(\\d+) *\\]",
+            // z.ai / BigModel: "The max_tokens parameter is illegal.：限制数值范围[1,131072]" — the
+            // range's top IS the exact max-output cap (it's a max_tokens range, not context). Was
+            // only a reportedLimitHint, so every z.ai GLM model burned a 9-call binary search to
+            // approximate a value the rejection states exactly. Require the max_tokens mention so a
+            // context-length range can never match here.
+            "max_(?:completion_)?tokens.{0,80}?(?:范围|range) *\\[ *\\d+ *, *(\\d+) *\\]",
             // HuggingFace router: "max_tokens (current value: 100000000) must be between 0 and
             // 65536" — some builds backtick-quote the parameter name.
             "max_(?:completion_)?tokens`? *\\(current value: *\\d+\\) *must be between *\\d+ *and *(\\d+)",
