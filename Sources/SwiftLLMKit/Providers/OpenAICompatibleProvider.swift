@@ -362,6 +362,44 @@ struct OpenAICompatibleProvider: LLMProvider {
         return GLMTemplateSalvage.strip(text)
     }
 
+    /// Splits an OpenAI-compatible `content` field into answer text and any inline reasoning.
+    ///
+    /// A plain string is the answer, with no inline reasoning. An array is the block form some
+    /// reasoning models use: each element carries a `type` — `"text"` blocks are the answer,
+    /// `"thinking"`/`"reasoning"` blocks are the chain of thought (their text nested one level
+    /// deeper in a `thinking`/`reasoning` array of `{text,type}` pieces). Answer blocks are
+    /// concatenated in order; reasoning blocks are joined with newlines. Any block carrying a
+    /// top-level `text` that isn't a thinking block counts as answer text, so an unrecognized
+    /// block shape degrades to keeping the answer rather than dropping it.
+    static func extractContent(_ content: Any?) -> (text: String?, reasoning: String?) {
+        if let string = content as? String {
+            return (string, nil)
+        }
+        guard let blocks = content as? [[String: Any]] else {
+            return (nil, nil)
+        }
+        var textParts: [String] = []
+        var reasoningParts: [String] = []
+        for block in blocks {
+            let type = block["type"] as? String
+            if type == "thinking" || type == "reasoning" {
+                if let inner = (block["thinking"] as? [[String: Any]]) ?? (block["reasoning"] as? [[String: Any]]) {
+                    for piece in inner {
+                        if let value = piece["text"] as? String { reasoningParts.append(value) }
+                    }
+                } else if let value = block["text"] as? String {
+                    reasoningParts.append(value)
+                }
+            } else if let value = block["text"] as? String {
+                textParts.append(value)
+            }
+        }
+        return (
+            text: textParts.isEmpty ? nil : textParts.joined(),
+            reasoning: reasoningParts.isEmpty ? nil : reasoningParts.joined(separator: "\n")
+        )
+    }
+
     func parseResponse(data: Data) throws -> LLMResponse {
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             let preview = String(data: data.prefix(500), encoding: .utf8) ?? "(non-utf8, \(data.count) bytes)"
@@ -378,10 +416,18 @@ struct OpenAICompatibleProvider: LLMProvider {
             throw LLMProviderError.malformedResponse(detail: "missing choices[0].message, keys: [\(keys)], body: \(preview)")
         }
 
-        var text = message["content"] as? String
+        // Most hosts send `content` as a plain string, but reasoning models on some
+        // OpenAI-compatible hosts (Mistral's magistral family) send an ARRAY of typed
+        // blocks instead — a `{"type":"text",...}` answer block beside a
+        // `{"type":"thinking",...}` chain-of-thought block. A bare `as? String` misses
+        // the array form entirely, dropping the answer and leaving callers with an empty
+        // response. `extractContent` handles both shapes.
+        let (parsedText, inlineReasoning) = Self.extractContent(message["content"])
+        var text = parsedText
         // DeepSeek-style hosts emit the reasoning channel as `reasoning_content`;
-        // others (ollama.com's glm-5.x, some vLLM builds) use `reasoning`.
-        let reasoningContent = (message["reasoning_content"] as? String) ?? (message["reasoning"] as? String)
+        // others (ollama.com's glm-5.x, some vLLM builds) use `reasoning`; magistral puts
+        // it inline in the content array, surfaced here as `inlineReasoning`.
+        let reasoningContent = (message["reasoning_content"] as? String) ?? (message["reasoning"] as? String) ?? inlineReasoning
         let toolCallsRaw = message["tool_calls"] as? [[String: Any]]
 
         var toolCalls: [LLMToolCall] = []
