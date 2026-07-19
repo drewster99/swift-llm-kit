@@ -363,7 +363,7 @@ public enum ModelProber {
         } catch {
             let detail = CapabilityProbe.rejectionDetail(error)
             let lowered = detail.lowercased()
-            if CapabilityProbe.classifyFailure(error) != .noAnswer,
+            if !CapabilityProbe.classifyFailure(error).meansNoAnswer,
                rejectionKeywords.contains(where: { lowered.contains($0.lowercased()) }) {
                 return .established(false, detail, duration: Date().timeIntervalSince(started))
             }
@@ -411,7 +411,7 @@ public enum ModelProber {
             // transport failure / rate limit / auth / missing-model error that merely contains the
             // word "temperature" establishes nothing — and re-probing chat without temperature would
             // just fail the same way. Treat those like any other non-temperature failure.
-            let namesTemperature = CapabilityProbe.classifyFailure(error) != .noAnswer
+            let namesTemperature = !CapabilityProbe.classifyFailure(error).meansNoAnswer
                 && detail.lowercased().contains("temperature")
             guard namesTemperature else {
                 // Not a temperature problem — chat failed for some other reason, and we learned
@@ -483,7 +483,7 @@ public enum ModelProber {
             // Only a genuine refusal (a coherent 4xx) that NAMES temperature is a "no". A transport
             // failure, rate limit, missing model, or auth error that merely happens to contain the
             // word "temperature" establishes nothing.
-            if CapabilityProbe.classifyFailure(error) != .noAnswer, detail.lowercased().contains("temperature") {
+            if !CapabilityProbe.classifyFailure(error).meansNoAnswer, detail.lowercased().contains("temperature") {
                 return .established(false, detail, duration: Date().timeIntervalSince(started))
             }
             return .inconclusive(detail, duration: Date().timeIntervalSince(started))
@@ -671,7 +671,7 @@ public enum ModelProber {
             return .established(false, "zero image quota — the endpoint accepts no image input: \(detail)", duration: dur)
         }
         switch CapabilityProbe.classifyFailure(error) {
-        case .noAnswer:
+        case .noAnswer, .paymentRequired:
             return .inconclusive(detail, duration: dur)
         case .refusedTools, .refusedOurRequest:
             // A plain chat call to this model works; the \(attachment) is the only added variable.
@@ -713,8 +713,8 @@ public enum ModelProber {
             if let limit = (error as? LLMProviderError)?.reportedMaxOutputTokenLimit {
                 return MaxOutputProbeResult(cap: .established(limit, "endpoint reported its maximum", duration: dur))
             }
-            // A non-4xx failure says nothing about the cap.
-            guard CapabilityProbe.classifyFailure(error) != .noAnswer else {
+            // A non-4xx failure (or payment-required) says nothing about the cap.
+            guard !CapabilityProbe.classifyFailure(error).meansNoAnswer else {
                 return MaxOutputProbeResult(cap: .inconclusive(CapabilityProbe.rejectionDetail(error), duration: dur))
             }
             // It rejected the absurd cap but didn't state the exact output limit in a form we
@@ -785,7 +785,7 @@ public enum ModelProber {
                                        tools: [], overrides: LLMCallOverrides(maxOutputTokens: value))
                 return true
             } catch {
-                return CapabilityProbe.classifyFailure(error) == .noAnswer ? nil : false
+                return CapabilityProbe.classifyFailure(error).meansNoAnswer ? nil : false
             }
         }
 
@@ -847,7 +847,7 @@ public enum ModelProber {
             let detail = CapabilityProbe.rejectionDetail(error)
             // A genuine refusal (coherent 4xx) naming effort/reasoning is a "no"; a transport/rate-
             // limit/auth/missing-model error that happens to mention "reasoning" establishes nothing.
-            if CapabilityProbe.classifyFailure(error) != .noAnswer,
+            if !CapabilityProbe.classifyFailure(error).meansNoAnswer,
                detail.lowercased().contains("effort") || detail.lowercased().contains("reasoning") {
                 return .established(false, detail, duration: Date().timeIntervalSince(started))
             }
@@ -879,7 +879,7 @@ public enum ModelProber {
             return .established(false, detail, duration: dur)
         }
         switch CapabilityProbe.classifyFailure(error) {
-        case .noAnswer:
+        case .noAnswer, .paymentRequired:
             return .inconclusive(detail, duration: dur)
         case .refusedTools, .refusedOurRequest:
             // Chat (no keywords): any 4xx that got here is the endpoint declining a plain request,

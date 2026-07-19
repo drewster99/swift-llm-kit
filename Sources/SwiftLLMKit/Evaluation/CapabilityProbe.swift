@@ -186,7 +186,7 @@ public enum CapabilityProbe {
                 return fail(.rejected, detail, forced: true)
             }
             switch Self.classifyFailure(error) {
-            case .noAnswer:
+            case .noAnswer, .paymentRequired:
                 logger.error("Probe \(modelID, privacy: .public): no answer — \(error.localizedDescription, privacy: .public)")
                 return fail(.inconclusive, detail, forced: true)
             case .refusedTools, .refusedOurRequest:
@@ -207,7 +207,7 @@ public enum CapabilityProbe {
                     switch Self.classifyFailure(error) {
                     case .refusedTools:
                         return fail(.rejected, retryDetail, forced: false)
-                    case .refusedOurRequest, .noAnswer:
+                    case .refusedOurRequest, .noAnswer, .paymentRequired:
                         // It refused, but not over tools — so we learned nothing about tools.
                         return fail(.inconclusive, retryDetail, forced: false)
                     }
@@ -255,7 +255,7 @@ public enum CapabilityProbe {
             // The call itself is already proven. A transport failure / rate limit on the tool-result
             // request leaves the round-trip UNRESOLVED (roundTripInconclusive), not failed — only a
             // coherent refusal of the result submission is evidence the round-trip doesn't work.
-            let verdict: ToolCallVerdict = Self.classifyFailure(error) == .noAnswer ? .roundTripInconclusive : .toolCallOnly
+            let verdict: ToolCallVerdict = Self.classifyFailure(error).meansNoAnswer ? .roundTripInconclusive : .toolCallOnly
             return ToolCallResult(
                 providerID: providerID, modelID: modelID, verdict: verdict,
                 toolChoiceForced: forced, expectedIdentifier: identifier,
@@ -286,6 +286,16 @@ public enum CapabilityProbe {
         case refusedOurRequest
         /// We never got an answer: timeout, rate limit, server fault.
         case noAnswer
+        /// HTTP 402 Payment Required — out of credits / a billing block. Like ``noAnswer`` it settles
+        /// NOTHING about the model (an empty wallet fails every call identically), but it's named so a
+        /// stalled probe reads as "add credits" instead of a fabricated capability "no".
+        case paymentRequired
+
+        /// Whether the call was never answered on the model's own merits, so it settles NOTHING and
+        /// must grade inconclusive. True for a plain no-answer (auth, rate limit, network, gone) and
+        /// for payment-required (out of credits) alike — neither reflects the model. Prefer this over
+        /// `== .noAnswer` at every grading site so payment-required can never leak a capability false.
+        public var meansNoAnswer: Bool { self == .noAnswer || self == .paymentRequired }
     }
 
     /// Classifies a failure, biased hard toward admitting ignorance.
@@ -309,11 +319,19 @@ public enum CapabilityProbe {
     ///   would disable a perfectly capable model because we couldn't reach it. (An access-denied
     ///   403 that names the model is still surfaced separately via ``textIndicatesAccessDenied``,
     ///   which the caller scans on the resulting inconclusive finding.)
+    /// - **402** payment required — out of credits / billing. Classified ``paymentRequired`` (which
+    ///   grades like `noAnswer`) so an empty wallet never gets written down as "not a chat model".
     static func classifyFailure(_ error: any Error) -> FailureKind {
-        let noAnswerCodes: Set<Int> = [401, 403, 404, 429]
         guard let providerError = error as? LLMProviderError,
-              case .httpError(let statusCode, let body, _, _) = providerError,
-              (400..<500).contains(statusCode), !noAnswerCodes.contains(statusCode) else {
+              case .httpError(let statusCode, let body, _, _) = providerError else {
+            return .noAnswer
+        }
+        // 402 Payment Required is a billing state, not a verdict on the model: out of credits fails
+        // every call the same way. Named distinctly so a probe that stalls here is diagnosable as
+        // "add credits" rather than misread as a capability refusal.
+        if statusCode == 402 { return .paymentRequired }
+        let noAnswerCodes: Set<Int> = [401, 403, 404, 429]
+        guard (400..<500).contains(statusCode), !noAnswerCodes.contains(statusCode) else {
             return .noAnswer
         }
         let lowered = body.lowercased()

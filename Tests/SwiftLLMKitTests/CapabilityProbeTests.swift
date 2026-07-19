@@ -73,6 +73,21 @@ struct CapabilityProbeGradingTests {
         #expect(CapabilityProbe.classifyFailure(httpError(429, "rate limit exceeded")) == .noAnswer)
     }
 
+    /// 402 Payment Required is an empty wallet, not a statement about the model — it fails every
+    /// call identically. It gets its own named case (so a stalled probe is diagnosable as "add
+    /// credits"), and `meansNoAnswer` groups it with `noAnswer` so no grading site can turn an
+    /// out-of-credits response into a fabricated capability "no". Before the fix, the 402 fell
+    /// through to the chat probe's `established(false)` and marked the model "not a chat model".
+    @Test("402 is paymentRequired, and meansNoAnswer treats it like noAnswer")
+    func paymentRequiredIsNamedButGradesLikeNoAnswer() {
+        #expect(CapabilityProbe.classifyFailure(httpError(402, "You have insufficient credits.")) == .paymentRequired)
+        #expect(CapabilityProbe.FailureKind.paymentRequired.meansNoAnswer)
+        #expect(CapabilityProbe.FailureKind.noAnswer.meansNoAnswer)
+        // A genuine capability refusal is NOT a no-answer — the distinction the grading sites rely on.
+        #expect(!CapabilityProbe.FailureKind.refusedTools.meansNoAnswer)
+        #expect(!CapabilityProbe.FailureKind.refusedOurRequest.meansNoAnswer)
+    }
+
     /// A 5xx is the endpoint breaking; a timeout is us not reaching it. Neither says anything.
     @Test("5xx and transport failures establish nothing")
     func serverAndTransportAreNoAnswer() {
@@ -877,6 +892,30 @@ struct UnreachableModelTests {
         #expect(profile.isAccessDenied.value == true)
         #expect(profile.vision.value != false)
         #expect(profile.toolCalling.value != false)
+    }
+
+    /// Out of credits mid-sweep must never fabricate a capability verdict. Before 402 was named
+    /// paymentRequired it fell through to the chat probe's established(false) and stamped a live,
+    /// capable model "not a chat model". The probe must stay inconclusive across the board.
+    @Test("A 402 out-of-credits response fabricates no capability falses")
+    func paymentRequiredHaltsWithoutFabricating() async {
+        struct BrokeProvider: LLMProvider {
+            func send(messages: [LLMMessage], tools: [LLMToolDefinition], overrides: LLMCallOverrides) async throws -> LLMResponse {
+                throw LLMProviderError.httpError(
+                    statusCode: 402,
+                    body: #"{"error":{"type":"insufficient_quota","message":"You have insufficient credits to run this request."}}"#,
+                    url: nil, retryAfter: nil)
+            }
+        }
+        var seed = ModelProfile(providerID: "builtin.openai", modelID: "gpt-5")
+        seed.chat = .decoded(true, "listed")
+        let profile = await ModelProber.probe(llm: BrokeProvider(), seed: seed)
+        // The model was never reached on its merits — nothing may be recorded as false.
+        #expect(profile.chat.value != false)
+        #expect(profile.toolCalling.value != false)
+        #expect(profile.vision.value != false)
+        #expect(profile.pdfInput.value != false)
+        #expect(profile.isAccessDenied.value != true)
     }
 }
 
