@@ -809,6 +809,15 @@ struct UnreachableModelTests {
         #expect(!CapabilityProbe.textIndicatesAccessDenied("temperature is out of range"))
     }
 
+    @Test("Mistral's labs_not_enabled 403 is recognized as access-denied, not model-gone")
+    func labsNotEnabledIsAccessDenied() {
+        let body = #"{"code":"1913","message":"Model labs-leanstral-1-5 is a Labs model. To use Labs models, an admin must enable them in your organization settings at https://admin.mistral.ai/plateforme/privacy.","type":"labs_not_enabled"}"#
+        #expect(CapabilityProbe.textIndicatesAccessDenied(body))
+        // It must NOT read as gone (checked first in the reachability gate) or as not-a-chat-model.
+        #expect(!CapabilityProbe.textIndicatesModelGone(body))
+        #expect(!CapabilityProbe.textIndicatesNotAChatModel(body))
+    }
+
     /// The exact bug from the field: chat decoded true, but every live call 404s "no longer
     /// available". The probe must halt with isAvailable=false and NOT record vision/pdf as false.
     @Test("A delisted-but-listed model halts as unavailable, fabricating no capability falses")
@@ -848,6 +857,26 @@ struct UnreachableModelTests {
         let profile = await ModelProber.probe(llm: DeniedProvider(), seed: seed)
         #expect(profile.isAccessDenied.value == true)
         #expect(profile.vision.value != false)
+    }
+
+    @Test("A Mistral Labs 403 halts with isAccessDenied=true (retained), not pruned")
+    func labsModelHaltsAsAccessDenied() async {
+        struct LabsProvider: LLMProvider {
+            func send(messages: [LLMMessage], tools: [LLMToolDefinition], overrides: LLMCallOverrides) async throws -> LLMResponse {
+                throw LLMProviderError.httpError(
+                    statusCode: 403,
+                    body: #"{"code":"1913","message":"Model labs-leanstral-1-5 is a Labs model. To use Labs models, an admin must enable them in your organization settings.","type":"labs_not_enabled"}"#,
+                    url: nil, retryAfter: nil)
+            }
+        }
+        var seed = ModelProfile(providerID: "builtin.mistral", modelID: "labs-leanstral-1-5")
+        seed.chat = .decoded(true, "listed")
+        let profile = await ModelProber.probe(llm: LabsProvider(), seed: seed)
+        // Retained as access-denied (a probed finding), the same as Alibaba's Model.AccessDenied,
+        // rather than falling through to chat inconclusive → no finding → pruned.
+        #expect(profile.isAccessDenied.value == true)
+        #expect(profile.vision.value != false)
+        #expect(profile.toolCalling.value != false)
     }
 }
 

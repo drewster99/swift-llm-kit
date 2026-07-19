@@ -421,7 +421,15 @@ public enum CapabilityProbe {
                 // API keys"). The model is live for grandfathered keys, so this is account-scoped
                 // access denial, not global retirement. Robust to wording variants, and "newer
                 // model" in a genuine-retirement message never contains "available to/for new".
-                "available to new", "available for new"]
+                "available to new", "available for new",
+                // Mistral gates preview "Labs" models behind an org setting: HTTP 403 "Model X is a
+                // Labs model. To use Labs models, an admin must enable them ..." (type
+                // labs_not_enabled). Same category as Alibaba's Model.AccessDenied — the model exists
+                // and this account simply hasn't been granted it — so surface it as access-denied and
+                // RETAIN the record, rather than letting the 403 fall through to noAnswer → chat
+                // inconclusive → pruned (the model then vanished from the catalog with no explanation).
+                // Match both the type code (stable) and the human phrase (survives a JSON reshape).
+                "labs_not_enabled", "admin must enable"]
             .contains { lowered.contains($0) }
     }
 
