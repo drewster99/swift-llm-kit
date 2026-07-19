@@ -28,6 +28,12 @@ struct OllamaLibraryScraperTests {
         #expect(OllamaLibraryScraper.contextTokens(from: "512K") == 524288)
         #expect(OllamaLibraryScraper.contextTokens(from: "8192") == 8192)     // bare number passes through
         #expect(OllamaLibraryScraper.contextTokens(from: "nonsense") == nil)
+        // Malformed values must degrade to nil, never trap on Int overflow (agy review).
+        #expect(OllamaLibraryScraper.contextTokens(from: "99999999999999999999T") == nil)
+        #expect(OllamaLibraryScraper.contextTokens(from: "infK") == nil)
+        #expect(OllamaLibraryScraper.contextTokens(from: "nanM") == nil)
+        // Exactly 2^63 after the ×1024 must be rejected (Int(2^63) traps), not admitted.
+        #expect(OllamaLibraryScraper.contextTokens(from: "9007199254740992K") == nil)
     }
 
     /// The real card structure: a `>Context</div>` / `>Size</div>` label div immediately followed

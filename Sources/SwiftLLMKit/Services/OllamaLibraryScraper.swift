@@ -73,7 +73,14 @@ public enum OllamaLibraryScraper {
         ]
         for unit in units where text.hasSuffix(unit.suffix) {
             guard let number = Double(text.dropLast()) else { return nil }
-            return Int((number * unit.multiplier).rounded())
+            let value = (number * unit.multiplier).rounded()
+            // A malformed page ("infK", a 30-digit number) would overflow Int and TRAP — a
+            // curation tool must degrade to nil, never crash the batch. `Int(String)` (the bare
+            // path below) already returns nil on overflow; the multiply path needs this guard.
+            // Strict `<`: Double(Int.max) rounds UP to 2^63 = Int.max + 1, so `<=` would admit a
+            // value that still traps in Int(...). The largest Double below 2^63 fits Int fine.
+            guard value.isFinite, value >= 0, value < Double(Int.max) else { return nil }
+            return Int(value)
         }
         // A bare number (no suffix) is already a token count.
         return Int(text.replacingOccurrences(of: ",", with: ""))
