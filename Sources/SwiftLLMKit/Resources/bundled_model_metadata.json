@@ -1,167 +1,350 @@
 {
-    "version": 2,
-    "description": "App-bundled model metadata overrides. Three lookup axes: `entries` (apiType/modelID), `providerEntries` (providerID/modelID), `providerDefaults` (providerID-wide). All gap-fill semantics — non-nil values fill nil/false slots, never downgrade.",
-
-    "entries": {
-        "zAI/glm-4-plus": {
-            "behaviorFlags": { "glmTemplateSalvage": true }
-        },
-        "zAI/glm-4-air": {
-            "behaviorFlags": { "glmTemplateSalvage": true }
-        },
-        "zAI/glm-4-airx": {
-            "behaviorFlags": { "glmTemplateSalvage": true }
-        },
-        "zAI/glm-4-flashx": {
-            "behaviorFlags": { "glmTemplateSalvage": true }
-        },
-        "zAI/glm-4-flash": {
-            "behaviorFlags": { "glmTemplateSalvage": true }
-        },
-        "zAI/glm-4.5": {
-            "behaviorFlags": { "glmTemplateSalvage": true }
-        },
-        "zAI/glm-4.5-air": {
-            "behaviorFlags": { "glmTemplateSalvage": true }
-        },
-        "zAI/glm-4.5v": {
-            "behaviorFlags": { "glmTemplateSalvage": true }
-        },
-        "zAI/glm-4.6": {
-            "behaviorFlags": { "glmTemplateSalvage": true }
-        },
-        "zAI/glm-5": {
-            "behaviorFlags": { "glmTemplateSalvage": true }
-        },
-        "zAI/glm-5-turbo": {
-            "behaviorFlags": { "glmTemplateSalvage": true }
-        },
-        "zAI/glm-5.1": {
-            "behaviorFlags": { "glmTemplateSalvage": true }
-        },
-
-        "openAICompatible/deepseek-v4-pro": {
-            "behaviorFlags": { "replayReasoningContent": true }
-        },
-
-        "anthropic/claude-opus-4-7": {
-            "_evidence": "Anthropic's adaptive-ONLY models (thinking.types.enabled.supported == false in /v1/models) BOTH require adaptive thinking AND reject `temperature` with HTTP 400. Verified live 2026-07-17 by capability probe: opus-4-8 rejects temperature; sonnet-4-6/opus-4-5 (enabled==true) accept it. Same set — {fable-5, sonnet-5, opus-4-8, opus-4-7}. ROADMAP: should be derived from the payload's enabled flag, not hand-listed.",
-            "behaviorFlags": { "requiresAdaptiveThinking": true, "mustNeverSendTemperatureParam": true }
-        },
-        "anthropic/claude-opus-4-8": {
-            "behaviorFlags": { "requiresAdaptiveThinking": true, "mustNeverSendTemperatureParam": true }
-        },
-        "anthropic/claude-sonnet-5": {
-            "behaviorFlags": { "requiresAdaptiveThinking": true, "mustNeverSendTemperatureParam": true }
-        },
-        "anthropic/claude-fable-5": {
-            "behaviorFlags": { "requiresAdaptiveThinking": true, "mustNeverSendTemperatureParam": true }
-        },
-
-        "openAICompatible/o1": {
-            "behaviorFlags": { "supportsReasoningEffort": true, "mustNeverSendTemperatureParam": true }
-        },
-        "openAICompatible/o1-preview": {
-            "behaviorFlags": { "supportsReasoningEffort": true, "mustNeverSendTemperatureParam": true }
-        },
-        "openAICompatible/o1-mini": {
-            "behaviorFlags": { "supportsReasoningEffort": true, "mustNeverSendTemperatureParam": true }
-        },
-        "openAICompatible/o3": {
-            "behaviorFlags": { "supportsReasoningEffort": true, "mustNeverSendTemperatureParam": true }
-        },
-        "openAICompatible/o3-mini": {
-            "behaviorFlags": { "supportsReasoningEffort": true, "mustNeverSendTemperatureParam": true }
-        },
-        "openAICompatible/o4-mini": {
-            "behaviorFlags": { "supportsReasoningEffort": true, "mustNeverSendTemperatureParam": true }
-        },
-        "openAICompatible/gpt-5": {
-            "behaviorFlags": { "supportsReasoningEffort": true, "mustNeverSendTemperatureParam": true }
-        },
-        "openAICompatible/gpt-5-mini": {
-            "behaviorFlags": { "supportsReasoningEffort": true, "mustNeverSendTemperatureParam": true }
-        },
-        "openAICompatible/gpt-5-pro": {
-            "behaviorFlags": { "supportsReasoningEffort": true, "mustNeverSendTemperatureParam": true }
-        }
-    },
-
-    "providerEntries": {
-        "builtin.openrouter/zhipu/glm-4-plus": {
-            "behaviorFlags": { "glmTemplateSalvage": true }
-        },
-        "builtin.openrouter/zhipu/glm-4.5": {
-            "behaviorFlags": { "glmTemplateSalvage": true }
-        },
-        "builtin.openrouter/zhipu/glm-4.5-air": {
-            "behaviorFlags": { "glmTemplateSalvage": true }
-        },
-        "builtin.openrouter/zhipu/glm-4.6": {
-            "behaviorFlags": { "glmTemplateSalvage": true }
-        },
-        "builtin.openrouter/zhipu/glm-5": {
-            "behaviorFlags": { "glmTemplateSalvage": true }
-        },
-        "builtin.ollama-cloud/glm-4-plus": {
-            "behaviorFlags": { "glmTemplateSalvage": true }
-        },
-        "builtin.ollama-cloud/glm-4.5": {
-            "behaviorFlags": { "glmTemplateSalvage": true }
-        },
-        "builtin.ollama-cloud/glm-4.6": {
-            "behaviorFlags": { "glmTemplateSalvage": true }
-        },
-        "builtin.ollama-cloud/glm-5": {
-            "behaviorFlags": { "glmTemplateSalvage": true }
-        },
-
-        "builtin.openrouter/anthropic/claude-opus-4-7": {
-            "_evidence": "requiresAdaptiveThinking mirrors the direct-Anthropic entry (a model property, so it holds wherever served). mustNeverSendTemperatureParam is deliberately NOT set here: it was proven against api.anthropic.com directly, and whether OpenRouter forwards temperature to Anthropic (and 400s) or strips it is untested.",
-            "behaviorFlags": { "requiresAdaptiveThinking": true }
-        },
-        "builtin.openrouter/anthropic/claude-opus-4-8": {
-            "behaviorFlags": { "requiresAdaptiveThinking": true }
-        },
-        "builtin.openrouter/anthropic/claude-sonnet-5": {
-            "behaviorFlags": { "requiresAdaptiveThinking": true }
-        },
-        "builtin.openrouter/anthropic/claude-fable-5": {
-            "behaviorFlags": { "requiresAdaptiveThinking": true }
-        },
-
-        "builtin.openrouter/openai/o1": {
-            "behaviorFlags": { "supportsReasoningEffort": true, "mustNeverSendTemperatureParam": true }
-        },
-        "builtin.openrouter/openai/o1-preview": {
-            "behaviorFlags": { "supportsReasoningEffort": true, "mustNeverSendTemperatureParam": true }
-        },
-        "builtin.openrouter/openai/o1-mini": {
-            "behaviorFlags": { "supportsReasoningEffort": true, "mustNeverSendTemperatureParam": true }
-        },
-        "builtin.openrouter/openai/o3": {
-            "behaviorFlags": { "supportsReasoningEffort": true, "mustNeverSendTemperatureParam": true }
-        },
-        "builtin.openrouter/openai/o3-mini": {
-            "behaviorFlags": { "supportsReasoningEffort": true, "mustNeverSendTemperatureParam": true }
-        },
-        "builtin.openrouter/openai/o4-mini": {
-            "behaviorFlags": { "supportsReasoningEffort": true, "mustNeverSendTemperatureParam": true }
-        },
-        "builtin.openrouter/openai/gpt-5": {
-            "behaviorFlags": { "supportsReasoningEffort": true, "mustNeverSendTemperatureParam": true }
-        },
-        "builtin.openrouter/openai/gpt-5-mini": {
-            "behaviorFlags": { "supportsReasoningEffort": true, "mustNeverSendTemperatureParam": true }
-        },
-        "builtin.openrouter/openai/gpt-5-pro": {
-            "behaviorFlags": { "supportsReasoningEffort": true, "mustNeverSendTemperatureParam": true }
-        }
-    },
-
-    "providerDefaults": {
-        "builtin.openai": {
-            "behaviorFlags": { "useMaxCompletionTokens": true }
-        }
-    }
+ "version": 2,
+ "description": "App-bundled model metadata overrides. Three lookup axes: `entries` (apiType/modelID), `providerEntries` (providerID/modelID), `providerDefaults` (providerID-wide). All gap-fill semantics — non-nil values fill nil/false slots, never downgrade.",
+ "entries": {
+  "zAI/glm-4-plus": {
+   "behaviorFlags": {
+    "glmTemplateSalvage": true
+   }
+  },
+  "zAI/glm-4-air": {
+   "behaviorFlags": {
+    "glmTemplateSalvage": true
+   }
+  },
+  "zAI/glm-4-airx": {
+   "behaviorFlags": {
+    "glmTemplateSalvage": true
+   }
+  },
+  "zAI/glm-4-flashx": {
+   "behaviorFlags": {
+    "glmTemplateSalvage": true
+   }
+  },
+  "zAI/glm-4-flash": {
+   "behaviorFlags": {
+    "glmTemplateSalvage": true
+   }
+  },
+  "zAI/glm-4.5": {
+   "behaviorFlags": {
+    "glmTemplateSalvage": true
+   }
+  },
+  "zAI/glm-4.5-air": {
+   "behaviorFlags": {
+    "glmTemplateSalvage": true
+   }
+  },
+  "zAI/glm-4.5v": {
+   "behaviorFlags": {
+    "glmTemplateSalvage": true
+   }
+  },
+  "zAI/glm-4.6": {
+   "behaviorFlags": {
+    "glmTemplateSalvage": true
+   }
+  },
+  "zAI/glm-5": {
+   "behaviorFlags": {
+    "glmTemplateSalvage": true
+   }
+  },
+  "zAI/glm-5-turbo": {
+   "behaviorFlags": {
+    "glmTemplateSalvage": true
+   }
+  },
+  "zAI/glm-5.1": {
+   "behaviorFlags": {
+    "glmTemplateSalvage": true
+   }
+  },
+  "openAICompatible/deepseek-v4-pro": {
+   "behaviorFlags": {
+    "replayReasoningContent": true
+   }
+  },
+  "anthropic/claude-opus-4-7": {
+   "_evidence": "Anthropic's adaptive-ONLY models (thinking.types.enabled.supported == false in /v1/models) BOTH require adaptive thinking AND reject `temperature` with HTTP 400. Verified live 2026-07-17 by capability probe: opus-4-8 rejects temperature; sonnet-4-6/opus-4-5 (enabled==true) accept it. Same set — {fable-5, sonnet-5, opus-4-8, opus-4-7}. ROADMAP: should be derived from the payload's enabled flag, not hand-listed.",
+   "behaviorFlags": {
+    "requiresAdaptiveThinking": true,
+    "mustNeverSendTemperatureParam": true
+   }
+  },
+  "anthropic/claude-opus-4-8": {
+   "behaviorFlags": {
+    "requiresAdaptiveThinking": true,
+    "mustNeverSendTemperatureParam": true
+   }
+  },
+  "anthropic/claude-sonnet-5": {
+   "behaviorFlags": {
+    "requiresAdaptiveThinking": true,
+    "mustNeverSendTemperatureParam": true
+   }
+  },
+  "anthropic/claude-fable-5": {
+   "behaviorFlags": {
+    "requiresAdaptiveThinking": true,
+    "mustNeverSendTemperatureParam": true
+   }
+  },
+  "openAICompatible/o1": {
+   "behaviorFlags": {
+    "supportsReasoningEffort": true,
+    "mustNeverSendTemperatureParam": true
+   }
+  },
+  "openAICompatible/o1-preview": {
+   "behaviorFlags": {
+    "supportsReasoningEffort": true,
+    "mustNeverSendTemperatureParam": true
+   }
+  },
+  "openAICompatible/o1-mini": {
+   "behaviorFlags": {
+    "supportsReasoningEffort": true,
+    "mustNeverSendTemperatureParam": true
+   }
+  },
+  "openAICompatible/o3": {
+   "behaviorFlags": {
+    "supportsReasoningEffort": true,
+    "mustNeverSendTemperatureParam": true
+   }
+  },
+  "openAICompatible/o3-mini": {
+   "behaviorFlags": {
+    "supportsReasoningEffort": true,
+    "mustNeverSendTemperatureParam": true
+   }
+  },
+  "openAICompatible/o4-mini": {
+   "behaviorFlags": {
+    "supportsReasoningEffort": true,
+    "mustNeverSendTemperatureParam": true
+   }
+  },
+  "openAICompatible/gpt-5": {
+   "behaviorFlags": {
+    "supportsReasoningEffort": true,
+    "mustNeverSendTemperatureParam": true
+   }
+  },
+  "openAICompatible/gpt-5-mini": {
+   "behaviorFlags": {
+    "supportsReasoningEffort": true,
+    "mustNeverSendTemperatureParam": true
+   }
+  },
+  "openAICompatible/gpt-5-pro": {
+   "behaviorFlags": {
+    "supportsReasoningEffort": true,
+    "mustNeverSendTemperatureParam": true
+   }
+  }
+ },
+ "providerEntries": {
+  "builtin.openrouter/zhipu/glm-4-plus": {
+   "behaviorFlags": {
+    "glmTemplateSalvage": true
+   }
+  },
+  "builtin.openrouter/zhipu/glm-4.5": {
+   "behaviorFlags": {
+    "glmTemplateSalvage": true
+   }
+  },
+  "builtin.openrouter/zhipu/glm-4.5-air": {
+   "behaviorFlags": {
+    "glmTemplateSalvage": true
+   }
+  },
+  "builtin.openrouter/zhipu/glm-4.6": {
+   "behaviorFlags": {
+    "glmTemplateSalvage": true
+   }
+  },
+  "builtin.openrouter/zhipu/glm-5": {
+   "behaviorFlags": {
+    "glmTemplateSalvage": true
+   }
+  },
+  "builtin.ollama-cloud/glm-4-plus": {
+   "behaviorFlags": {
+    "glmTemplateSalvage": true
+   }
+  },
+  "builtin.ollama-cloud/glm-4.5": {
+   "behaviorFlags": {
+    "glmTemplateSalvage": true
+   }
+  },
+  "builtin.ollama-cloud/glm-4.6": {
+   "behaviorFlags": {
+    "glmTemplateSalvage": true
+   }
+  },
+  "builtin.ollama-cloud/glm-5": {
+   "behaviorFlags": {
+    "glmTemplateSalvage": true
+   }
+  },
+  "builtin.openrouter/anthropic/claude-opus-4-7": {
+   "_evidence": "requiresAdaptiveThinking mirrors the direct-Anthropic entry (a model property, so it holds wherever served). mustNeverSendTemperatureParam is deliberately NOT set here: it was proven against api.anthropic.com directly, and whether OpenRouter forwards temperature to Anthropic (and 400s) or strips it is untested.",
+   "behaviorFlags": {
+    "requiresAdaptiveThinking": true
+   }
+  },
+  "builtin.openrouter/anthropic/claude-opus-4-8": {
+   "behaviorFlags": {
+    "requiresAdaptiveThinking": true
+   }
+  },
+  "builtin.openrouter/anthropic/claude-sonnet-5": {
+   "behaviorFlags": {
+    "requiresAdaptiveThinking": true
+   }
+  },
+  "builtin.openrouter/anthropic/claude-fable-5": {
+   "behaviorFlags": {
+    "requiresAdaptiveThinking": true
+   }
+  },
+  "builtin.openrouter/openai/o1": {
+   "behaviorFlags": {
+    "supportsReasoningEffort": true,
+    "mustNeverSendTemperatureParam": true
+   }
+  },
+  "builtin.openrouter/openai/o1-preview": {
+   "behaviorFlags": {
+    "supportsReasoningEffort": true,
+    "mustNeverSendTemperatureParam": true
+   }
+  },
+  "builtin.openrouter/openai/o1-mini": {
+   "behaviorFlags": {
+    "supportsReasoningEffort": true,
+    "mustNeverSendTemperatureParam": true
+   }
+  },
+  "builtin.openrouter/openai/o3": {
+   "behaviorFlags": {
+    "supportsReasoningEffort": true,
+    "mustNeverSendTemperatureParam": true
+   }
+  },
+  "builtin.openrouter/openai/o3-mini": {
+   "behaviorFlags": {
+    "supportsReasoningEffort": true,
+    "mustNeverSendTemperatureParam": true
+   }
+  },
+  "builtin.openrouter/openai/o4-mini": {
+   "behaviorFlags": {
+    "supportsReasoningEffort": true,
+    "mustNeverSendTemperatureParam": true
+   }
+  },
+  "builtin.openrouter/openai/gpt-5": {
+   "behaviorFlags": {
+    "supportsReasoningEffort": true,
+    "mustNeverSendTemperatureParam": true
+   }
+  },
+  "builtin.openrouter/openai/gpt-5-mini": {
+   "behaviorFlags": {
+    "supportsReasoningEffort": true,
+    "mustNeverSendTemperatureParam": true
+   }
+  },
+  "builtin.openrouter/openai/gpt-5-pro": {
+   "behaviorFlags": {
+    "supportsReasoningEffort": true,
+    "mustNeverSendTemperatureParam": true
+   }
+  },
+  "builtin.ollama-cloud/deepseek-v4-flash": {
+   "maxInputTokens": 1048576,
+   "sizeLabel": "158B"
+  },
+  "builtin.ollama-cloud/deepseek-v4-pro": {
+   "maxInputTokens": 1048576,
+   "sizeLabel": "1.6T"
+  },
+  "builtin.ollama-cloud/gemma4:31b": {
+   "maxInputTokens": 262144,
+   "sizeLabel": "31B"
+  },
+  "builtin.ollama-cloud/glm-5.1": {
+   "maxInputTokens": 202752,
+   "sizeLabel": "756B"
+  },
+  "builtin.ollama-cloud/glm-5.2": {
+   "maxInputTokens": 999424,
+   "sizeLabel": "756B"
+  },
+  "builtin.ollama-cloud/gpt-oss:120b": {
+   "maxInputTokens": 131072,
+   "sizeLabel": "120B"
+  },
+  "builtin.ollama-cloud/gpt-oss:20b": {
+   "maxInputTokens": 131072,
+   "sizeLabel": "20B"
+  },
+  "builtin.ollama-cloud/kimi-k2.5": {
+   "maxInputTokens": 262144,
+   "sizeLabel": "1.04T"
+  },
+  "builtin.ollama-cloud/kimi-k2.6": {
+   "maxInputTokens": 262144,
+   "sizeLabel": "1.04T"
+  },
+  "builtin.ollama-cloud/kimi-k2.7-code": {
+   "maxInputTokens": 262144,
+   "sizeLabel": "1.04T"
+  },
+  "builtin.ollama-cloud/minimax-m2.5": {
+   "maxInputTokens": 202752,
+   "sizeLabel": "230B"
+  },
+  "builtin.ollama-cloud/minimax-m2.7": {
+   "maxInputTokens": 204800,
+   "sizeLabel": "229B"
+  },
+  "builtin.ollama-cloud/minimax-m3": {
+   "maxInputTokens": 524288
+  },
+  "builtin.ollama-cloud/mistral-large-3:675b": {
+   "maxInputTokens": 262144,
+   "sizeLabel": "675B"
+  },
+  "builtin.ollama-cloud/nemotron-3-nano:30b": {
+   "maxInputTokens": 1048576,
+   "sizeLabel": "30B"
+  },
+  "builtin.ollama-cloud/nemotron-3-super": {
+   "maxInputTokens": 262144,
+   "sizeLabel": "120B"
+  },
+  "builtin.ollama-cloud/nemotron-3-ultra": {
+   "maxInputTokens": 262144,
+   "sizeLabel": "550B"
+  },
+  "builtin.ollama-cloud/qwen3.5:397b": {
+   "maxInputTokens": 262144,
+   "sizeLabel": "397B"
+  }
+ },
+ "providerDefaults": {
+  "builtin.openai": {
+   "behaviorFlags": {
+    "useMaxCompletionTokens": true
+   }
+  }
+ }
 }
