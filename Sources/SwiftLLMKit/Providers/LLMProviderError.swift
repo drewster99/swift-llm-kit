@@ -140,7 +140,24 @@ public enum LLMProviderError: Error, LocalizedError {
     /// model's output ceiling. Callers use this to recognize that situation and decline to
     /// search rather than to tighten one.
     public static func reportedContextLengthBound(inBody body: String) -> Int? {
-        Self.firstCapture(in: body, patterns: ["context length is *(\\d+)"])
+        // Both phrasings the HF router uses: "maximum context length is N tokens" and "maximum
+        // context length of N" ("Requested token count exceeds the model's maximum context length
+        // of 131072 tokens"). The 2026-07-19 audit found the "of" form ignored — the classifier only
+        // matched "is" — so the search ran and recorded context-minus-input as an output cap.
+        Self.firstCapture(in: body, patterns: ["context length (?:is|of) *(\\d+)"])
+    }
+
+    /// The absolute `max_tokens` PARAMETER ceiling a router enforces regardless of model — a generic
+    /// value-range validation on the parameter itself, e.g. deepinfra's "Input should be less than
+    /// or equal to 10000000". This is the ROUTER's cap on the parameter, NOT the model's output
+    /// capacity, so it must never be recorded as a max-output limit: a binary search against it
+    /// converges to ~10M on a model that emits a few dozen tokens (the 2026-07-19 HuggingFace audit
+    /// found exactly this on all 42 `:deepinfra` records). Callers recognize it and decline to search.
+    ///
+    /// Kept distinct from ``reportedMaxOutputTokenLimit(inBody:)`` — a model's real cap arrives as
+    /// "must be between 0 and N" / "supports at most N", never as this pydantic-style range check.
+    public static func reportedParameterCeiling(inBody body: String) -> Int? {
+        Self.firstCapture(in: body, patterns: ["input should be less than or equal to *(\\d+)"])
     }
 
     /// First capture group of the first matching pattern (case-insensitive), as an Int.

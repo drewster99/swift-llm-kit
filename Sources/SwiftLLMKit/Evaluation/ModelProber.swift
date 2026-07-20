@@ -322,7 +322,7 @@ public enum ModelProber {
         //    either an output cap OR a context-bound outcome has been settled.
         if profile.maxOutputTokens.status == .notAttempted,
            (profile.maxOutputBoundedByContext?.status ?? .notAttempted) == .notAttempted {
-            let result = await probeMaxOutputTokens(llm: llm, modelID: modelID, calls: calls)
+            let result = await probeMaxOutputTokens(llm: llm, modelID: modelID, calls: calls, maxContextTokens: profile.maxContextTokens.value)
             profile.maxOutputTokens = result.cap
             profile.maxOutputBoundedByContext = result.contextBound
         }
@@ -694,8 +694,15 @@ public enum ModelProber {
         public var contextBound: ProbeFinding<Int>?
     }
 
+    /// A searched max-output value within this many tokens of the context window is treated as
+    /// context-bound (the search converged to context-minus-input), not a per-model output cap. A
+    /// genuine distinct cap sits a round fraction of context BELOW the window (thousands+ of tokens
+    /// of gap); the masquerade gap is only the probe's own input size (hundreds of tokens).
+    static let contextBoundMargin = 2048
+
     public static func probeMaxOutputTokens(
-        llm: any LLMProvider, modelID: String, calls: ProbeCallCounter? = nil, allowBinarySearch: Bool = true
+        llm: any LLMProvider, modelID: String, calls: ProbeCallCounter? = nil,
+        maxContextTokens: Int? = nil, allowBinarySearch: Bool = true
     ) async -> MaxOutputProbeResult {
         let absurd = 100_000_000
         let started = Date()
@@ -716,6 +723,21 @@ public enum ModelProber {
             // A non-4xx failure (or payment-required) says nothing about the cap.
             guard !CapabilityProbe.classifyFailure(error).meansNoAnswer else {
                 return MaxOutputProbeResult(cap: .inconclusive(CapabilityProbe.rejectionDetail(error), duration: dur))
+            }
+            // The rejection may state the ROUTER's absolute max_tokens PARAMETER ceiling (deepinfra:
+            // "Input should be less than or equal to 10000000") rather than the model's output cap.
+            // Searching against it converges to ~10M on a model that emits a few dozen tokens (the
+            // 2026-07-19 audit's 42 :deepinfra records), so don't search — record the real physical
+            // bound (context) when known, else inconclusive.
+            if let providerError = error as? LLMProviderError,
+               case .httpError(_, let body, _, _) = providerError,
+               LLMProviderError.reportedParameterCeiling(inBody: body) != nil {
+                if let ctx = maxContextTokens {
+                    return MaxOutputProbeResult(
+                        cap: .inconclusive("endpoint caps only the max_tokens parameter (router limit), not the model's output; output is bounded by context (\(ctx))", duration: dur),
+                        contextBound: .established(ctx, "endpoint enforces only a router max_tokens ceiling; output is bounded by its context length", duration: dur))
+                }
+                return MaxOutputProbeResult(cap: .inconclusive("endpoint caps only the max_tokens parameter (router limit), not the model's output; context unknown", duration: dur))
             }
             // It rejected the absurd cap but didn't state the exact output limit in a form we
             // parse. Find the ceiling empirically — the same "max_tokens is the only variable"
@@ -747,7 +769,20 @@ public enum ModelProber {
                             duration: Date().timeIntervalSince(started)))
                 }
             }
-            return MaxOutputProbeResult(cap: await binarySearchMaxOutput(llm: llm, knownGood: 512, knownBad: knownBad, calls: calls, started: started))
+            let searchResult = await binarySearchMaxOutput(llm: llm, knownGood: 512, knownBad: knownBad, calls: calls, started: started)
+            // Sanity net for routers that reject WITHOUT a parseable message (nscale's "Failed to
+            // process request", together's "Input validation error"): a searched value at or within an
+            // input-sized margin of the context window is the endpoint bounding output by CONTEXT, not
+            // a per-model cap — the search converged to context-minus-input. Record it context-bound
+            // rather than a fabricated (often impossible, output>context) output ceiling. Only the
+            // SEARCHED path is guarded; an endpoint-STATED exact limit is trusted over a possibly-stale
+            // decoded context window.
+            if let ctx = maxContextTokens, let capValue = searchResult.value, capValue >= ctx - Self.contextBoundMargin {
+                return MaxOutputProbeResult(
+                    cap: .inconclusive("search reached the context window (\(capValue) vs context \(ctx)); no independent output cap", duration: Date().timeIntervalSince(started)),
+                    contextBound: .established(ctx, "output bounded by context length (search converged to the context ceiling)", duration: Date().timeIntervalSince(started)))
+            }
+            return MaxOutputProbeResult(cap: searchResult)
         }
     }
 
