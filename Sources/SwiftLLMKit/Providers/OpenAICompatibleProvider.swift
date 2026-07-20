@@ -66,6 +66,14 @@ struct OpenAICompatibleProvider: LLMProvider {
         }
 
         let body = buildRequestBody(messages: messages, tools: tools, overrides: overrides)
+        // A non-finite Double (NaN/±Inf) reaching JSONSerialization raises an NSException that
+        // `try` cannot convert to a Swift error — it aborts the process. Sampling params
+        // (temperature/top_p/penalties) and any extra overrides are caller-supplied and unvalidated,
+        // so pre-flight with Apple's validity check and surface a normal throw instead.
+        guard JSONSerialization.isValidJSONObject(body) else {
+            throw LLMProviderError.invalidRequest(
+                detail: "request body is not JSON-encodable (likely a non-finite temperature/top_p/penalty)")
+        }
         // .sortedKeys keeps wire bytes stable across requests so OpenAI's
         // automatic prefix cache (>=1024-token prefix match) keeps hitting.
         let requestData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
@@ -445,7 +453,7 @@ struct OpenAICompatibleProvider: LLMProvider {
                 if let argsObj = function["arguments"] {
                     if let argsString = argsObj as? String {
                         arguments = argsString
-                    } else {
+                    } else if JSONSerialization.isValidJSONObject(argsObj) {
                         do {
                             let argsData = try JSONSerialization.data(withJSONObject: argsObj)
                             if let argsString = String(data: argsData, encoding: .utf8) {
@@ -458,6 +466,12 @@ struct OpenAICompatibleProvider: LLMProvider {
                             logger.warning("Failed to serialize tool_call arguments for \(name, privacy: .public): \(error.localizedDescription, privacy: .public), defaulting to {}")
                             arguments = "{}"
                         }
+                    } else {
+                        // A top-level non-container (JSON null/number/bool) makes
+                        // JSONSerialization.data raise an NSException that `try` cannot catch —
+                        // isValidJSONObject gates it out. Default rather than crash.
+                        logger.warning("Tool call arguments for \(name, privacy: .public) is not a JSON object (\(String(describing: type(of: argsObj)), privacy: .public)), defaulting to {}")
+                        arguments = "{}"
                     }
                 } else {
                     arguments = "{}"

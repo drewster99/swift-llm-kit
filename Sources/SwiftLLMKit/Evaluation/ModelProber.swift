@@ -416,7 +416,7 @@ public enum ModelProber {
             guard namesTemperature else {
                 // Not a temperature problem — chat failed for some other reason, and we learned
                 // nothing about temperature.
-                return (finding(fromError: error, capabilityKeywords: [], started: started),
+                return (finding(fromError: error, started: started),
                         .inconclusive(detail, duration: Date().timeIntervalSince(started)),
                         false)
             }
@@ -446,7 +446,7 @@ public enum ModelProber {
             ], tools: [])
             return chatFinding(response.text, nonce: nonce, started: started)
         } catch {
-            return finding(fromError: error, capabilityKeywords: [], started: started)
+            return finding(fromError: error, started: started)
         }
     }
 
@@ -552,7 +552,9 @@ public enum ModelProber {
     /// recorded `vision=false`, a fabricated negative. Exposed for testing.
     static func gradeVisionAnswer(_ text: String, colorName: String, shape: ProbeFixtures.Shape) -> (sawColor: Bool, sawShape: Bool) {
         let words = Set(text.lowercased().split { !$0.isLetter }.map(String.init))
-        return (words.contains(colorName), !words.isDisjoint(with: ProbeFixtures.shapeSynonyms(for: shape)))
+        // Lowercase the color operand too so both sides share one normalization (fixtures use
+        // single-word lowercase names; a mixed-case fixture would otherwise never match).
+        return (words.contains(colorName.lowercased()), !words.isDisjoint(with: ProbeFixtures.shapeSynonyms(for: shape)))
     }
 
     /// Whether the model reads a PDF. Sends a one-page document showing a random code and asks for
@@ -911,7 +913,7 @@ public enum ModelProber {
     /// capability is a "no", and any other failure is `inconclusive`. The keyword is what lets us
     /// tell "this model can't take images" (a fact) from "our request was malformed" or "the
     /// network dropped" (not facts).
-    private static func finding(fromError error: any Error, capabilityKeywords: [String], started: Date) -> ProbeFinding<Bool> {
+    private static func finding(fromError error: any Error, started: Date) -> ProbeFinding<Bool> {
         let dur = Date().timeIntervalSince(started)
         let detail = CapabilityProbe.rejectionDetail(error)
         // A model that is gone (404 "no longer available") or that this account can't access hasn't
@@ -925,30 +927,22 @@ public enum ModelProber {
         // gate below reads as unreachable — the audit found babbage/davinci/instruct/tts/transcribe
         // models establishing nothing and re-probing forever. The phrase is a statement about the
         // model (the endpoint recognized it), so it settles chat=false on any status.
-        if capabilityKeywords.isEmpty, CapabilityProbe.textIndicatesNotAChatModel(detail) {
+        if CapabilityProbe.textIndicatesNotAChatModel(detail) {
             return .established(false, detail, duration: dur)
         }
         switch CapabilityProbe.classifyFailure(error) {
         case .noAnswer, .paymentRequired:
             return .inconclusive(detail, duration: dur)
         case .refusedTools, .refusedOurRequest:
-            // Chat (no keywords): a coherent 4xx that ISN'T an affirmative non-chat/modality statement
-            // (already settled above by textIndicatesNotAChatModel) is too ambiguous to conclude "not
-            // a chat model". Aggregators like OpenRouter return routing errors ("does not support
-            // endpoint"), availability errors ("model_not_available / non-serverless"), not-found
-            // ("is not a valid model ID"), rate-limits, and bare request-shape 400s ("Input validation
-            // error", "Request contains an invalid argument") — none of which mean the model can't chat.
-            // The 2026-07-19 audit caught flagship chat models (qwen-2.5-72b, arcee virtuoso) stamped
-            // non-chat this way. A false "non-chat" on a good model costs far more than a re-probe, so
-            // stay INCONCLUSIVE; only an affirmative statement settles chat=false.
-            guard !capabilityKeywords.isEmpty else { return .inconclusive(detail, duration: dur) }
-            // A 400 whose text names the capability ("image", "pdf", "file content is not
-            // supported") is the endpoint saying it can't. A 400 about something else says
-            // nothing about the capability under test, so it stays inconclusive.
-            let lowered = detail.lowercased()
-            return capabilityKeywords.contains(where: { lowered.contains($0) })
-                ? .established(false, detail, duration: dur)
-                : .inconclusive(detail, duration: dur)
+            // A coherent 4xx that ISN'T an affirmative non-chat/modality statement (already settled
+            // above by textIndicatesNotAChatModel) is too ambiguous to conclude "not a chat model".
+            // Aggregators like OpenRouter return routing errors ("does not support endpoint"),
+            // availability errors ("model_not_available / non-serverless"), not-found ("is not a valid
+            // model ID"), rate-limits, and bare request-shape 400s ("Input validation error", "Request
+            // contains an invalid argument") — none of which mean the model can't chat. The 2026-07-19
+            // audit caught flagship chat models (qwen-2.5-72b, arcee virtuoso) stamped non-chat this
+            // way. A false "non-chat" on a good model costs far more than a re-probe.
+            return .inconclusive(detail, duration: dur)
         }
     }
 }

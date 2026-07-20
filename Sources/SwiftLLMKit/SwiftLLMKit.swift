@@ -342,7 +342,7 @@ public final class LLMKitManager {
             apiKeyChangeCounter &+= 1
         }
         providers.append(provider)
-        saveProviders()
+        persistenceError = saveProviders()
     }
 
     /// Updates an existing provider. If `apiKey` is non-nil, updates the Keychain.
@@ -375,7 +375,7 @@ public final class LLMKitManager {
         } else {
             providers[index] = provider
         }
-        saveProviders()
+        persistenceError = saveProviders()
     }
 
     /// Sets the API key for a built-in provider.
@@ -390,7 +390,7 @@ public final class LLMKitManager {
         // Ensure the provider row exists (it should, after seeding, but be defensive).
         if !providers.contains(where: { $0.id == id }) {
             providers.append(ModelProvider(builtIn: preset))
-            saveProviders()
+            persistenceError = saveProviders()
         }
         if apiKey.isEmpty {
             try keychain.delete(forProviderID: id)
@@ -428,8 +428,7 @@ public final class LLMKitManager {
             logger.error("Failed to delete API key: \(error.localizedDescription, privacy: .public)")
         }
 
-        saveProviders()
-        saveModelCatalog()
+        persistenceError = [saveProviders(), saveModelCatalog()].compactMap { $0 }.first
     }
 
     /// Retrieves the API key for a provider from Keychain.
@@ -442,20 +441,20 @@ public final class LLMKitManager {
     /// Adds a new model configuration.
     public func addConfiguration(_ config: ModelConfiguration) {
         configurations.append(config)
-        validateConfigurations()
+        persistenceError = validateConfigurations()
     }
 
     /// Updates an existing model configuration.
     public func updateConfiguration(_ config: ModelConfiguration) {
         guard let index = configurations.firstIndex(where: { $0.id == config.id }) else { return }
         configurations[index] = config
-        validateConfigurations()
+        persistenceError = validateConfigurations()
     }
 
     /// Deletes a model configuration.
     public func deleteConfiguration(id: UUID) {
         configurations.removeAll { $0.id == id }
-        validateConfigurations()
+        persistenceError = validateConfigurations()
     }
 
     /// Creates a duplicate of an existing configuration with a new ID and "(Copy)" suffix.
@@ -474,7 +473,7 @@ public final class LLMKitManager {
         newConfig.id = UUID()
         newConfig.name = "\(original.name) (Copy)"
         configurations.append(newConfig)
-        validateConfigurations()
+        persistenceError = validateConfigurations()
         return newConfig
     }
 
@@ -561,8 +560,7 @@ public final class LLMKitManager {
         for provider in stragglers {
             await refreshProviderSliceLocked(provider)
         }
-        saveModelCatalog()
-        validateConfigurations()
+        persistenceError = [saveModelCatalog(), validateConfigurations()].compactMap { $0 }.first
     }
 
     /// Always performs a full refresh of every provider's models.
@@ -606,8 +604,7 @@ public final class LLMKitManager {
         reloadOverridesRegistry()
 
         await refreshProviderSliceLocked(provider)
-        saveModelCatalog()
-        validateConfigurations()
+        persistenceError = [saveModelCatalog(), validateConfigurations()].compactMap { $0 }.first
     }
 
     /// Fetches one provider's models and replaces just that provider's slice in the
@@ -619,6 +616,13 @@ public final class LLMKitManager {
     /// once.
     private func refreshProviderSliceLocked(_ provider: ModelProvider) async {
         let result = await fetchAndEnrich(provider: provider)
+        // deleteProvider can run during the await above (@MainActor is reentrant). If this provider
+        // was deleted meanwhile, don't re-add its models — and evict the compositions fetchAndEnrich
+        // just re-seeded — or it resurrects in the catalog.
+        guard providers.contains(where: { $0.id == provider.id }) else {
+            metadataCompositions = metadataCompositions.filter { !$0.key.hasPrefix("\(provider.id)/") }
+            return
+        }
 
         var combined = models.filter { $0.providerID != provider.id }
         combined.append(contentsOf: result.models)
@@ -709,13 +713,24 @@ public final class LLMKitManager {
                 errors[provider.name] = error
             }
         }
-        refreshErrors = errors
+        // deleteProvider can run at any `await` above (@MainActor is reentrant). This loop iterated a
+        // pre-delete snapshot of `providers`, so it may have fetched a now-deleted provider and
+        // fetchAndEnrich re-seeded its compositions. Reconcile against the LIVE set before committing,
+        // or the deleted provider is resurrected in the persisted catalog and in in-memory state.
+        let liveProviderIDs = Set(providers.map(\.id))
+        allModels.removeAll { !liveProviderIDs.contains($0.providerID) }
+        metadataCompositions = metadataCompositions.filter { entry in
+            liveProviderIDs.contains(where: { entry.key.hasPrefix("\($0)/") })
+        }
+        let liveProviderNames = Set(providers.map(\.name))
+        refreshErrors = errors.filter { liveProviderNames.contains($0.key) }
 
         models = allModels
-        saveModelCatalog()
+        let catalogError = saveModelCatalog()
 
-        // Re-validate configurations against the updated catalog
-        validateConfigurations()
+        // Re-validate configurations against the updated catalog; combine its save result with the
+        // catalog save so one success can't mask the other's failure.
+        persistenceError = [catalogError, validateConfigurations()].compactMap { $0 }.first
     }
 
     /// Fetches models for one provider and composes the layered metadata merge.
@@ -842,12 +857,15 @@ public final class LLMKitManager {
 
     // MARK: - Validation
 
-    /// Validates all configurations against current providers and models.
-    public func validateConfigurations() {
+    /// Validates all configurations against current providers and models, persists them, and returns
+    /// any save-failure message (nil on success) so a caller that also saves elsewhere in the same
+    /// operation can combine the results into a single `persistenceError` assignment.
+    @discardableResult
+    public func validateConfigurations() -> String? {
         for i in configurations.indices {
             validateConfiguration(at: i)
         }
-        saveConfigurations()
+        return saveConfigurations()
     }
 
     private func validateConfiguration(at index: Int) {
@@ -1493,51 +1511,55 @@ public final class LLMKitManager {
         }
 
         if didMutate {
-            saveProviders()
-            saveConfigurations()
+            persistenceError = [saveProviders(), saveConfigurations()].compactMap { $0 }.first
         }
     }
 
     // MARK: - Private persistence helpers
 
-    private func saveProviders() {
+    // The three save helpers RETURN their failure message (nil on success) rather than each writing
+    // `persistenceError` directly, so an operation that saves more than once assigns `persistenceError`
+    // ONCE from the combined result and a later helper's success can't mask an earlier failure. A
+    // load-failed SKIP returns the CURRENT `persistenceError` (not nil) so assigning the result back is
+    // a no-op — a skip must never clear the load error the degraded state is already showing.
+    private func saveProviders() -> String? {
         guard providersLoadedOK else {
             logger.warning("Skipping provider save — initial load failed, refusing to overwrite on-disk data")
-            return
+            return persistenceError
         }
         do {
             try storage.saveProviders(providers)
-            persistenceError = nil
+            return nil
         } catch {
             let msg = "Failed to save providers: \(error.localizedDescription)"
             logger.error("\(msg, privacy: .public)")
-            persistenceError = msg
+            return msg
         }
     }
 
-    private func saveConfigurations() {
+    private func saveConfigurations() -> String? {
         guard configurationsLoadedOK else {
             logger.warning("Skipping configuration save — initial load failed, refusing to overwrite on-disk data")
-            return
+            return persistenceError
         }
         do {
             try storage.saveConfigurations(configurations)
-            persistenceError = nil
+            return nil
         } catch {
             let msg = "Failed to save configurations: \(error.localizedDescription)"
             logger.error("\(msg, privacy: .public)")
-            persistenceError = msg
+            return msg
         }
     }
 
-    private func saveModelCatalog() {
+    private func saveModelCatalog() -> String? {
         do {
             try storage.saveModelCatalog(models)
-            persistenceError = nil
+            return nil
         } catch {
             let msg = "Failed to save model catalog: \(error.localizedDescription)"
             logger.error("\(msg, privacy: .public)")
-            persistenceError = msg
+            return msg
         }
     }
 }

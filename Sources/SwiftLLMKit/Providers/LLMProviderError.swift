@@ -8,6 +8,10 @@ public enum LLMProviderError: Error, LocalizedError {
     /// server's pacing instead of guessing a backoff.
     case httpError(statusCode: Int, body: String, url: URL? = nil, retryAfter: TimeInterval? = nil)
     case malformedResponse(detail: String)
+    /// The request body could not be built into valid JSON before sending — e.g. a caller-supplied
+    /// non-finite sampling parameter (NaN/±Inf temperature/top_p). Kept distinct from
+    /// ``malformedResponse`` because this is our request's fault, not the server's.
+    case invalidRequest(detail: String)
 
     public var errorDescription: String? {
         switch self {
@@ -18,6 +22,8 @@ public enum LLMProviderError: Error, LocalizedError {
             return "HTTP \(code): \(detail)"
         case .malformedResponse(let detail):
             return "Could not parse LLM response: \(detail)"
+        case .invalidRequest(let detail):
+            return "Could not build request: \(detail)"
         }
     }
 
@@ -36,9 +42,11 @@ public enum LLMProviderError: Error, LocalizedError {
         guard let raw = headerValue?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
             return nil
         }
-        // Delta-seconds: a non-negative number. A negative value is malformed — return nil so
-        // the caller falls back to its own backoff rather than retrying immediately.
-        if let seconds = TimeInterval(raw) { return seconds >= 0 ? seconds : nil }
+        // Delta-seconds: a finite, non-negative number. A negative value — or a non-finite one
+        // (`inf`, `infinity`, `nan`, or an overflowing literal like `1e999`, all of which
+        // `TimeInterval(_:)` accepts) — is malformed. Return nil so the caller falls back to its
+        // own backoff rather than retrying immediately or scheduling an infinite delay.
+        if let seconds = TimeInterval(raw) { return seconds.isFinite && seconds >= 0 ? seconds : nil }
         if let date = httpDate(raw) { return max(0, date.timeIntervalSince(now)) }
         return nil
     }
@@ -164,11 +172,23 @@ public enum LLMProviderError: Error, LocalizedError {
     private static func firstCapture(in body: String, patterns: [String]) -> Int? {
         let range = NSRange(body.startIndex..<body.endIndex, in: body)
         for pattern in patterns {
-            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
-                  let match = regex.firstMatch(in: body, options: [], range: range),
+            // Patterns are hardcoded literals: a compile failure means a typo, which would silently
+            // disable extraction for that provider. Trap it in debug/CI; in release fall through to
+            // the next pattern (a working fallback — the binary search — exists, so never crash).
+            let regex: NSRegularExpression
+            do {
+                regex = try NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+            } catch {
+                assertionFailure("Invalid regex pattern literal: \(pattern) — \(error)")
+                continue
+            }
+            // Parse inside the guard so an overflowing digit run (Int(...) → nil) falls through to
+            // the next pattern instead of short-circuiting the whole ordered fallback list.
+            guard let match = regex.firstMatch(in: body, options: [], range: range),
                   match.numberOfRanges >= 2,
-                  let captureRange = Range(match.range(at: 1), in: body) else { continue }
-            return Int(body[captureRange])
+                  let captureRange = Range(match.range(at: 1), in: body),
+                  let value = Int(body[captureRange]) else { continue }
+            return value
         }
         return nil
     }

@@ -266,7 +266,13 @@ public enum CapabilityProbe {
             )
         }
 
-        let echoed = (second.text ?? "").contains(identifier)
+        // Match the echo case- and separator-insensitively: a model that lowercases or hyphenates
+        // the token still completed the round trip. The token is a random 9-char draw over a
+        // 31-symbol alphabet, so collapsing case/non-alphanumerics cannot manufacture a coincidence.
+        func canonicalToken(_ text: String) -> String {
+            String(text.lowercased().filter { $0.isLetter || $0.isNumber })
+        }
+        let echoed = canonicalToken(second.text ?? "").contains(canonicalToken(identifier))
         return ToolCallResult(
             providerID: providerID, modelID: modelID,
             verdict: echoed ? .roundTripCompleted : .toolCallOnly,
