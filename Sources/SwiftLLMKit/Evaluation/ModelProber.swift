@@ -731,13 +731,22 @@ public enum ModelProber {
             // bound (context) when known, else inconclusive.
             if let providerError = error as? LLMProviderError,
                case .httpError(_, let body, _, _) = providerError,
-               LLMProviderError.reportedParameterCeiling(inBody: body) != nil {
+               let paramCeiling = LLMProviderError.reportedParameterCeiling(inBody: body) {
+                // "Input should be less than or equal to N" is the endpoint's max_tokens PARAMETER
+                // limit. If N is below the context window it's a genuine per-model output cap — record
+                // it. Only a ceiling at/above context (the router's absolute limit, e.g. deepinfra's
+                // 10,000,000) is not an output cap: treat that as context-bound. With no known context
+                // a bare large number can't be told from a real cap, so stay inconclusive rather than
+                // record a possibly-bogus value.
                 if let ctx = maxContextTokens {
+                    if paramCeiling < ctx {
+                        return MaxOutputProbeResult(cap: .established(paramCeiling, "endpoint enforces max_tokens ≤ \(paramCeiling), below the context window — the model's output cap", duration: dur))
+                    }
                     return MaxOutputProbeResult(
-                        cap: .inconclusive("endpoint caps only the max_tokens parameter (router limit), not the model's output; output is bounded by context (\(ctx))", duration: dur),
-                        contextBound: .established(ctx, "endpoint enforces only a router max_tokens ceiling; output is bounded by its context length", duration: dur))
+                        cap: .inconclusive("max_tokens parameter limit (\(paramCeiling)) is at/above the context window (\(ctx)) — a router ceiling, not an output cap; output is bounded by context", duration: dur),
+                        contextBound: .established(ctx, "endpoint enforces only a router max_tokens ceiling ≥ context; output is bounded by its context length", duration: dur))
                 }
-                return MaxOutputProbeResult(cap: .inconclusive("endpoint caps only the max_tokens parameter (router limit), not the model's output; context unknown", duration: dur))
+                return MaxOutputProbeResult(cap: .inconclusive("endpoint caps the max_tokens parameter at \(paramCeiling); with no known context window it can't be told from a genuine output cap, so it is not recorded", duration: dur))
             }
             // It rejected the absurd cap but didn't state the exact output limit in a form we
             // parse. Find the ceiling empirically — the same "max_tokens is the only variable"
@@ -777,10 +786,16 @@ public enum ModelProber {
             // rather than a fabricated (often impossible, output>context) output ceiling. Only the
             // SEARCHED path is guarded; an endpoint-STATED exact limit is trusted over a possibly-stale
             // decoded context window.
-            if let ctx = maxContextTokens, let capValue = searchResult.value, capValue >= ctx - Self.contextBoundMargin {
-                return MaxOutputProbeResult(
-                    cap: .inconclusive("search reached the context window (\(capValue) vs context \(ctx)); no independent output cap", duration: Date().timeIntervalSince(started)),
-                    contextBound: .established(ctx, "output bounded by context length (search converged to the context ceiling)", duration: Date().timeIntervalSince(started)))
+            if let ctx = maxContextTokens, let capValue = searchResult.value {
+                // Proportional margin so small context windows aren't over-guarded: a fixed 2048 would
+                // discard a genuine half-of-context cap on a 4096-token model. The masquerade gap is
+                // the probe's small input; a real cap sits a large round fraction below context.
+                let margin = min(Self.contextBoundMargin, ctx / 8)
+                if capValue >= ctx - margin {
+                    return MaxOutputProbeResult(
+                        cap: .inconclusive("search reached the context window (\(capValue) vs context \(ctx)); no independent output cap", duration: Date().timeIntervalSince(started)),
+                        contextBound: .established(ctx, "output bounded by context length (search converged to the context ceiling)", duration: Date().timeIntervalSince(started)))
+                }
             }
             return MaxOutputProbeResult(cap: searchResult)
         }
@@ -918,8 +933,15 @@ public enum ModelProber {
             return .inconclusive(detail, duration: dur)
         case .refusedTools, .refusedOurRequest:
             // Chat (no keywords): any 4xx that got here is the endpoint declining a plain request,
-            // which for chat means "not a usable chat endpoint".
-            guard !capabilityKeywords.isEmpty else { return .established(false, detail, duration: dur) }
+            // which for chat means "not a usable chat endpoint" — EXCEPT a generic request-VALIDATION
+            // rejection, which is about the request SHAPE, not the model's chat capability. A safety
+            // classifier (Llama-Guard) is reachable via chat/completions but 400s a plain nonce-echo
+            // with "Input validation error"; stay inconclusive rather than fabricate "not a chat model".
+            guard !capabilityKeywords.isEmpty else {
+                return CapabilityProbe.textIndicatesRequestValidationOnly(detail)
+                    ? .inconclusive(detail, duration: dur)
+                    : .established(false, detail, duration: dur)
+            }
             // A 400 whose text names the capability ("image", "pdf", "file content is not
             // supported") is the endpoint saying it can't. A 400 about something else says
             // nothing about the capability under test, so it stays inconclusive.

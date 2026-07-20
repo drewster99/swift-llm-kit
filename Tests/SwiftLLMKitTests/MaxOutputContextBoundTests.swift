@@ -109,6 +109,35 @@ struct MaxOutputContextBoundTests {
         #expect((result.cap.value ?? 0) <= 40755)
     }
 
+    /// codex review: a param ceiling BELOW the context window is a genuine per-model output cap
+    /// (a validator enforcing the real max_tokens), not the router's absolute limit — record it.
+    private struct ParamCeilingBelowContextProvider: LLMProvider {
+        func send(messages: [LLMMessage], tools: [LLMToolDefinition], overrides: LLMCallOverrides) async throws -> LLMResponse {
+            throw LLMProviderError.httpError(statusCode: 422, body: "Input should be less than or equal to 8192", url: nil, retryAfter: nil)
+        }
+    }
+
+    @Test("A param ceiling below the context window is recorded as the real output cap")
+    func paramCeilingBelowContextIsRealCap() async {
+        let result = await ModelProber.probeMaxOutputTokens(
+            llm: ParamCeilingBelowContextProvider(), modelID: "m", maxContextTokens: 131072)
+        #expect(result.cap.status == .established)
+        #expect(result.cap.value == 8192)
+        #expect(result.contextBound == nil)
+    }
+
+    /// codex review: the fixed 2048 margin must not discard a genuine cap on a SMALL context window.
+    /// A 4096-context model with a real 2048 output cap (gap 2048) must survive as an output cap.
+    @Test("A genuine cap on a small context window is not over-guarded (proportional margin)")
+    func smallContextGenuineCapSurvives() async {
+        let result = await ModelProber.probeMaxOutputTokens(
+            llm: GenericMasqueradeProvider(ceiling: 2048), modelID: "m", maxContextTokens: 4096)
+        #expect(result.cap.status == .established)
+        #expect((result.cap.value ?? 0) <= 2048)
+        #expect((result.cap.value ?? 0) >= 2048 - max(2, 2048 / 100))
+        #expect(result.contextBound == nil, "a half-of-context cap on a 4096 window must not read as context-bound")
+    }
+
     @Test("A genuine output cap well below context is still recorded as an output cap, not guarded away")
     func genuineCapSurvives() async {
         // ceiling 4096 with a 131072 context — gap is far larger than the input margin, so it's a real

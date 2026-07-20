@@ -1174,6 +1174,25 @@ struct TextCapabilityFamilyTests {
         #expect(finding.value == false)
     }
 
+    @Test("A safety classifier's 'Input validation error' 400 stays inconclusive, not non-chat")
+    func requestValidationErrorStaysInconclusiveForChat() async {
+        // Llama-Guard is reachable via chat/completions but requires a specific input format; a plain
+        // nonce-echo is rejected with a request-shape 400. That must NOT settle "not a chat model".
+        #expect(CapabilityProbe.textIndicatesRequestValidationOnly(
+            #"{"error":{"message":"Input validation error","type":"invalid_request_error"}}"#))
+        #expect(!CapabilityProbe.textIndicatesRequestValidationOnly("This is not a chat model"))
+        struct GuardProvider: LLMProvider {
+            func send(messages: [LLMMessage], tools: [LLMToolDefinition], overrides: LLMCallOverrides) async throws -> LLMResponse {
+                throw LLMProviderError.httpError(
+                    statusCode: 400,
+                    body: #"{"error":{"message":"Input validation error","type":"invalid_request_error"}}"#,
+                    url: nil, retryAfter: nil)
+            }
+        }
+        let finding = await ModelProber.probeChat(llm: GuardProvider(), modelID: "meta-llama/Llama-Guard-4-12B:together")
+        #expect(finding.status == .inconclusive, "a request-shape 400 must not fabricate 'not a chat model'")
+    }
+
     @Test("A plain 404 still establishes nothing for chat")
     func plain404StaysInconclusiveForChat() async {
         struct MissingProvider: LLMProvider {

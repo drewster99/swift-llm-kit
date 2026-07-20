@@ -414,6 +414,18 @@ public enum CapabilityProbe {
             || lowered.contains("not supported for generatecontent")
     }
 
+    /// Whether an error body is a generic REQUEST-VALIDATION rejection — the request SHAPE was
+    /// wrong — rather than a statement about the model's capability. Safety classifiers (Meta's
+    /// Llama-Guard) are reachable via chat/completions but require a specific input format and answer
+    /// a plain nonce-echo with HTTP 400 "Input validation error" (type invalid_request_error). For
+    /// the chat probe that must read as "our request was malformed" → inconclusive, NOT "not a chat
+    /// model" — the 2026-07-19 HuggingFace audit caught Llama-Guard-4-12B:together stamped non-chat
+    /// while its :deepinfra sibling (which accepts the plain format) answered fine. Matched narrowly
+    /// (the exact message) so a genuine "not a chat model" statement is unaffected.
+    public static func textIndicatesRequestValidationOnly(_ text: String) -> Bool {
+        text.lowercased().contains("input validation error")
+    }
+
     /// Whether an error body affirmatively states the model does not support tools. OpenAI's
     /// search-preview/search-api models answer a tools-bearing request with "tools is not
     /// supported in this model" behind an HTTP 404 — a first-party capability statement the
