@@ -1174,23 +1174,42 @@ struct TextCapabilityFamilyTests {
         #expect(finding.value == false)
     }
 
-    @Test("A safety classifier's 'Input validation error' 400 stays inconclusive, not non-chat")
-    func requestValidationErrorStaysInconclusiveForChat() async {
-        // Llama-Guard is reachable via chat/completions but requires a specific input format; a plain
-        // nonce-echo is rejected with a request-shape 400. That must NOT settle "not a chat model".
-        #expect(CapabilityProbe.textIndicatesRequestValidationOnly(
-            #"{"error":{"message":"Input validation error","type":"invalid_request_error"}}"#))
-        #expect(!CapabilityProbe.textIndicatesRequestValidationOnly("This is not a chat model"))
-        struct GuardProvider: LLMProvider {
-            func send(messages: [LLMMessage], tools: [LLMToolDefinition], overrides: LLMCallOverrides) async throws -> LLMResponse {
-                throw LLMProviderError.httpError(
-                    statusCode: 400,
-                    body: #"{"error":{"message":"Input validation error","type":"invalid_request_error"}}"#,
-                    url: nil, retryAfter: nil)
-            }
+    /// The chat probe is CONSERVATIVE: a coherent 400 that isn't an AFFIRMATIVE non-chat/modality
+    /// statement stays inconclusive, never "not a chat model". The 2026-07-19 audit caught the
+    /// aggressive default stamping flagship chat models (qwen-2.5-72b, arcee virtuoso) non-chat from
+    /// routing/availability/not-found/bare-validation 400s that OpenRouter returns.
+    private struct Chat400Provider: LLMProvider {
+        let body: String
+        let code: Int
+        init(_ body: String, code: Int = 400) { self.body = body; self.code = code }
+        func send(messages: [LLMMessage], tools: [LLMToolDefinition], overrides: LLMCallOverrides) async throws -> LLMResponse {
+            throw LLMProviderError.httpError(statusCode: code, body: body, url: nil, retryAfter: nil)
         }
-        let finding = await ModelProber.probeChat(llm: GuardProvider(), modelID: "meta-llama/Llama-Guard-4-12B:together")
-        #expect(finding.status == .inconclusive, "a request-shape 400 must not fabricate 'not a chat model'")
+    }
+
+    @Test("Ambiguous coherent 400s stay inconclusive for chat, never fabricate non-chat")
+    func ambiguous400StaysInconclusiveForChat() async {
+        let ambiguous = [
+            #"{"error":{"message":"Input validation error","type":"invalid_request_error"}}"#,   // Llama-Guard
+            "model: qwen/qwen-2.5-72b-instruct does not support endpoint: completions",           // routing
+            "Unable to access non-serverless model arcee-ai/virtuoso-large",                       // availability
+            "zhipu/glm-4.5 is not a valid model ID",                                               // not-found
+            "Request contains an invalid argument.",                                               // bare validation
+        ]
+        for body in ambiguous {
+            let finding = await ModelProber.probeChat(llm: Chat400Provider(body), modelID: "m")
+            #expect(finding.status == .inconclusive, "must not fabricate 'not a chat model' from: \(body)")
+        }
+    }
+
+    @Test("An affirmative non-chat/modality statement still settles chat=false")
+    func affirmativeNonChatStillSettlesFalse() async {
+        // Audio/omni models make an affirmative modality demand — a genuine "not a plain chat model".
+        #expect(CapabilityProbe.textIndicatesNotAChatModel("This model requires audio input/output modality"))
+        let audio = await ModelProber.probeChat(
+            llm: Chat400Provider("This model requires audio input/output modality"), modelID: "gpt-audio")
+        #expect(audio.status == .established)
+        #expect(audio.value == false)
     }
 
     @Test("A plain 404 still establishes nothing for chat")

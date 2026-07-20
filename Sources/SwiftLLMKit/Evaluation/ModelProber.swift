@@ -932,16 +932,16 @@ public enum ModelProber {
         case .noAnswer, .paymentRequired:
             return .inconclusive(detail, duration: dur)
         case .refusedTools, .refusedOurRequest:
-            // Chat (no keywords): any 4xx that got here is the endpoint declining a plain request,
-            // which for chat means "not a usable chat endpoint" — EXCEPT a generic request-VALIDATION
-            // rejection, which is about the request SHAPE, not the model's chat capability. A safety
-            // classifier (Llama-Guard) is reachable via chat/completions but 400s a plain nonce-echo
-            // with "Input validation error"; stay inconclusive rather than fabricate "not a chat model".
-            guard !capabilityKeywords.isEmpty else {
-                return CapabilityProbe.textIndicatesRequestValidationOnly(detail)
-                    ? .inconclusive(detail, duration: dur)
-                    : .established(false, detail, duration: dur)
-            }
+            // Chat (no keywords): a coherent 4xx that ISN'T an affirmative non-chat/modality statement
+            // (already settled above by textIndicatesNotAChatModel) is too ambiguous to conclude "not
+            // a chat model". Aggregators like OpenRouter return routing errors ("does not support
+            // endpoint"), availability errors ("model_not_available / non-serverless"), not-found
+            // ("is not a valid model ID"), rate-limits, and bare request-shape 400s ("Input validation
+            // error", "Request contains an invalid argument") — none of which mean the model can't chat.
+            // The 2026-07-19 audit caught flagship chat models (qwen-2.5-72b, arcee virtuoso) stamped
+            // non-chat this way. A false "non-chat" on a good model costs far more than a re-probe, so
+            // stay INCONCLUSIVE; only an affirmative statement settles chat=false.
+            guard !capabilityKeywords.isEmpty else { return .inconclusive(detail, duration: dur) }
             // A 400 whose text names the capability ("image", "pdf", "file content is not
             // supported") is the endpoint saying it can't. A 400 about something else says
             // nothing about the capability under test, so it stays inconclusive.
