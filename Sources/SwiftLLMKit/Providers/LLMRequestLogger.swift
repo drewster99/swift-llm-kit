@@ -30,11 +30,20 @@ public enum LLMRequestLogger {
 
     // MARK: - Shared helpers
 
+    /// Filename-safe local timestamp, date first so names sort chronologically and a
+    /// multi-day log directory stays unambiguous.
+    ///
+    /// The date used to be omitted. Log directories live in `$TMPDIR` and routinely span
+    /// several days, so `09-47-51.303_OpenAI_response.json` could be any of them — grouping
+    /// failures "by hour" across such a directory silently mixes days, and the file's mtime
+    /// was the only way back to the real date. `en_US_POSIX` + a fixed format keeps the name
+    /// stable regardless of the user's locale or 12/24-hour setting.
     static func timestamp() -> String {
         // DateFormatter is not thread-safe — create per-call to avoid data races
         // when multiple providers log concurrently.
         let f = DateFormatter()
-        f.dateFormat = "HH-mm-ss.SSS"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd_HH-mm-ss.SSS"
         return f.string(from: Date())
     }
 
