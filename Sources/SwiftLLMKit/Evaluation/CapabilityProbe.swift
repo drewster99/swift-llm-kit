@@ -336,6 +336,30 @@ public enum CapabilityProbe {
         // every call the same way. Named distinctly so a probe that stalls here is diagnosable as
         // "add credits" rather than misread as a capability refusal.
         if statusCode == 402 { return .paymentRequired }
+        // ...but 402 is not how the vendors actually say it, so the check above almost never fires.
+        // Anthropic answers an empty wallet with HTTP 400 `invalid_request_error` ("Your credit
+        // balance is too low to access the Anthropic API"); OpenAI uses 429 `insufficient_quota`.
+        // Neither reached the 402 branch, so a billing outage classified as `.refusedOurRequest`,
+        // whose `meansNoAnswer` is FALSE — which put every grading site one unlucky keyword away
+        // from writing a capability `false` for an account that simply needs topping up. The
+        // Anthropic body contains the word "access", so a probe keyed on that would have recorded
+        // `established(false)` for every model in a sweep. Observed live 2026-07-26.
+        //
+        // Checked BEFORE the status-code buckets on purpose: OpenAI's quota error is a 429, which
+        // `noAnswerCodes` would otherwise classify as a rate limit — harmless for grading (both
+        // mean no answer) but wrong for diagnosis, and a caller that backs off and retries a
+        // rate limit will retry an empty wallet forever.
+        let billingMarkers = [
+            "credit balance is too low",    // Anthropic
+            "insufficient_quota",           // OpenAI
+            "exceeded your current quota",  // OpenAI
+            "insufficient credits",
+            "purchase credits",
+            "plans & billing",
+            "plans and billing"
+        ]
+        let loweredBody = body.lowercased()
+        if billingMarkers.contains(where: { loweredBody.contains($0) }) { return .paymentRequired }
         let noAnswerCodes: Set<Int> = [401, 403, 404, 429]
         guard (400..<500).contains(statusCode), !noAnswerCodes.contains(statusCode) else {
             return .noAnswer
