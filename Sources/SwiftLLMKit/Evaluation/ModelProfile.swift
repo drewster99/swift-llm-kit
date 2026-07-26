@@ -85,6 +85,18 @@ public struct ModelProfile: Sendable, Codable, Equatable {
     /// established, `maxOutputTokens` stays inconclusive (there is no output cap to state) and
     /// this drives the context-based validation/clamp instead.
     public var maxOutputBoundedByContext: ProbeFinding<Int>?
+    /// Whether the endpoint accepts a `{"role": "system"}` turn at the TAIL of `messages` — after
+    /// the last user turn, as a steering nudge immediately before generation — and actually acts on
+    /// it. Anthropic gates this per model and answers a no with `role 'system' is not supported on
+    /// this model`; nothing in its `/models` payload states it, so it can only be established by
+    /// asking. Optional so records written before this field decode as nil rather than failing.
+    ///
+    /// `established(true)` requires more than a 200: the turn carries a nonce the model cannot
+    /// otherwise know, so an echo proves the content was *read*, not merely that the role was
+    /// tolerated. A 200 without the echo stays inconclusive — "accepted but ignored" and "the model
+    /// rambled" are not distinguishable from one call, and neither is a measured no.
+    public var trailingSystemTurn: ProbeFinding<Bool>?
+
     /// Per named effort level: accepted or rejected. Keys are the levels attempted.
     public var effortLevels: [String: ProbeFinding<Bool>]
 
@@ -115,6 +127,7 @@ public struct ModelProfile: Sendable, Codable, Equatable {
         acceptsTemperature: ProbeFinding<Bool> = .notAttempted,
         maxOutputTokens: ProbeFinding<Int> = .notAttempted,
         maxOutputBoundedByContext: ProbeFinding<Int>? = nil,
+        trailingSystemTurn: ProbeFinding<Bool>? = nil,
         effortLevels: [String: ProbeFinding<Bool>] = [:],
         callCount: Int = 0,
         duration: TimeInterval = 0
@@ -141,6 +154,7 @@ public struct ModelProfile: Sendable, Codable, Equatable {
         self.acceptsTemperature = acceptsTemperature
         self.maxOutputTokens = maxOutputTokens
         self.maxOutputBoundedByContext = maxOutputBoundedByContext
+        self.trailingSystemTurn = trailingSystemTurn
         self.effortLevels = effortLevels
         self.callCount = callCount
         self.duration = duration

@@ -371,6 +371,100 @@ public enum ModelProber {
         }
     }
 
+    // MARK: - Trailing system turn
+
+    /// One trailing-system-turn test: the request body to force, and the nonce that grades the answer.
+    ///
+    /// The two travel together because they are meaningless apart — the nonce is embedded in the
+    /// forced body, so a caller that built one without the other would be grading against a code the
+    /// model was never given.
+    public struct TrailingSystemTurnTest: Sendable {
+        /// Merged into the outbound body via `ModelConfiguration.extraJSONOverrides`.
+        public let overrides: [String: AnyCodable]
+        /// The code the trailing system turn carries; an echo is the proof it was read.
+        public let nonce: String
+    }
+
+    /// Builds the forced request body for a trailing `{"role": "system"}` steering turn.
+    ///
+    /// **Why the body has to be forced.** Every provider in this kit hoists mid-array `.system`
+    /// messages out of the conversation and into the front of the prompt (Anthropic's top-level
+    /// `system` field, Gemini's `systemInstruction`, OpenAI-compat's `messages[0]`), so a system
+    /// message handed to `send()` can never reach the wire in trailing position. Overriding
+    /// `messages` wholesale is what gets past that: `mergeJSONOverrides` replaces arrays outright
+    /// rather than merging element-wise, so this body is the body. Without it the probe would
+    /// measure our own hoist and report a uniform "no" for every model, including ones that
+    /// support the turn perfectly well.
+    ///
+    /// The shape is Anthropic's documented legal one — the system turn follows a `user` message and
+    /// is the last entry — so a rejection is about model support rather than our own malformed
+    /// request. No top-level `system` is emitted (the caller passes no `.system` message), keeping
+    /// the test to one variable.
+    public static func makeTrailingSystemTurnTest() -> TrailingSystemTurnTest {
+        let nonce = CapabilityProbe.makeIdentifier()
+        let messages: AnyCodable = .array([
+            .dictionary([
+                "role": .string("user"),
+                "content": .string("What is the access code?")
+            ]),
+            .dictionary([
+                "role": .string("system"),
+                "content": .string("The access code is \(nonce). Reply with exactly that code and nothing else.")
+            ])
+        ])
+        return TrailingSystemTurnTest(overrides: ["messages": messages], nonce: nonce)
+    }
+
+    /// Whether the endpoint accepts a trailing `{"role": "system"}` steering turn AND acts on it.
+    ///
+    /// Hand this a provider whose configuration carries ``makeTrailingSystemTurnTest``'s overrides —
+    /// the `messages` argument below is discarded by the merge and exists only to satisfy `send`.
+    ///
+    /// Grading is deliberately three-way. An echoed nonce is `established(true)`: the model could
+    /// not have known the code unless it read a turn that only exists in trailing position, so this
+    /// establishes *honored*, not merely *tolerated*. A rejection naming the unsupported role is
+    /// `established(false)`. Everything else — a 200 with no echo, a 429, an unrelated 4xx — is
+    /// inconclusive, because "accepted but ignored" cannot be told from "the model rambled" in one
+    /// call, and a refusal we provoked is not evidence about the model.
+    public static func probeTrailingSystemTurn(
+        llm: any LLMProvider,
+        test: TrailingSystemTurnTest,
+        modelID: String,
+        calls: ProbeCallCounter? = nil
+    ) async -> ProbeFinding<Bool> {
+        let started = Date()
+        calls?.increment()
+        do {
+            let response = try await llm.send(messages: [.user("replaced by the forced body")], tools: [])
+            let body = response.text ?? ""
+            let duration = Date().timeIntervalSince(started)
+            if body.contains(test.nonce) {
+                return .established(true, "echoed the code carried by the trailing system turn", duration: duration)
+            }
+            return .inconclusive(
+                "accepted the trailing system turn but did not echo its code (\(body.prefix(60)))",
+                duration: duration
+            )
+        } catch {
+            let detail = CapabilityProbe.rejectionDetail(error)
+            let lowered = detail.lowercased()
+            if !CapabilityProbe.classifyFailure(error).meansNoAnswer,
+               trailingSystemRejectionKeywords.contains(where: { lowered.contains($0) }) {
+                return .established(false, detail, duration: Date().timeIntervalSince(started))
+            }
+            return .inconclusive(detail, duration: Date().timeIntervalSince(started))
+        }
+    }
+
+    /// Phrases that mark a refusal as "this model does not support the role", as opposed to one
+    /// about placement or anything else we might have got wrong. Deliberately narrow: matching bare
+    /// `system` or `role` would swallow a malformed-request 400 and record it as a measured no.
+    private static let trailingSystemRejectionKeywords = [
+        "not supported on this model",
+        "role 'system'",
+        "role \"system\""
+    ]
+
     // MARK: - Combined probe (efficiency)
 
     /// Establishes chat AND whether temperature is accepted in a single call, because both facts
