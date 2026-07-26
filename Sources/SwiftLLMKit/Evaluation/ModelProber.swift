@@ -425,8 +425,8 @@ public enum ModelProber {
             .dictionary([
                 "role": .string("system"),
                 "content": .string(
-                    "You are being tested to confirm you can read a system instruction placed "
-                    + "after the user's message. This is a capability test, not a conversation. "
+                    "You are in an automated capability test confirming this model can read a "
+                    + "system instruction placed after the user's message. "
                     + "Reply with exactly this identifier and nothing else: \(nonce)"
                 )
             ])
@@ -505,7 +505,7 @@ public enum ModelProber {
     ) async -> (chat: ProbeFinding<Bool>, temperature: ProbeFinding<Bool>, chatDeferred: Bool) {
         let nonce = CapabilityProbe.makeIdentifier()
         let messages: [LLMMessage] = [
-            .system("You are a test harness. Reply with exactly what is asked and nothing else."),
+            .system("You are in an automated capability test confirming this model can hold a chat exchange. Reply with exactly what is asked and nothing else."),
             .user("Reply with exactly this identifier and nothing else: \(nonce)")
         ]
         let started = Date()
@@ -554,7 +554,7 @@ public enum ModelProber {
         calls?.increment()
         do {
             let response = try await llm.send(messages: [
-                .system("You are a test harness. Reply with exactly what is asked and nothing else."),
+                .system("You are in an automated capability test confirming this model can hold a chat exchange. Reply with exactly what is asked and nothing else."),
                 .user("Reply with exactly this identifier and nothing else: \(nonce)")
             ], tools: [])
             return chatFinding(response.text, nonce: nonce, started: started)
@@ -627,7 +627,7 @@ public enum ModelProber {
             let attemptStarted = Date()
             calls?.increment()
             let response = try await llm.send(messages: [
-                .system("You are a vision test harness. Describe the image in a few words."),
+                .system("You are in an automated capability test confirming this model can read images. Describe the image in a few words."),
                 .user("What shape is in this image, and what colour is it? Answer briefly.", images: [image])
             ], tools: [])
             let text = (response.text ?? "").lowercased()
@@ -700,7 +700,8 @@ public enum ModelProber {
         do {
             let response = try await llm.send(messages: [
                 .system("""
-                You are a multimodal test harness. Reply with ONLY a JSON object in exactly this \
+                You are in an automated capability test confirming this model can read an image and a PDF in \
+                one request. Reply with ONLY a JSON object in exactly this \
                 format, no other text: {"shape": "<shape in the image>", "color": "<its colour>", \
                 "pdf_code": "<the code displayed in the PDF>"}
                 """),
@@ -740,7 +741,7 @@ public enum ModelProber {
         calls?.increment()
         do {
             let response = try await llm.send(messages: [
-                .system("You are a document test harness. Reply with only the code you are asked for."),
+                .system("You are in an automated capability test confirming this model can read PDF documents. Reply with only the code you are asked for."),
                 .user("This PDF displays a code. Reply with only that code.", images: [], documents: [document])
             ], tools: [])
             let text = response.text ?? ""
