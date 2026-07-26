@@ -349,17 +349,7 @@ public enum CapabilityProbe {
         // `noAnswerCodes` would otherwise classify as a rate limit — harmless for grading (both
         // mean no answer) but wrong for diagnosis, and a caller that backs off and retries a
         // rate limit will retry an empty wallet forever.
-        let billingMarkers = [
-            "credit balance is too low",    // Anthropic
-            "insufficient_quota",           // OpenAI
-            "exceeded your current quota",  // OpenAI
-            "insufficient credits",
-            "purchase credits",
-            "plans & billing",
-            "plans and billing"
-        ]
-        let loweredBody = body.lowercased()
-        if billingMarkers.contains(where: { loweredBody.contains($0) }) { return .paymentRequired }
+        if textIndicatesBillingProblem(body) { return .paymentRequired }
         let noAnswerCodes: Set<Int> = [401, 403, 404, 429]
         guard (400..<500).contains(statusCode), !noAnswerCodes.contains(statusCode) else {
             return .noAnswer
@@ -382,6 +372,28 @@ public enum CapabilityProbe {
         let mentionsTools = lowered.range(of: #"\btools?\b"#, options: .regularExpression) != nil
             || ["function_call", "function call", "functions"].contains { lowered.contains($0) }
         return mentionsTools ? .refusedTools : .refusedOurRequest
+    }
+
+    /// Whether an error body says the ACCOUNT is out of money, as opposed to anything about the
+    /// model. Public so callers can act on it, not merely grade it: an empty wallet is account-wide
+    /// and fails every call identically, so a sweep that keeps going produces one indistinguishable
+    /// `?` per model and buries the single fact that explains all of them.
+    ///
+    /// A text signal rather than a status code because 402 is not what the vendors actually send:
+    /// Anthropic uses HTTP 400 `invalid_request_error`, OpenAI a 429 `insufficient_quota`. Phrases
+    /// are specific enough not to fire on a real capability refusal — deliberately not bare words
+    /// like "billing" or "credits", which appear in unrelated copy.
+    public static func textIndicatesBillingProblem(_ text: String) -> Bool {
+        let lowered = text.lowercased()
+        return [
+            "credit balance is too low",    // Anthropic
+            "insufficient_quota",           // OpenAI
+            "exceeded your current quota",  // OpenAI
+            "insufficient credits",
+            "purchase credits",
+            "plans & billing",
+            "plans and billing"
+        ].contains { lowered.contains($0) }
     }
 
     /// Whether an error body says the MODEL itself is gone — retired, removed, never existed — as
