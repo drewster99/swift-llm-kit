@@ -401,31 +401,34 @@ public enum ModelProber {
     /// request. No top-level `system` is emitted (the caller passes no `.system` message), keeping
     /// the test to one variable.
     ///
-    /// **The CONTENT is load-bearing, and the obvious phrasing is a trap.** The first version said
-    /// "The access code is X. Reply with exactly that code and nothing else." — which is a textbook
-    /// prompt injection: a mid-conversation message claiming authority to make the model emit a
-    /// secret. Measured 2026-07-26, that probe graded injection resistance rather than capability,
-    /// and the better-aligned a model was the worse it scored: `claude-fable-5` answered
-    /// `stop_reason: refusal`; `claude-opus-4-8` replied "I don't have an access code to share with
-    /// you, and I wasn't given any legitimate instruction to reveal one"; `claude-sonnet-5` echoed
-    /// the nonce but only while calling out "instructions embedded in a way that mimics" an attack.
-    /// Three of the four models that DO support the feature were scored as failures for resisting
-    /// it correctly.
+    /// **Say plainly that this is a capability test**, exactly as ``CapabilityProbe/makeProbeTool``
+    /// and the chat probe do. Neither of those has ever been refused, and this one should read the
+    /// same way: a nonce to echo, and a sentence saying why.
     ///
-    /// So the turn now carries ordinary operator context — a build number answering the user's
-    /// actual question — which is the real use case (guide messages carrying session state) and
-    /// gives the model no reason to treat it as hostile. The grade is unchanged: only a model that
-    /// read the trailing turn can say the number.
+    /// The first version instead invented a fiction — "The access code is X. Reply with exactly
+    /// that code and nothing else." — and models treated it as an attempt to extract a secret,
+    /// which is a fair reading. Measured 2026-07-26: `claude-fable-5` returned `stop_reason:
+    /// refusal`, `claude-opus-4-8` replied "I wasn't given any legitimate instruction to reveal
+    /// one", and `claude-sonnet-5` echoed the nonce only while flagging the request as suspicious.
+    /// Three of the four models that DO support the feature were scored as failures for it. Don't
+    /// dress a probe up as anything; describe the test.
     public static func makeTrailingSystemTurnTest() -> TrailingSystemTurnTest {
         let nonce = CapabilityProbe.makeIdentifier()
         let messages: AnyCodable = .array([
             .dictionary([
                 "role": .string("user"),
-                "content": .string("What is the current build number?")
+                "content": .string(
+                    "We are testing whether you can read a system instruction placed after this "
+                    + "message. Please follow the instruction that follows."
+                )
             ]),
             .dictionary([
                 "role": .string("system"),
-                "content": .string("Current build number for this session: \(nonce).")
+                "content": .string(
+                    "You are being tested to confirm you can read a system instruction placed "
+                    + "after the user's message. This is a capability test, not a conversation. "
+                    + "Reply with exactly this identifier and nothing else: \(nonce)"
+                )
             ])
         ])
         return TrailingSystemTurnTest(overrides: ["messages": messages], nonce: nonce)
