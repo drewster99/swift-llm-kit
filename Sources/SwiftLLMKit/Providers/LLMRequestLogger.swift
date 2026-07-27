@@ -47,6 +47,30 @@ public enum LLMRequestLogger {
         return f.string(from: Date())
     }
 
+    /// Monotonic per-process counter behind `uniqueStamp()`. A lock rather than a bare `static var`
+    /// because every provider logs from whatever task it happens to run on.
+    private static let sequence = OSAllocatedUnfairLock(initialState: 0)
+
+    /// A `timestamp()` followed by a monotonic sequence number — unique for the life of the process.
+    ///
+    /// The timestamp alone is millisecond-resolution and providers log CONCURRENTLY: a parallel
+    /// tool-call batch fires several evaluations that land in the same millisecond. Those computed
+    /// identical filenames, and `write(to:atomically:)` let the last one win — so the log silently
+    /// destroyed exactly the requests most worth comparing against each other, and the console
+    /// showed two identical summary lines that looked like double-logging rather than two calls.
+    /// Both the filename and the summary carry the sequence, so neither is ambiguous now.
+    ///
+    /// A counter rather than random characters because it also records the ORDER the colliding
+    /// calls were made, which a random tie-break throws away. It never wraps — uniqueness is the
+    /// entire point — so past 99999 calls the field simply widens.
+    static func uniqueStamp() -> String {
+        let ordinal = sequence.withLock { (count: inout Int) -> Int in
+            count += 1
+            return count
+        }
+        return "\(timestamp())-\(String(format: "%05d", ordinal))"
+    }
+
     /// Logs a full request body to a JSON file and prints a console summary.
     public static func logRequest(
         label: String,
@@ -55,7 +79,7 @@ public enum LLMRequestLogger {
         body: [String: Any],
         rawData: Data
     ) {
-        let stamp = timestamp()
+        let stamp = uniqueStamp()
         let safeModel = model.replacingOccurrences(of: "/", with: "_")
         let prefix = "\(stamp)_\(label)_\(safeModel)"
 
@@ -101,7 +125,7 @@ public enum LLMRequestLogger {
         method: String,
         url: URL
     ) {
-        let stamp = timestamp()
+        let stamp = uniqueStamp()
         print("[\(label)] REQUEST \(stamp) → \(method) \(url.absoluteString)")
 
         let file = logDirectory.appendingPathComponent("\(stamp)_\(label)_request.txt")
@@ -118,7 +142,7 @@ public enum LLMRequestLogger {
         statusCode: Int,
         data: Data
     ) {
-        let stamp = timestamp()
+        let stamp = uniqueStamp()
         let size = data.count
         var summary = "status=\(statusCode) bytes=\(size)"
 
