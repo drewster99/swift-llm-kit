@@ -104,9 +104,9 @@ struct OllamaProvider: LLMProvider {
         request.httpBody = requestData
 
         logger.debug("Request: POST \(url.absoluteString, privacy: .public) model=\(configuration.model, privacy: .public)")
-        if verboseLogging {
-            LLMRequestLogger.logRequest(label: "Ollama", url: url, model: configuration.model, body: body, rawData: requestData)
-        }
+        let requestLog: LLMRequestLogger.RequestLogToken? = verboseLogging
+            ? LLMRequestLogger.logRequest(label: "Ollama", url: url, model: configuration.model, body: body, rawData: requestData)
+            : nil
 
         let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -114,7 +114,7 @@ struct OllamaProvider: LLMProvider {
         }
 
         if verboseLogging {
-            LLMRequestLogger.logResponse(label: "Ollama", statusCode: httpResponse.statusCode, data: data)
+            LLMRequestLogger.logResponse(label: "Ollama", statusCode: httpResponse.statusCode, data: data, for: requestLog)
         }
 
         guard (200...299).contains(httpResponse.statusCode) else {

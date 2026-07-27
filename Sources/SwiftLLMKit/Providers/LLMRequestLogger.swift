@@ -71,17 +71,51 @@ public enum LLMRequestLogger {
         return "\(timestamp())-\(String(format: "%05d", ordinal))"
     }
 
+    // MARK: - Request/response correlation
+
+    /// Handed back by `logRequest` / `logBodylessRequest` and passed to `logResponse` so a response
+    /// can be tied to the request that produced it.
+    ///
+    /// Without it the two files were uncorrelated: each drew its own stamp, and once several calls
+    /// are in flight — which is the normal case, not the exception — nothing pairs them. Matching by
+    /// time doesn't work either, since responses arrive out of order.
+    ///
+    /// Construction is deliberately internal. A token is evidence that a request was actually
+    /// logged, so the only way to get one is to log a request.
+    public struct RequestLogToken: Sendable {
+        /// The unique stamp the request file was named with. The response reuses it verbatim, so
+        /// the pair shares a filename prefix and sorts adjacent in the log directory.
+        public let stamp: String
+        /// Filename-safe model, when the request had one. Carried so the response filename names the
+        /// model too — it never did, which made same-millisecond responses from different models
+        /// indistinguishable by name.
+        public let modelSegment: String?
+        /// When the request went out. Becomes the `+NNNms` on the response summary — the latency was
+        /// previously only recoverable by subtracting two filenames by hand.
+        public let sentAt: Date
+    }
+
+    /// The filename prefix a request and its response share. Both sides compose the name through
+    /// here so a change to the scheme cannot desynchronize the pair.
+    static func fileStem(stamp: String, label: String, modelSegment: String?) -> String {
+        guard let modelSegment, !modelSegment.isEmpty else { return "\(stamp)_\(label)" }
+        return "\(stamp)_\(label)_\(modelSegment)"
+    }
+
     /// Logs a full request body to a JSON file and prints a console summary.
+    ///
+    /// - Returns: a token to hand to `logResponse` so the two files pair up.
+    @discardableResult
     public static func logRequest(
         label: String,
         url: URL,
         model: String,
         body: [String: Any],
         rawData: Data
-    ) {
+    ) -> RequestLogToken {
         let stamp = uniqueStamp()
         let safeModel = model.replacingOccurrences(of: "/", with: "_")
-        let prefix = "\(stamp)_\(label)_\(safeModel)"
+        let prefix = fileStem(stamp: stamp, label: label, modelSegment: safeModel)
 
         let toolCount: Int = {
             // OpenAI/Anthropic use "tools", Gemini wraps in functionDeclarations
@@ -110,6 +144,8 @@ public enum LLMRequestLogger {
                 loggerOS.warning("Failed to write request log to \(file.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
         }
+
+        return RequestLogToken(stamp: stamp, modelSegment: safeModel, sentAt: Date())
     }
 
     /// Logs a request that carries no JSON body — a `GET /models`, say.
@@ -120,29 +156,41 @@ public enum LLMRequestLogger {
     ///
     /// Headers are deliberately not recorded: for these requests the only interesting one is
     /// `Authorization`, and writing API keys to `$TMPDIR` is not a trade worth making.
+    ///
+    /// - Returns: a token to hand to `logResponse` so the two files pair up.
+    @discardableResult
     public static func logBodylessRequest(
         label: String,
         method: String,
         url: URL
-    ) {
+    ) -> RequestLogToken {
         let stamp = uniqueStamp()
         print("[\(label)] REQUEST \(stamp) → \(method) \(url.absoluteString)")
 
-        let file = logDirectory.appendingPathComponent("\(stamp)_\(label)_request.txt")
+        let file = logDirectory.appendingPathComponent("\(fileStem(stamp: stamp, label: label, modelSegment: nil))_request.txt")
         do {
             try "\(method) \(url.absoluteString)\n".write(to: file, atomically: true, encoding: .utf8)
         } catch {
             loggerOS.warning("Failed to write request log to \(file.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
         }
+
+        return RequestLogToken(stamp: stamp, modelSegment: nil, sentAt: Date())
     }
 
     /// Logs a full response body to a JSON file and prints a console summary.
+    ///
+    /// - Parameter token: the token `logRequest` returned for the call being answered. Supplying it
+    ///   names the response file with the REQUEST's stamp, so the pair shares a prefix and sorts
+    ///   adjacent, and prints the round-trip latency. Passing `nil` means what it says — no request
+    ///   was logged for this response — and the file falls back to a stamp of its own, unpaired.
     public static func logResponse(
         label: String,
         statusCode: Int,
-        data: Data
+        data: Data,
+        for token: RequestLogToken? = nil
     ) {
-        let stamp = uniqueStamp()
+        let stamp = token?.stamp ?? uniqueStamp()
+        let latency = token.map { " +\(Int(Date().timeIntervalSince($0.sentAt) * 1000))ms" } ?? ""
         let size = data.count
         var summary = "status=\(statusCode) bytes=\(size)"
 
@@ -165,9 +213,10 @@ public enum LLMRequestLogger {
                 summary += " textBlocks=\(textBlocks) toolUseBlocks=\(toolBlocks)"
             }
         }
-        print("[\(label)] RESPONSE \(stamp) \(summary)")
+        print("[\(label)] RESPONSE \(stamp)\(latency) \(summary)")
 
-        let file = logDirectory.appendingPathComponent("\(stamp)_\(label)_response.json")
+        let stem = fileStem(stamp: stamp, label: label, modelSegment: token?.modelSegment)
+        let file = logDirectory.appendingPathComponent("\(stem)_response.json")
         if let parsed = try? JSONSerialization.jsonObject(with: data),
            let pretty = try? JSONSerialization.data(withJSONObject: parsed, options: [.prettyPrinted, .sortedKeys]),
            let prettyString = String(data: pretty, encoding: .utf8) {

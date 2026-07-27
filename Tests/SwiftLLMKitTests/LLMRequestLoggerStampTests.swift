@@ -56,3 +56,55 @@ struct LLMRequestLoggerStampTests {
                 "no two stamps landed in the same millisecond, so this test proved nothing")
     }
 }
+
+// MARK: - Request/response pairing
+
+@Suite("LLMRequestLogger request/response pairing")
+struct LLMRequestLoggerPairingTests {
+
+    private func token(stamp: String, model: String?) -> LLMRequestLogger.RequestLogToken {
+        LLMRequestLogger.RequestLogToken(stamp: stamp, modelSegment: model, sentAt: Date())
+    }
+
+    @Test("a response reuses the request's stem, so the pair sorts adjacent")
+    func responseSharesRequestStem() {
+        let sent = token(stamp: "2026-07-27_15-45-47.831-00042", model: "qwen3.5:397b")
+        let requestStem = LLMRequestLogger.fileStem(stamp: sent.stamp, label: "OpenAI", modelSegment: sent.modelSegment)
+        let responseStem = LLMRequestLogger.fileStem(stamp: sent.stamp, label: "OpenAI", modelSegment: sent.modelSegment)
+
+        #expect(requestStem == responseStem)
+        #expect(requestStem == "2026-07-27_15-45-47.831-00042_OpenAI_qwen3.5:397b")
+        // Sorting the two real filenames must put the request first, then its own response —
+        // not some other call's response that happened to arrive in between.
+        #expect(["\(responseStem)_response.json", "\(requestStem)_request.json"].sorted()
+                == ["\(requestStem)_request.json", "\(responseStem)_response.json"])
+    }
+
+    @Test("concurrent calls' pairs never interleave")
+    func concurrentPairsStaySeparate() {
+        let first = token(stamp: "2026-07-27_15-45-47.831-00042", model: "qwen3.5:397b")
+        let second = token(stamp: "2026-07-27_15-45-47.831-00043", model: "qwen3.5:397b")
+        let names = [first, second].flatMap { sent -> [String] in
+            let stem = LLMRequestLogger.fileStem(stamp: sent.stamp, label: "OpenAI", modelSegment: sent.modelSegment)
+            return ["\(stem)_request.json", "\(stem)_response.json"]
+        }
+        #expect(Set(names).count == 4)
+        #expect(names.sorted() == names, "a sorted listing must read request, response, request, response")
+    }
+
+    @Test("a bodyless request pairs without a model segment")
+    func bodylessPairOmitsModel() {
+        let stem = LLMRequestLogger.fileStem(stamp: "2026-07-27_15-45-47.831-00042", label: "LiteLLM", modelSegment: nil)
+        #expect(stem == "2026-07-27_15-45-47.831-00042_LiteLLM")
+    }
+
+    /// An empty model must collapse the same way `nil` does, or a request logged with `model: ""`
+    /// writes `<stamp>_<label>__request.json` and its response `<stamp>_<label>_response.json` —
+    /// a silently broken pair.
+    @Test("an empty model segment collapses rather than leaving a dangling separator")
+    func emptyModelSegmentCollapses() {
+        let withEmpty = LLMRequestLogger.fileStem(stamp: "S", label: "OpenAI", modelSegment: "")
+        let withNil = LLMRequestLogger.fileStem(stamp: "S", label: "OpenAI", modelSegment: nil)
+        #expect(withEmpty == withNil)
+    }
+}

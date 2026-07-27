@@ -96,9 +96,9 @@ public struct ModelFetchService: Sendable {
         // absent rather than merely elsewhere.
         let label = "ModelFetch_\(provider.name.replacingOccurrences(of: " ", with: "_"))"
         logger.debug("Model fetch: GET \(modelsURL.absoluteString, privacy: .public)")
-        if Self.verboseLogging {
-            LLMRequestLogger.logBodylessRequest(label: label, method: "GET", url: modelsURL)
-        }
+        let requestLog: LLMRequestLogger.RequestLogToken? = Self.verboseLogging
+            ? LLMRequestLogger.logBodylessRequest(label: label, method: "GET", url: modelsURL)
+            : nil
 
         let (data, response) = try await URLSession.shared.data(for: request)
 
@@ -106,14 +106,16 @@ public struct ModelFetchService: Sendable {
             let code = (response as? HTTPURLResponse)?.statusCode ?? 0
             let body = String(data: data, encoding: .utf8) ?? "(non-utf8)"
             logger.error("Model fetch failed: HTTP \(code, privacy: .public) body=\(body, privacy: .private)")
-            if Self.verboseLogging {
-                LLMRequestLogger.logResponse(label: "\(label)_error", statusCode: code, data: data)
+            // Gated on the token, not on `verboseLogging` again: the flag is a mutable static, and
+            // re-reading it can log half a pair if it flips during the round trip.
+            if requestLog != nil {
+                LLMRequestLogger.logResponse(label: "\(label)_error", statusCode: code, data: data, for: requestLog)
             }
             throw ModelFetchError.httpError(statusCode: code)
         }
 
-        if Self.verboseLogging {
-            LLMRequestLogger.logResponse(label: label, statusCode: http.statusCode, data: data)
+        if requestLog != nil {
+            LLMRequestLogger.logResponse(label: label, statusCode: http.statusCode, data: data, for: requestLog)
         }
 
         let decoded: [DecodedModelFacts]

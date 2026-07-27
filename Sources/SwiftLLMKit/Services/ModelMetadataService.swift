@@ -205,21 +205,23 @@ public actor ModelMetadataService {
             request.setValue(lastModified, forHTTPHeaderField: "If-Modified-Since")
         }
 
-        if Self.verboseLogging {
-            LLMRequestLogger.logBodylessRequest(label: "LiteLLM", method: "GET", url: Self.liteLLMURL)
-        }
+        let requestLog: LLMRequestLogger.RequestLogToken? = Self.verboseLogging
+            ? LLMRequestLogger.logBodylessRequest(label: "LiteLLM", method: "GET", url: Self.liteLLMURL)
+            : nil
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw ModelMetadataError.invalidResponse
         }
 
-        if Self.verboseLogging {
+        // Gated on the token, not on `verboseLogging` again: the flag is a mutable static, and
+        // re-reading it can log half a pair if it flips during the round trip.
+        if requestLog != nil {
             logger.debug("LiteLLM fetch: HTTP \(http.statusCode) bytes=\(data.count)")
             // Through the shared logger so the metadata fetch sits in the same directory and
             // timeline as everything else, and so the status code is recorded — a 304 is the
             // difference between "fetched" and "reused the cache", and it used to be invisible.
-            LLMRequestLogger.logResponse(label: "LiteLLM", statusCode: http.statusCode, data: data)
+            LLMRequestLogger.logResponse(label: "LiteLLM", statusCode: http.statusCode, data: data, for: requestLog)
         }
 
         if http.statusCode == 304 {
