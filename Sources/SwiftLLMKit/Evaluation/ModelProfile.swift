@@ -95,7 +95,12 @@ public struct ModelProfile: Sendable, Codable, Equatable {
     /// otherwise know, so an echo proves the content was *read*, not merely that the role was
     /// tolerated. A 200 without the echo stays inconclusive — "accepted but ignored" and "the model
     /// rambled" are not distinguishable from one call, and neither is a measured no.
-    public var trailingSystemTurn: ProbeFinding<Bool>?
+    ///
+    /// Named to match `BehaviorFlags.supportsTrailingSystemMessage`, which consumes it: one
+    /// capability, one word for it, on both sides of the boundary. Its PERSISTED key is still
+    /// `trailingSystemTurn` (see `CodingKeys`) — the rename is an API rename, and the probe results
+    /// already on disk cost real API calls to obtain.
+    public var trailingSystemMessage: ProbeFinding<Bool>?
 
     /// Per named effort level: accepted or rejected. Keys are the levels attempted.
     public var effortLevels: [String: ProbeFinding<Bool>]
@@ -103,6 +108,45 @@ public struct ModelProfile: Sendable, Codable, Equatable {
     /// Total wall clock and call count, so the cost of a full run is visible rather than guessed.
     public var callCount: Int
     public var duration: TimeInterval
+
+    /// Present only to map `trailingSystemMessage` back to the key already written into every
+    /// probe record on disk. A probed finding costs a real API call — and that one is Anthropic-
+    /// gated, stated nowhere in `/models`, so it can only be re-obtained by asking again — which
+    /// makes silently dropping it on an API rename the wrong trade. The decoder stays SYNTHESIZED;
+    /// this is a key mapping, not a hand-written `init(from:)`.
+    ///
+    /// WARNING: an explicit `CodingKeys` means a stored property with a DEFAULT VALUE (every
+    /// optional has one) that is missing a case here is silently not persisted — and new probe
+    /// dimensions land as exactly that shape. `ModelProfileCodingKeyCoverageTests` fails when a
+    /// property is added without a case, so the mistake is loud rather than silent.
+    private enum CodingKeys: String, CodingKey {
+        case providerID
+        case modelID
+        case probedAt
+        case displayName
+        case createdAt
+        case pricing
+        case deprecatedOn
+        case maxTemperature
+        case samplingDefaults
+        case isFree
+        case benchmarks
+        case isAvailable
+        case isAccessDenied
+        case maxContextTokens
+        case chat
+        case toolCalling
+        case toolResultRoundTrip
+        case vision
+        case pdfInput
+        case acceptsTemperature
+        case maxOutputTokens
+        case maxOutputBoundedByContext
+        case trailingSystemMessage = "trailingSystemTurn"
+        case effortLevels
+        case callCount
+        case duration
+    }
 
     public init(
         providerID: String,
@@ -127,7 +171,7 @@ public struct ModelProfile: Sendable, Codable, Equatable {
         acceptsTemperature: ProbeFinding<Bool> = .notAttempted,
         maxOutputTokens: ProbeFinding<Int> = .notAttempted,
         maxOutputBoundedByContext: ProbeFinding<Int>? = nil,
-        trailingSystemTurn: ProbeFinding<Bool>? = nil,
+        trailingSystemMessage: ProbeFinding<Bool>? = nil,
         effortLevels: [String: ProbeFinding<Bool>] = [:],
         callCount: Int = 0,
         duration: TimeInterval = 0
@@ -154,7 +198,7 @@ public struct ModelProfile: Sendable, Codable, Equatable {
         self.acceptsTemperature = acceptsTemperature
         self.maxOutputTokens = maxOutputTokens
         self.maxOutputBoundedByContext = maxOutputBoundedByContext
-        self.trailingSystemTurn = trailingSystemTurn
+        self.trailingSystemMessage = trailingSystemMessage
         self.effortLevels = effortLevels
         self.callCount = callCount
         self.duration = duration
