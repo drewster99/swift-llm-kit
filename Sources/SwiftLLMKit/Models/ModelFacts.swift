@@ -94,7 +94,7 @@ public struct ModelFacts: Codable, Sendable, Equatable {
             sizeLabel: sizeLabel,
             quantizationLabel: quantizationLabel,
             pricing: pricing,
-            supportsChatCompletions: supportsChatCompletions ?? true,
+            supportsChatCompletions: supportsChatCompletions,   // raw tri-state: nil stays unknown (reads true)
             mode: mode,
             validEffortLevels: validEffortLevels ?? [],
             behaviorFlags: flags,

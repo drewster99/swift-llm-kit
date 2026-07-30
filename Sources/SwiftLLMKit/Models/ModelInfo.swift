@@ -26,12 +26,18 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
     /// Rich pricing data for this model. Supports tiered pricing, cache
     /// pricing, and service tier variants.
     public var pricing: ModelPricing?
-    /// Whether this model supports `/v1/chat/completions`. Defaults to `true` unless LiteLLM says otherwise.
+    /// Whether this model supports `/v1/chat/completions`. A 2-state VIEW over ``capabilities``'
+    /// `.chat`: unknown reads `true` (assume chat unless a provider says no), so it behaves exactly
+    /// as the former stored property; setting it records an explicit `capabilities[.chat]`. The
+    /// capability is now the single source of truth for chat support — this is a convenience shim.
     ///
     /// Endpoint reachability only — it does NOT mean the model can back an agent. Gemini's image
     /// models answer on the chat endpoint and are `true` here. Whether a model can actually drive
     /// an agent is ``capabilities``' `toolUse` to answer, on evidence rather than on kind.
-    public var supportsChatCompletions: Bool
+    public var supportsChatCompletions: Bool {
+        get { capabilities[.chat] ?? true }
+        set { capabilities[.chat] = newValue }
+    }
     /// The model's kind as reported by LiteLLM (`chat`, `embedding`, `image_generation`,
     /// `responses`, `ocr`, …), or `nil` when unknown — which is the norm for the ~63% of the
     /// catalog LiteLLM doesn't cover.
@@ -132,7 +138,7 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
         sizeLabel: String? = nil,
         quantizationLabel: String? = nil,
         pricing: ModelPricing? = nil,
-        supportsChatCompletions: Bool = true,
+        supportsChatCompletions: Bool? = nil,
         mode: String? = nil,
         validEffortLevels: [String] = [],
         behaviorFlags: BehaviorFlags = BehaviorFlags(),
@@ -159,7 +165,9 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
         self.sizeLabel = sizeLabel
         self.quantizationLabel = quantizationLabel
         self.pricing = pricing
-        self.supportsChatCompletions = supportsChatCompletions
+        // Chat support lives in `capabilities` as `.chat`; stamp it only when the caller stated a
+        // value. Omitted ⇒ unknown, which `supportsChatCompletions` reads back as `true`.
+        if let supportsChatCompletions { self.capabilities[.chat] = supportsChatCompletions }
         self.mode = mode
         self.validEffortLevels = validEffortLevels
         self.behaviorFlags = behaviorFlags
@@ -217,7 +225,11 @@ extension ModelInfo: Codable {
         capabilities = try container.decodeIfPresent(ModelCapabilities.self, forKey: .capabilities) ?? ModelCapabilities()
         sizeLabel = try container.decodeIfPresent(String.self, forKey: .sizeLabel)
         quantizationLabel = try container.decodeIfPresent(String.self, forKey: .quantizationLabel)
-        supportsChatCompletions = try container.decodeIfPresent(Bool.self, forKey: .supportsChatCompletions) ?? true
+        // Migrate the legacy standalone chat flag into the capability, its new single home. New data
+        // carries no such key — chat rides inside `capabilities` — so this only fires on old catalogs.
+        if let legacyChat = try container.decodeIfPresent(Bool.self, forKey: .supportsChatCompletions) {
+            capabilities[.chat] = legacyChat
+        }
         mode = try container.decodeIfPresent(String.self, forKey: .mode)
         validEffortLevels = try container.decodeIfPresent([String].self, forKey: .validEffortLevels) ?? []
         behaviorFlags = try container.decodeIfPresent(BehaviorFlags.self, forKey: .behaviorFlags) ?? BehaviorFlags()
@@ -259,11 +271,10 @@ extension ModelInfo: Codable {
         try container.encodeIfPresent(createdAt, forKey: .createdAt)
         try container.encodeIfPresent(maxInputTokens, forKey: .maxInputTokens)
         try container.encodeIfPresent(maxOutputTokens, forKey: .maxOutputTokens)
-        try container.encode(capabilities, forKey: .capabilities)
+        try container.encode(capabilities, forKey: .capabilities)   // chat now rides inside here as `.chat`
         try container.encodeIfPresent(sizeLabel, forKey: .sizeLabel)
         try container.encodeIfPresent(quantizationLabel, forKey: .quantizationLabel)
         try container.encodeIfPresent(pricing, forKey: .pricing)
-        try container.encode(supportsChatCompletions, forKey: .supportsChatCompletions)
         try container.encodeIfPresent(mode, forKey: .mode)
         if !validEffortLevels.isEmpty {
             try container.encode(validEffortLevels, forKey: .validEffortLevels)

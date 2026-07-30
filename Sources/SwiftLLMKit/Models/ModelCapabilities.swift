@@ -3,6 +3,10 @@ import Foundation
 /// One feature a model can support. The set of cases IS the set of capability flags — adding a
 /// capability means adding a case here and a matching computed accessor on ``ModelCapabilities``.
 public enum ModelCapability: String, CaseIterable, Sendable, Codable, Hashable {
+    /// The model answers on `/v1/chat/completions` — the baseline every agent role needs. Unlike
+    /// the others, its boolean VIEW defaults to `true` (assume chat unless a provider says no); see
+    /// ``ModelInfo/supportsChatCompletions``, which is now a view over this capability.
+    case chat
     case toolUse
     case vision
     case reasoning
@@ -26,6 +30,7 @@ public enum ModelCapability: String, CaseIterable, Sendable, Codable, Hashable {
     /// Short human-readable label, used by ``ModelCapabilities/enabledLabels``.
     public var label: String {
         switch self {
+        case .chat:                return "Chat"
         case .toolUse:             return "Tools"
         case .vision:              return "Vision"
         case .reasoning:           return "Reasoning"
