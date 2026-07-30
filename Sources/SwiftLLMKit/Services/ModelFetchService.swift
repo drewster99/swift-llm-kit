@@ -344,9 +344,12 @@ public struct ModelFetchService: Sendable {
     /// The modality and parameter ARRAYS are explicit enumerations, so when non-empty they are
     /// stated BOTH directions (absence from the list = stated no); an absent or empty array says
     /// nothing. Schema: https://openrouter.ai/docs/api-reference/list-available-models
+    ///
+    /// The returned list is the payload's own entries PLUS a synthesized `:floor` / `:nitro` row
+    /// per base model — see ``syntheticDynamicVariants(basedOn:)``.
     private func decodeOpenRouterFacts(from data: Data) throws -> [DecodedModelFacts] {
         let decoded = try JSONDecoder().decode(OpenRouterModelsResponse.self, from: data)
-        return decoded.data
+        let stated = decoded.data
             .map { model in
                 var facts = ModelFacts()
                 facts.displayName = model.name
@@ -440,7 +443,42 @@ public struct ModelFetchService: Sendable {
 
                 return DecodedModelFacts(modelID: model.id, facts: facts)
             }
+        return (stated + syntheticDynamicVariants(basedOn: stated))
             .sorted { $0.modelID < $1.modelID }
+    }
+
+    /// One `<base>:floor` and one `<base>:nitro` row per model OpenRouter states without a suffix
+    /// of its own.
+    ///
+    /// These slugs are valid on every model but appear in `/models` nowhere (see
+    /// ``OpenRouterDynamicVariant``), so enumerating the payload can never surface them. Stating
+    /// them here is what puts them in a model picker and — just as importantly — makes them
+    /// probeable: the capability prober seeds from this same decoded list by exact `modelID`
+    /// match, so a model it cannot see is a model it cannot measure.
+    ///
+    /// Each row inherits the base model's facts. That is not merely convenient. A consumer that
+    /// resolves pricing by an exact `providerID/modelID` lookup gets nothing for a suffixed id
+    /// absent from the catalog, and a missed price reads as a free request rather than an error —
+    /// inheriting the base row closes that silent zero. The inherited price belongs to the
+    /// DEFAULT route and remains an estimate, because sorting is precisely what changes which
+    /// provider, and therefore which price, serves the request; each variant's description says so.
+    ///
+    /// Applied unconditionally rather than only to multi-route models: establishing the route
+    /// count costs one `/models/{author}/{slug}/endpoints` request per model (~367 per refresh),
+    /// which is not worth spending to suppress rows that are merely redundant.
+    private func syntheticDynamicVariants(basedOn stated: [DecodedModelFacts]) -> [DecodedModelFacts] {
+        stated
+            .filter { OpenRouterDynamicVariant.acceptsDynamicSuffix(modelID: $0.modelID) }
+            .flatMap { base in
+                OpenRouterDynamicVariant.allCases.map { variant in
+                    var facts = base.facts
+                    facts.displayName = "\(base.facts.displayName ?? base.modelID) \(variant.displayNameSuffix)"
+                    facts.modelDescription = [variant.descriptionSentence, base.facts.modelDescription]
+                        .compactMap { $0 }
+                        .joined(separator: "\n\n")
+                    return DecodedModelFacts(modelID: base.modelID + variant.suffix, facts: facts)
+                }
+            }
     }
 
     // MARK: - HuggingFace
