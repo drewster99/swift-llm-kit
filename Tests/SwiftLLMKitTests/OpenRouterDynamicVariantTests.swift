@@ -104,6 +104,19 @@ struct OpenRouterDynamicVariantTests {
         #expect(OpenRouterDynamicVariant.nitro.providerSortValue == "throughput")
     }
 
+    /// The static set moves — `:extended` is documented with zero entries today — so a suffix
+    /// being dynamic now is no promise it stays that way. If OpenRouter ever lists one, its own
+    /// entry must stand alone rather than being doubled by the row we would have invented.
+    @Test("A listed variant is never shadowed by a synthesized duplicate")
+    func statedVariantWins() throws {
+        let body = #"{"data":[{"id":"x/y","name":"Why"},{"id":"x/y:floor","name":"Why floor, as listed","description":"Stated by OpenRouter."}]}"#
+        let models = try decode(body)
+        #expect(models.map(\.modelID) == ["x/y", "x/y:floor", "x/y:nitro"])
+        let floor = try #require(models.first { $0.modelID == "x/y:floor" })
+        #expect(floor.displayName == "Why floor, as listed")
+        #expect(floor.modelDescription == "Stated by OpenRouter.")
+    }
+
     @Test("Suffix eligibility is decided by the presence of a colon")
     func suffixEligibility() {
         #expect(OpenRouterDynamicVariant.acceptsDynamicSuffix(modelID: "a/b"))

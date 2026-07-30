@@ -467,7 +467,12 @@ public struct ModelFetchService: Sendable {
     /// count costs one `/models/{author}/{slug}/endpoints` request per model (~367 per refresh),
     /// which is not worth spending to suppress rows that are merely redundant.
     private func syntheticDynamicVariants(basedOn stated: [DecodedModelFacts]) -> [DecodedModelFacts] {
-        stated
+        // What OpenRouter lists is authoritative and must never be shadowed by a row we invented.
+        // The static set demonstrably moves (`:extended` is documented with zero entries today),
+        // so a suffix being dynamic now is not a promise it stays that way — if one is ever
+        // listed, the payload's own entry stands and ours is dropped.
+        let statedIDs = Set(stated.map(\.modelID))
+        return stated
             .filter { OpenRouterDynamicVariant.acceptsDynamicSuffix(modelID: $0.modelID) }
             .flatMap { base in
                 OpenRouterDynamicVariant.allCases.map { variant in
@@ -479,6 +484,7 @@ public struct ModelFetchService: Sendable {
                     return DecodedModelFacts(modelID: base.modelID + variant.suffix, facts: facts)
                 }
             }
+            .filter { !statedIDs.contains($0.modelID) }
     }
 
     // MARK: - HuggingFace
