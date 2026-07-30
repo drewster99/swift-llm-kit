@@ -2,85 +2,112 @@ import Testing
 import Foundation
 @testable import SwiftLLMKit
 
-/// The 2026-07-30 `ModelCapabilities` refactor: 17 loose `Bool` stored properties became one
-/// `Set<ModelCapability>` with the booleans preserved as computed get/set. These pin the two things
-/// that must not regress — the public boolean API stays behaviourally identical, and the on-disk
-/// Codable JSON stays byte-compatible — plus the new availability-state derivation and the
-/// capability/availability filter predicate that `availableModels(…)` delegates to.
-@Suite("ModelCapabilities set-backing + availability filtering")
-struct ModelCapabilitySetBackingTests {
+/// The 2026-07-30 `ModelCapabilities` work: 17 loose `Bool` stored properties became a tri-state
+/// `[ModelCapability: Bool]` (present = known true/false, absent = unknown). These pin what must hold:
+/// the public boolean API stays a 2-state view (unknown reads false) so no existing reader breaks;
+/// the tri-state truth is reachable via the subscript; the Codable form serializes only KNOWN
+/// capabilities and still reads legacy full-Bool objects; and the filter predicate acts on KNOWN
+/// facts only — an unmeasured capability never disqualifies a model.
+@Suite("ModelCapabilities tri-state + availability filtering")
+struct ModelCapabilityTriStateTests {
 
-    // MARK: - Boolean API ⇄ Set
+    // MARK: - Known / unknown distinction
 
-    @Test("Boolean initializer populates the set; unmentioned flags are off")
-    func boolInitMapsToSet() {
+    @Test("Known-true init: named flags are known-true, the rest are UNKNOWN (not false)")
+    func trueInitLeavesRestUnknown() {
         let caps = ModelCapabilities(toolUse: true, vision: true, toolResultRoundTrip: true)
         #expect(caps.toolUse)
         #expect(caps.vision)
         #expect(caps.toolResultRoundTrip)
-        #expect(!caps.reasoning)
-        #expect(!caps.pdfInput)
+        #expect(caps.state(of: .toolUse) == true)
+        #expect(caps.isKnown(.toolUse))
+        // The crux: an unmentioned capability is UNKNOWN, not known-false.
+        #expect(caps.state(of: .reasoning) == nil)
+        #expect(!caps.isKnown(.reasoning))
+        #expect(!caps.reasoning)                 // 2-state view still reads false
         #expect(caps.asSet == [.toolUse, .vision, .toolResultRoundTrip])
         #expect(caps.contains(.toolUse))
         #expect(!caps.contains(.reasoning))
     }
 
-    @Test("Set initializer is equivalent to the boolean one")
-    func setInitMatchesBoolInit() {
+    @Test("Set initializer marks its members known-true, equivalent to the boolean one")
+    func setInitMatchesTrueOnlyBoolInit() {
         let fromSet = ModelCapabilities([.reasoning, .pdfInput])
         let fromBools = ModelCapabilities(reasoning: true, pdfInput: true)
         #expect(fromSet == fromBools)
-        #expect(fromSet.reasoning)
-        #expect(fromSet.pdfInput)
+        #expect(fromSet.state(of: .reasoning) == true)
+        #expect(fromSet.state(of: .vision) == nil)
     }
 
-    @Test("Setters insert and remove from the backing set")
-    func settersMutateSet() {
+    @Test("Subscript reaches all three states; nil clears to unknown")
+    func subscriptTriState() {
         var caps = ModelCapabilities()
-        #expect(caps.asSet.isEmpty)
-        caps.toolUse = true
-        #expect(caps.contains(.toolUse))
+        #expect(caps[.toolUse] == nil)
+        caps[.toolUse] = true
+        #expect(caps[.toolUse] == true)
+        #expect(caps.toolUse)
+        caps[.toolUse] = false
+        #expect(caps[.toolUse] == false)
+        #expect(caps.isKnown(.toolUse))
+        #expect(!caps.toolUse)                   // 2-state view: known-false reads false
+        caps[.toolUse] = nil
+        #expect(caps[.toolUse] == nil)
+        #expect(!caps.isKnown(.toolUse))
+        #expect(!caps.toolUse)                   // unknown also reads false
+    }
+
+    @Test("Boolean setter records an EXPLICIT true/false, never unknown")
+    func boolSetterRecordsExplicit() {
+        var caps = ModelCapabilities()
+        caps.toolUse = false                     // deliberate statement of false
+        #expect(caps.state(of: .toolUse) == false)
+        #expect(caps.isKnown(.toolUse))
+        #expect(caps.asSet.isEmpty)              // known-false is not "on"
         caps.vision = true
-        caps.toolUse = false
-        #expect(!caps.contains(.toolUse))
-        #expect(caps.contains(.vision))
+        #expect(caps.state(of: .vision) == true)
         #expect(caps.asSet == [.vision])
     }
 
-    @Test("enabledLabels reflects only enabled flags, in canonical case order")
+    @Test("enabledLabels lists only known-true flags, in canonical case order")
     func enabledLabelsOrder() {
         let caps = ModelCapabilities(toolUse: true, vision: true)
-        // enabledLabels iterates ModelCapability.allCases, so order is canonical regardless of how
-        // the flags were set: toolUse precedes vision.
         #expect(caps.enabledLabels == [ModelCapability.toolUse.label, ModelCapability.vision.label])
     }
 
-    @Test("Every capability case has a matching boolean accessor round-trip")
-    func everyCaseRoundTripsThroughItsBool() {
+    @Test("Every capability round-trips through its known-true accessor")
+    func everyCaseRoundTrips() {
         for capability in ModelCapability.allCases {
             let caps = ModelCapabilities([capability])
             #expect(caps.contains(capability))
+            #expect(caps.state(of: capability) == true)
             #expect(caps.asSet == [capability])
             #expect(caps.enabledLabels == [capability.label])
         }
     }
 
-    // MARK: - Codable backward compatibility
+    // MARK: - Codable
 
-    @Test("Encoded JSON is the flat per-capability boolean object, unchanged")
-    func encodesToFlatBooleanObject() throws {
-        let caps = ModelCapabilities(toolUse: true, vision: true)
+    @Test("Encodes ONLY known capabilities; unknowns are omitted")
+    func encodesOnlyKnownCapabilities() throws {
+        var caps = ModelCapabilities(toolUse: true, vision: true)
+        caps[.reasoning] = false                 // an explicit known-false is written too
         let data = try JSONEncoder().encode(caps)
         let obj = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Bool])
         #expect(obj["toolUse"] == true)
         #expect(obj["vision"] == true)
         #expect(obj["reasoning"] == false)
-        #expect(obj["toolResultRoundTrip"] == false)
-        // All 17 keys are present (the wire format never omitted any).
-        #expect(obj.count == ModelCapability.allCases.count)
+        #expect(obj["pdfInput"] == nil)          // unknown ⇒ absent from the wire
+        #expect(obj.count == 3)
     }
 
-    @Test("Decodes a legacy full boolean object")
+    @Test("A fresh all-unknown value encodes to an empty object")
+    func allUnknownEncodesEmpty() throws {
+        let data = try JSONEncoder().encode(ModelCapabilities())
+        let obj = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Bool])
+        #expect(obj.isEmpty)
+    }
+
+    @Test("Decodes a legacy full boolean object as all-known")
     func decodesLegacyFullObject() throws {
         let json = """
         {"toolUse":true,"vision":false,"reasoning":true,"codeExecution":false,"promptCaching":false,
@@ -90,26 +117,31 @@ struct ModelCapabilitySetBackingTests {
         """
         let caps = try JSONDecoder().decode(ModelCapabilities.self, from: Data(json.utf8))
         #expect(caps.asSet == [.toolUse, .reasoning, .parallelToolCalls, .pdfInput, .systemMessages, .toolResultRoundTrip])
+        #expect(caps.state(of: .vision) == false)   // legacy false decodes as KNOWN-false
+        #expect(caps.isKnown(.vision))
     }
 
-    @Test("Decodes a partial object with missing keys defaulting to false")
-    func decodesPartialObject() throws {
+    @Test("Decodes a partial object: absent keys are UNKNOWN")
+    func decodesPartialObjectLeavesRestUnknown() throws {
         let json = #"{"toolUse":true,"reasoning":true}"#
         let caps = try JSONDecoder().decode(ModelCapabilities.self, from: Data(json.utf8))
-        #expect(caps.toolUse)
-        #expect(caps.reasoning)
-        #expect(!caps.vision)
+        #expect(caps.state(of: .toolUse) == true)
+        #expect(caps.state(of: .reasoning) == true)
+        #expect(caps.state(of: .vision) == nil)     // absent ⇒ unknown, not false
         #expect(caps.asSet == [.toolUse, .reasoning])
     }
 
-    @Test("Round-trips through Codable unchanged")
-    func codableRoundTrip() throws {
-        let original = ModelCapabilities(
-            toolUse: true, vision: true, reasoning: true, pdfInput: true, toolChoice: true, toolResultRoundTrip: true
-        )
+    @Test("Round-trips true / false / unknown distinctly")
+    func codableRoundTripPreservesTriState() throws {
+        var original = ModelCapabilities(toolUse: true)
+        original[.vision] = false                    // known-false
+        // reasoning left unknown
         let data = try JSONEncoder().encode(original)
         let restored = try JSONDecoder().decode(ModelCapabilities.self, from: data)
         #expect(restored == original)
+        #expect(restored.state(of: .toolUse) == true)
+        #expect(restored.state(of: .vision) == false)
+        #expect(restored.state(of: .reasoning) == nil)
     }
 
     // MARK: - Availability states
@@ -153,35 +185,41 @@ struct ModelCapabilitySetBackingTests {
 
     @Test(".all never appears in a model's set (future/past deprecation are mutually exclusive)")
     func allNeverPresentOnAModel() {
-        // Most-decorated possible model: unavailable + access denied + a deprecation date.
         let past = Date(timeIntervalSinceNow: -86_400)
         let states = model(isAvailable: false, isAccessDenied: true, deprecatedOn: past).availabilityStates
         #expect(states == [.isUnavailable, .isAccessDenied, .isDeprecated])
         #expect(!states.contains(.all))
     }
 
-    // MARK: - satisfies() filter predicate (what availableModels delegates to)
+    // MARK: - satisfies() filter predicate (tri-state)
 
-    @Test("Required capabilities must all be present")
-    func requiredCapabilitiesGate() {
-        var m = model()
-        m.capabilities = ModelCapabilities(toolUse: true)
-        #expect(m.satisfies(requiredCapabilities: [.toolUse], mustNotBePresent: [], includedAvailabilityStates: []))
-        #expect(!m.satisfies(requiredCapabilities: [.toolUse, .vision], mustNotBePresent: [], includedAvailabilityStates: []))
+    @Test("Required capability rejects ONLY a known-false; unknown and true pass")
+    func requiredRejectsOnlyKnownFalse() {
+        var known = model(); known.capabilities = ModelCapabilities(toolUse: true)
+        #expect(known.satisfies(requiredCapabilities: [.toolUse], mustNotBePresent: [], includedAvailabilityStates: []))
+
+        let unknown = model()   // toolUse unmeasured
+        #expect(unknown.satisfies(requiredCapabilities: [.toolUse], mustNotBePresent: [], includedAvailabilityStates: []))
+
+        var denied = model(); denied.capabilities[.toolUse] = false   // KNOWN cannot
+        #expect(!denied.satisfies(requiredCapabilities: [.toolUse], mustNotBePresent: [], includedAvailabilityStates: []))
     }
 
-    @Test("mustNotBePresent capabilities exclude a model")
-    func mustNotBePresentGate() {
-        var m = model()
-        m.capabilities = ModelCapabilities(toolUse: true, vision: true)
-        #expect(!m.satisfies(requiredCapabilities: [.toolUse], mustNotBePresent: [.vision], includedAvailabilityStates: []))
-        #expect(m.satisfies(requiredCapabilities: [.toolUse], mustNotBePresent: [.reasoning], includedAvailabilityStates: []))
+    @Test("Forbidden capability rejects ONLY a known-true; unknown and false pass")
+    func forbiddenRejectsOnlyKnownTrue() {
+        var hasVision = model(); hasVision.capabilities = ModelCapabilities(vision: true)
+        #expect(!hasVision.satisfies(requiredCapabilities: [], mustNotBePresent: [.vision], includedAvailabilityStates: []))
+
+        let unknown = model()   // vision unmeasured
+        #expect(unknown.satisfies(requiredCapabilities: [], mustNotBePresent: [.vision], includedAvailabilityStates: []))
+
+        var knownNo = model(); knownNo.capabilities[.vision] = false
+        #expect(knownNo.satisfies(requiredCapabilities: [], mustNotBePresent: [.vision], includedAvailabilityStates: []))
     }
 
-    @Test("A normal model passes regardless of the include-set")
+    @Test("A normal model passes the availability gate regardless of the include-set")
     func normalModelAlwaysPassesAvailabilityGate() {
-        let m = model()
-        #expect(m.satisfies(requiredCapabilities: [], mustNotBePresent: [], includedAvailabilityStates: []))
+        #expect(model().satisfies(requiredCapabilities: [], mustNotBePresent: [], includedAvailabilityStates: []))
     }
 
     @Test("A model in a special state is excluded unless that state is included (or .all)")
@@ -190,7 +228,6 @@ struct ModelCapabilitySetBackingTests {
         #expect(!unavailable.satisfies(requiredCapabilities: [], mustNotBePresent: [], includedAvailabilityStates: []))
         #expect(unavailable.satisfies(requiredCapabilities: [], mustNotBePresent: [], includedAvailabilityStates: [.isUnavailable]))
         #expect(unavailable.satisfies(requiredCapabilities: [], mustNotBePresent: [], includedAvailabilityStates: [.all]))
-        // Including a DIFFERENT state does not admit it.
         #expect(!unavailable.satisfies(requiredCapabilities: [], mustNotBePresent: [], includedAvailabilityStates: [.isDeprecated]))
     }
 
@@ -202,7 +239,7 @@ struct ModelCapabilitySetBackingTests {
         #expect(m.satisfies(requiredCapabilities: [], mustNotBePresent: [], includedAvailabilityStates: [.all]))
     }
 
-    @Test("ModelRequirements forwards its three fields")
+    @Test("ModelRequirements bundle is Equatable across its three fields")
     func requirementsBundleEquatable() {
         let a = ModelRequirements(requiredCapabilities: [.toolUse], mustNotBePresent: [.vision], includedAvailabilityStates: [.all])
         let b = ModelRequirements(requiredCapabilities: [.toolUse], mustNotBePresent: [.vision], includedAvailabilityStates: [.all])

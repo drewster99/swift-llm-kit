@@ -47,21 +47,51 @@ public enum ModelCapability: String, CaseIterable, Sendable, Codable, Hashable {
     }
 }
 
-/// Feature flags describing what a model supports.
-///
-/// Backed by a `Set<ModelCapability>`: a capability is "on" iff its case is present. Every historical
-/// `public var …: Bool` survives as a computed get/set over the set, so callers and the on-disk
-/// Codable JSON are unchanged — presence in the set is the single source of truth.
-public struct ModelCapabilities: Sendable, Equatable {
-    private var capabilities: Set<ModelCapability>
+// A capability is usable as a coding KEY (its rawValue), so ``ModelCapabilities`` can serialize as a
+// flat object of `capabilityName -> Bool`. Distinct from its `Codable` conformance, which is how a
+// capability serializes as a VALUE (e.g. inside a `Set<ModelCapability>`).
+extension ModelCapability: CodingKey {
+    public var stringValue: String { rawValue }
+    public init?(stringValue: String) { self.init(rawValue: stringValue) }
+    public var intValue: Int? { nil }
+    public init?(intValue: Int) { nil }
+}
 
-    /// The one place presence is read/written, so the boolean accessors stay uniform. No lock: this
-    /// is a value type — each copy owns its own set (copy-on-write), so there is no shared mutable
-    /// state to guard.
-    private func has(_ capability: ModelCapability) -> Bool { capabilities.contains(capability) }
-    private mutating func set(_ capability: ModelCapability, _ on: Bool) {
-        if on { capabilities.insert(capability) } else { capabilities.remove(capability) }
+/// Tri-state feature flags describing what a model supports.
+///
+/// Backed by a `[ModelCapability: Bool]`: a capability PRESENT in the map is **known** (true or
+/// false); ABSENT is **unknown** (never measured / provider silent). This distinction is the whole
+/// point — a required-capability filter can then reject only an *explicit* false and leave unprobed
+/// models visible (see ``satisfies(requiredCapabilities:mustNotBePresent:includedAvailabilityStates:)``).
+///
+/// The historical `var …: Bool` accessors are preserved as a 2-state VIEW where unknown reads as
+/// `false`, so every existing reader behaves exactly as before. Reach the tri-state truth through the
+/// ``subscript(_:)`` / ``state(of:)`` / ``isKnown(_:)`` API.
+public struct ModelCapabilities: Sendable, Equatable {
+    /// Known states only. Absent key ⇒ unknown. The single source of truth.
+    private var states: [ModelCapability: Bool]
+
+    // MARK: Tri-state access
+
+    /// The known state of a capability, or `nil` when unknown. Assigning `nil` marks it unknown.
+    public subscript(_ capability: ModelCapability) -> Bool? {
+        get { states[capability] }
+        set { states[capability] = newValue }
     }
+
+    /// The known state of a capability, or `nil` when unknown.
+    public func state(of capability: ModelCapability) -> Bool? { states[capability] }
+
+    /// Whether the capability has any known state (true or false) as opposed to being unmeasured.
+    public func isKnown(_ capability: ModelCapability) -> Bool { states[capability] != nil }
+
+    // MARK: 2-state boolean view (unknown reads as false)
+
+    /// The one place presence is read/written for the boolean view. Reading collapses unknown to
+    /// `false`; WRITING records an EXPLICIT true/false (a deliberate statement, never "unknown").
+    /// No lock: this is a value type — each copy owns its own map (copy-on-write).
+    private func has(_ capability: ModelCapability) -> Bool { states[capability] == true }
+    private mutating func set(_ capability: ModelCapability, _ on: Bool) { states[capability] = on }
 
     public var toolUse: Bool { get { has(.toolUse) } set { set(.toolUse, newValue) } }
     public var vision: Bool { get { has(.vision) } set { set(.vision, newValue) } }
@@ -81,18 +111,29 @@ public struct ModelCapabilities: Sendable, Equatable {
     public var toolChoice: Bool { get { has(.toolChoice) } set { set(.toolChoice, newValue) } }
     public var toolResultRoundTrip: Bool { get { has(.toolResultRoundTrip) } set { set(.toolResultRoundTrip, newValue) } }
 
-    /// Whether the given capability is present. Lets `availableModels`'s filter read the set directly.
+    /// Whether the capability is KNOWN-TRUE. Unknown and known-false both read `false`.
     public func contains(_ capability: ModelCapability) -> Bool { has(capability) }
 
-    /// The enabled capabilities as a set — the underlying representation, exposed read-only.
-    public var asSet: Set<ModelCapability> { capabilities }
+    /// The known-true capabilities as a set (the 2-state view of "on"). Unknown and false are absent.
+    public var asSet: Set<ModelCapability> { Set(states.filter { $0.value }.keys) }
 
-    /// Builds directly from a capability set.
-    public init(_ capabilities: Set<ModelCapability> = []) {
-        self.capabilities = capabilities
+    // MARK: Initializers
+
+    /// Every capability in the set is known-TRUE; all others are unknown.
+    public init(_ trueCapabilities: Set<ModelCapability> = []) {
+        states = Dictionary(uniqueKeysWithValues: trueCapabilities.map { ($0, true) })
     }
 
-    /// Boolean-argument initializer, preserved verbatim so every existing call site compiles unchanged.
+    /// Explicit tri-state: exactly the given known states; anything omitted is unknown.
+    public init(states: [ModelCapability: Bool]) {
+        self.states = states
+    }
+
+    /// Boolean-argument initializer, preserved for source compatibility. A passed `true` records a
+    /// KNOWN-TRUE; a `false` (including the defaults) records NOTHING — it stays unknown. This is the
+    /// convenience form for "these are on"; state an explicit false via ``subscript(_:)`` or the
+    /// setters. (Under the old 2-state type, false and unknown were the same value, so no caller
+    /// meant "known-false" by a defaulted argument.)
     public init(
         toolUse: Bool = false,
         vision: Bool = false,
@@ -112,90 +153,60 @@ public struct ModelCapabilities: Sendable, Equatable {
         toolChoice: Bool = false,
         toolResultRoundTrip: Bool = false
     ) {
-        var set = Set<ModelCapability>()
-        if toolUse { set.insert(.toolUse) }
-        if vision { set.insert(.vision) }
-        if reasoning { set.insert(.reasoning) }
-        if codeExecution { set.insert(.codeExecution) }
-        if promptCaching { set.insert(.promptCaching) }
-        if computerUse { set.insert(.computerUse) }
-        if audioInput { set.insert(.audioInput) }
-        if audioOutput { set.insert(.audioOutput) }
-        if videoInput { set.insert(.videoInput) }
-        if responseSchema { set.insert(.responseSchema) }
-        if parallelToolCalls { set.insert(.parallelToolCalls) }
-        if pdfInput { set.insert(.pdfInput) }
-        if webSearch { set.insert(.webSearch) }
-        if systemMessages { set.insert(.systemMessages) }
-        if assistantPrefill { set.insert(.assistantPrefill) }
-        if toolChoice { set.insert(.toolChoice) }
-        if toolResultRoundTrip { set.insert(.toolResultRoundTrip) }
-        capabilities = set
+        var trues = Set<ModelCapability>()
+        if toolUse { trues.insert(.toolUse) }
+        if vision { trues.insert(.vision) }
+        if reasoning { trues.insert(.reasoning) }
+        if codeExecution { trues.insert(.codeExecution) }
+        if promptCaching { trues.insert(.promptCaching) }
+        if computerUse { trues.insert(.computerUse) }
+        if audioInput { trues.insert(.audioInput) }
+        if audioOutput { trues.insert(.audioOutput) }
+        if videoInput { trues.insert(.videoInput) }
+        if responseSchema { trues.insert(.responseSchema) }
+        if parallelToolCalls { trues.insert(.parallelToolCalls) }
+        if pdfInput { trues.insert(.pdfInput) }
+        if webSearch { trues.insert(.webSearch) }
+        if systemMessages { trues.insert(.systemMessages) }
+        if assistantPrefill { trues.insert(.assistantPrefill) }
+        if toolChoice { trues.insert(.toolChoice) }
+        if toolResultRoundTrip { trues.insert(.toolResultRoundTrip) }
+        states = Dictionary(uniqueKeysWithValues: trues.map { ($0, true) })
     }
 
-    /// Human-readable labels for capabilities that are enabled, in the canonical case order.
+    /// Human-readable labels for capabilities that are known-TRUE, in canonical case order.
     public var enabledLabels: [String] {
-        ModelCapability.allCases.filter { capabilities.contains($0) }.map(\.label)
+        ModelCapability.allCases.filter { states[$0] == true }.map(\.label)
     }
 }
 
-// MARK: - Codable (backward-compatible)
+// MARK: - Codable
 //
-// The wire format is UNCHANGED — a flat object of per-capability Bools (`{"toolUse": true, …}`), so
-// every persisted catalog still decodes. The synthesized Codable would encode the private `Set`,
-// breaking that, so both directions are hand-written to map set ⇄ booleans.
+// Serializes as a flat object of only the KNOWN capabilities (`{"toolUse": true, "vision": false}`);
+// unknown capabilities are OMITTED, which is how "unknown" survives a round-trip. Reading is
+// backward-compatible: an old full 17-Bool object decodes as all-known — acceptable because that
+// data was already flattened (unknown⇒false) at the source before tri-state existed, and the next
+// catalog refresh repopulates true tri-state from the override/probe layers.
 
 extension ModelCapabilities: Codable {
-    private enum CodingKeys: String, CodingKey {
-        case toolUse, vision, reasoning, codeExecution, promptCaching
-        case computerUse, audioInput, audioOutput, videoInput
-        case responseSchema, parallelToolCalls
-        case pdfInput, webSearch, systemMessages, assistantPrefill, toolChoice
-        case toolResultRoundTrip
-    }
-
     public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        func flag(_ key: CodingKeys) throws -> Bool { try c.decodeIfPresent(Bool.self, forKey: key) ?? false }
-        self.init(
-            toolUse: try flag(.toolUse),
-            vision: try flag(.vision),
-            reasoning: try flag(.reasoning),
-            codeExecution: try flag(.codeExecution),
-            promptCaching: try flag(.promptCaching),
-            computerUse: try flag(.computerUse),
-            audioInput: try flag(.audioInput),
-            audioOutput: try flag(.audioOutput),
-            videoInput: try flag(.videoInput),
-            responseSchema: try flag(.responseSchema),
-            parallelToolCalls: try flag(.parallelToolCalls),
-            pdfInput: try flag(.pdfInput),
-            webSearch: try flag(.webSearch),
-            systemMessages: try flag(.systemMessages),
-            assistantPrefill: try flag(.assistantPrefill),
-            toolChoice: try flag(.toolChoice),
-            toolResultRoundTrip: try flag(.toolResultRoundTrip)
-        )
+        let c = try decoder.container(keyedBy: ModelCapability.self)
+        var s = [ModelCapability: Bool]()
+        for capability in ModelCapability.allCases {
+            if let value = try c.decodeIfPresent(Bool.self, forKey: capability) {
+                s[capability] = value
+            }
+        }
+        states = s
     }
 
     public func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(toolUse, forKey: .toolUse)
-        try c.encode(vision, forKey: .vision)
-        try c.encode(reasoning, forKey: .reasoning)
-        try c.encode(codeExecution, forKey: .codeExecution)
-        try c.encode(promptCaching, forKey: .promptCaching)
-        try c.encode(computerUse, forKey: .computerUse)
-        try c.encode(audioInput, forKey: .audioInput)
-        try c.encode(audioOutput, forKey: .audioOutput)
-        try c.encode(videoInput, forKey: .videoInput)
-        try c.encode(responseSchema, forKey: .responseSchema)
-        try c.encode(parallelToolCalls, forKey: .parallelToolCalls)
-        try c.encode(pdfInput, forKey: .pdfInput)
-        try c.encode(webSearch, forKey: .webSearch)
-        try c.encode(systemMessages, forKey: .systemMessages)
-        try c.encode(assistantPrefill, forKey: .assistantPrefill)
-        try c.encode(toolChoice, forKey: .toolChoice)
-        try c.encode(toolResultRoundTrip, forKey: .toolResultRoundTrip)
+        var c = encoder.container(keyedBy: ModelCapability.self)
+        // Canonical order so the encoded object is stable across runs.
+        for capability in ModelCapability.allCases {
+            if let value = states[capability] {
+                try c.encode(value, forKey: capability)
+            }
+        }
     }
 }

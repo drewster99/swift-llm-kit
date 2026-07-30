@@ -55,8 +55,12 @@ extension ModelInfo {
 
     /// Whether this model passes a capability/availability filter.
     ///
-    /// - `requiredCapabilities`: every one must be present.
-    /// - `mustNotBePresent`: none may be present.
+    /// Capabilities are TRI-STATE, so filtering acts only on KNOWN facts — an unmeasured capability
+    /// never disqualifies a model:
+    /// - `requiredCapabilities`: rejected only when a required capability is KNOWN-FALSE. Known-true
+    ///   and unknown both pass — an unprobed model stays visible.
+    /// - `mustNotBePresent`: rejected only when a forbidden capability is KNOWN-TRUE. Known-false and
+    ///   unknown both pass.
     /// - `includedAvailabilityStates`: the model's special states must ALL be permitted here — so a
     ///   model with no special states always passes, and a model with a special state passes only if
     ///   that state was explicitly included. `.all` here permits any special state.
@@ -65,8 +69,12 @@ extension ModelInfo {
         mustNotBePresent: Set<ModelCapability>,
         includedAvailabilityStates: Set<ModelAvailabilityState>
     ) -> Bool {
-        guard requiredCapabilities.allSatisfy({ capabilities.contains($0) }) else { return false }
-        guard mustNotBePresent.allSatisfy({ !capabilities.contains($0) }) else { return false }
+        for capability in requiredCapabilities where capabilities.state(of: capability) == false {
+            return false
+        }
+        for capability in mustNotBePresent where capabilities.state(of: capability) == true {
+            return false
+        }
         let allowed = includedAvailabilityStates.contains(.all)
             ? ModelAvailabilityState.realStates
             : includedAvailabilityStates
