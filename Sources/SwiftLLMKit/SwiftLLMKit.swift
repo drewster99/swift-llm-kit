@@ -484,6 +484,39 @@ public final class LLMKitManager {
         models.filter { $0.providerID == providerID }
     }
 
+    /// The models that satisfy a capability/availability filter over the WHOLE catalog.
+    ///
+    /// Nothing is ever dropped from the catalog — every model is stored — so this query is the single
+    /// place filtering happens. By default only fully-normal models pass; opt special states back in
+    /// via `alsoIncludingAvailabilityStates` (`.all` for any).
+    ///
+    /// - Parameters:
+    ///   - requiredCapabilities: every capability a returned model MUST have.
+    ///   - mustNotBePresent: every capability a returned model must NOT have.
+    ///   - includedAvailabilityStates: special states to tolerate; empty keeps only normal models.
+    public func availableModels(
+        requiredCapabilities: Set<ModelCapability> = [],
+        mustNotBePresent: Set<ModelCapability> = [],
+        alsoIncludingAvailabilityStates includedAvailabilityStates: Set<ModelAvailabilityState> = []
+    ) -> [ModelInfo] {
+        models.filter {
+            $0.satisfies(
+                requiredCapabilities: requiredCapabilities,
+                mustNotBePresent: mustNotBePresent,
+                includedAvailabilityStates: includedAvailabilityStates
+            )
+        }
+    }
+
+    /// Overload taking a pre-bundled ``ModelRequirements`` — the shape an app's agent role exposes.
+    public func availableModels(_ requirements: ModelRequirements) -> [ModelInfo] {
+        availableModels(
+            requiredCapabilities: requirements.requiredCapabilities,
+            mustNotBePresent: requirements.mustNotBePresent,
+            alsoIncludingAvailabilityStates: requirements.includedAvailabilityStates
+        )
+    }
+
     /// Returns info for a specific model by provider and model ID.
     public func modelInfo(providerID: String, modelID: String) -> ModelInfo? {
         models.first { $0.providerID == providerID && $0.modelID == modelID }
