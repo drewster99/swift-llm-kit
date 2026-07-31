@@ -227,7 +227,10 @@ extension ModelInfo: Codable {
         quantizationLabel = try container.decodeIfPresent(String.self, forKey: .quantizationLabel)
         // Migrate the legacy standalone chat flag into the capability, its new single home. New data
         // carries no such key — chat rides inside `capabilities` — so this only fires on old catalogs.
-        if let legacyChat = try container.decodeIfPresent(Bool.self, forKey: .supportsChatCompletions) {
+        // The new-format value takes precedence: only adopt the legacy key when `.chat` is still
+        // unknown, so a payload carrying both never lets the stale key clobber the current capability.
+        if capabilities.state(of: .chat) == nil,
+           let legacyChat = try container.decodeIfPresent(Bool.self, forKey: .supportsChatCompletions) {
             capabilities[.chat] = legacyChat
         }
         mode = try container.decodeIfPresent(String.self, forKey: .mode)

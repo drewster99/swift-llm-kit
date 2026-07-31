@@ -81,8 +81,29 @@ struct ModelCapabilityTriStateTests {
             #expect(caps.contains(capability))
             #expect(caps.state(of: capability) == true)
             #expect(caps.asSet == [capability])
-            #expect(caps.enabledLabels == [capability.label])
+            // `.chat` is the baseline and is deliberately omitted from the label summary.
+            #expect(caps.enabledLabels == (capability == .chat ? [] : [capability.label]))
         }
+    }
+
+    @Test("enabledLabels omits the .chat baseline but keeps other known-true capabilities")
+    func enabledLabelsOmitsChat() {
+        let caps = ModelCapabilities([.chat, .toolUse, .vision])
+        #expect(caps.enabledLabels == [ModelCapability.toolUse.label, ModelCapability.vision.label])
+        #expect(caps.contains(.chat))   // still a real, queryable capability
+    }
+
+    @Test("demotingKnownFalse turns known-false to unknown, keeping trues and the exceptions")
+    func demotingKnownFalseFailsOpen() {
+        var caps = ModelCapabilities(toolUse: true)   // known-true
+        caps[.vision] = false                          // known-false (to be demoted)
+        caps[.chat] = false                            // known-false but KEPT (reliable)
+        // reasoning left unknown
+        let demoted = caps.demotingKnownFalse(keeping: [.chat])
+        #expect(demoted.state(of: .toolUse) == true)   // known-true survives
+        #expect(demoted.state(of: .vision) == nil)     // known-false demoted to unknown
+        #expect(demoted.state(of: .chat) == false)     // kept: reliable
+        #expect(demoted.state(of: .reasoning) == nil)  // unchanged
     }
 
     // MARK: - Codable

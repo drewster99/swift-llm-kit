@@ -180,8 +180,21 @@ public struct ModelCapabilities: Sendable, Equatable {
     }
 
     /// Human-readable labels for capabilities that are known-TRUE, in canonical case order.
+    /// `.chat` is deliberately omitted — it's the baseline every usable model has, so surfacing it as
+    /// a chip is noise (the capability is still queryable via ``state(of:)``).
     public var enabledLabels: [String] {
-        ModelCapability.allCases.filter { states[$0] == true }.map(\.label)
+        ModelCapability.allCases.filter { $0 != .chat && states[$0] == true }.map(\.label)
+    }
+
+    /// A copy with every KNOWN-false capability demoted to unknown, except those in `keeping`.
+    /// Used when loading a LEGACY 2-state catalog where a stored `false` ambiguously meant
+    /// "unknown, collapsed to false"; demoting restores fail-open filtering until the next refresh.
+    public func demotingKnownFalse(keeping: Set<ModelCapability>) -> ModelCapabilities {
+        var copy = self
+        for capability in ModelCapability.allCases where !keeping.contains(capability) && copy.states[capability] == false {
+            copy.states[capability] = nil
+        }
+        return copy
     }
 }
 

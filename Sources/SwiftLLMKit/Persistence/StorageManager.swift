@@ -74,18 +74,43 @@ struct StorageManager: Sendable {
 
     // MARK: - Model Catalog (cache)
 
+    /// Versioned envelope around the cached catalog. Version 2 marks the TRI-STATE `ModelCapabilities`
+    /// format, where a stored `false` is a genuine known-false. A legacy cache (bare `[ModelInfo]`
+    /// array, no envelope) predates that: its `false`s were unknown-collapsed-to-false, so they must
+    /// not be trusted as known-false on load (see ``loadModelCatalog``).
+    private struct ModelCatalogFile: Codable {
+        static let currentVersion = 2
+        var version: Int
+        var models: [ModelInfo]
+    }
+
     func saveModelCatalog(_ models: [ModelInfo]) throws {
         try ensureDirectory()
         let encoder = JSONEncoder()
         encoder.outputFormatting = .prettyPrinted
-        let data = try encoder.encode(models)
+        let file = ModelCatalogFile(version: ModelCatalogFile.currentVersion, models: models)
+        let data = try encoder.encode(file)
         try data.write(to: modelCatalogURL, options: .atomic)
     }
 
     func loadModelCatalog() throws -> [ModelInfo] {
         guard FileManager.default.fileExists(atPath: modelCatalogURL.path) else { return [] }
         let data = try Data(contentsOf: modelCatalogURL)
-        return try JSONDecoder().decode([ModelInfo].self, from: data)
+        let decoder = JSONDecoder()
+        if let file = try? decoder.decode(ModelCatalogFile.self, from: data),
+           file.version >= ModelCatalogFile.currentVersion {
+            return file.models
+        }
+        // Legacy bare-array cache (pre-tri-state): a stored capability `false` ambiguously meant
+        // "unknown, collapsed to false", so trusting it as known-false would wrongly hide models
+        // from capability filters. Demote non-chat known-false back to unknown (fail OPEN) until the
+        // next refresh re-materializes true tri-state; known-true and the reliable chat flag survive.
+        let legacy = try decoder.decode([ModelInfo].self, from: data)
+        return legacy.map { model in
+            var migrated = model
+            migrated.capabilities = migrated.capabilities.demotingKnownFalse(keeping: [.chat])
+            return migrated
+        }
     }
 
     // MARK: - Seen-models ledger

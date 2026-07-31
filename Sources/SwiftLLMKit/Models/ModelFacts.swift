@@ -74,10 +74,12 @@ public struct ModelFacts: Codable, Sendable, Equatable {
 
     // MARK: - Materialization
 
-    /// Collapses merged facts into the app-facing ``ModelInfo``, applying the historical defaults
-    /// for everything still unknown (capabilities `nil` → `false`, `supportsChatCompletions` `nil`
-    /// → `true`, effort levels `nil` → `[]`). Materialization is the ONLY place those defaults are
-    /// applied — inside the layers, unknown stays `nil` so lower layers can still speak.
+    /// Collapses merged facts into the app-facing ``ModelInfo``. Capabilities stay TRI-STATE — a
+    /// silent (`nil`) capability materializes as UNKNOWN, not false, since `ModelCapabilitiesOverride`
+    /// only writes its non-nil fields onto a fresh all-unknown ``ModelCapabilities``. The remaining
+    /// historical defaults still apply for display (`supportsChatCompletions` reads `true` when chat
+    /// is unknown; effort levels `nil` → `[]`). Inside the layers, unknown stays `nil` so lower
+    /// layers can still speak.
     public func materialize(providerID: String, modelID: String) -> ModelInfo {
         var caps = ModelCapabilities()
         capabilities.apply(to: &caps, forceReplace: true)

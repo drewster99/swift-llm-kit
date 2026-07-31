@@ -56,6 +56,15 @@ struct ModelInfoChatCapabilityTests {
         #expect(!restored.supportsChatCompletions)
     }
 
+    @Test("When both capabilities.chat and the legacy key are present, the capability wins")
+    func newChatCapabilityBeatsLegacyKey() throws {
+        // A payload carrying BOTH the new capabilities.chat (true) AND the stale standalone key (false).
+        let json = #"{"providerID":"p","modelID":"m","displayName":"m","capabilities":{"chat":true},"supportsChatCompletions":false}"#
+        let decoded = try JSONDecoder().decode(ModelInfo.self, from: Data(json.utf8))
+        #expect(decoded.capabilities.state(of: .chat) == true)   // capability wins over the stale key
+        #expect(decoded.supportsChatCompletions)
+    }
+
     @Test("required: [.chat] hides only a KNOWN non-chat model; unknown and chat pass")
     func requiredChatHidesOnlyKnownNonChat() {
         let unknown = model()                               // chat unmeasured
