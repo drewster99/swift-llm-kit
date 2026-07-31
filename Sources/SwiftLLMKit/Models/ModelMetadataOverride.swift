@@ -7,6 +7,8 @@ public struct ModelCapabilitiesOverride: Codable, Sendable, Equatable {
     /// Chat-completions support. Lives here (not as a standalone override field) so chat is a
     /// capability at every layer — its resolved value is ``ModelInfo/supportsChatCompletions``.
     public var chat: Bool?
+    /// Batch-only variant marker (see ``ModelCapability/batch``).
+    public var batch: Bool?
     public var toolUse: Bool?
     public var vision: Bool?
     public var reasoning: Bool?
@@ -27,6 +29,7 @@ public struct ModelCapabilitiesOverride: Codable, Sendable, Equatable {
 
     public init(
         chat: Bool? = nil,
+        batch: Bool? = nil,
         toolUse: Bool? = nil,
         vision: Bool? = nil,
         reasoning: Bool? = nil,
@@ -46,6 +49,7 @@ public struct ModelCapabilitiesOverride: Codable, Sendable, Equatable {
         toolResultRoundTrip: Bool? = nil
     ) {
         self.chat = chat
+        self.batch = batch
         self.toolUse = toolUse
         self.vision = vision
         self.reasoning = reasoning
@@ -73,6 +77,7 @@ public struct ModelCapabilitiesOverride: Codable, Sendable, Equatable {
     ///     When `false`, non-nil values only upgrade `false` → `true` (OR semantics).
     public func apply(to capabilities: inout ModelCapabilities, forceReplace: Bool) {
         if let v = chat, (forceReplace || v) { capabilities[.chat] = v }
+        if let v = batch, (forceReplace || v) { capabilities[.batch] = v }
         if let v = toolUse, (forceReplace || v) { capabilities.toolUse = v }
         if let v = vision, (forceReplace || v) { capabilities.vision = v }
         if let v = reasoning, (forceReplace || v) { capabilities.reasoning = v }
@@ -99,6 +104,7 @@ public struct ModelCapabilitiesOverride: Codable, Sendable, Equatable {
         get {
             switch capability {
             case .chat: return chat
+            case .batch: return batch
             case .toolUse: return toolUse
             case .vision: return vision
             case .reasoning: return reasoning
@@ -121,6 +127,7 @@ public struct ModelCapabilitiesOverride: Codable, Sendable, Equatable {
         set {
             switch capability {
             case .chat: chat = newValue
+            case .batch: batch = newValue
             case .toolUse: toolUse = newValue
             case .vision: vision = newValue
             case .reasoning: reasoning = newValue

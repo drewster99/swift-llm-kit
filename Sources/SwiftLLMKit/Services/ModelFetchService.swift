@@ -440,6 +440,9 @@ public struct ModelFetchService: Sendable {
                 facts.modelDescription = model.description
                 facts.benchmarks = (model.benchmarks?.isEmpty ?? true) ? nil : model.benchmarks
                 facts.huggingFaceID = model.huggingFaceID
+                // OpenRouter's `:batch` static variant is an async batch-submission slug, not an
+                // interactive model — mark it so a role can forbid it (`mustNotBePresent: [.batch]`).
+                if model.id.hasSuffix(":batch") { facts.capabilities.batch = true }
 
                 return DecodedModelFacts(modelID: model.id, facts: facts)
             }

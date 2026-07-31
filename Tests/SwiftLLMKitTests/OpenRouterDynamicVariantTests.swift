@@ -35,6 +35,20 @@ struct OpenRouterDynamicVariantTests {
         #expect(!ids.contains { $0.hasSuffix(":floor") || $0.hasSuffix(":nitro") })
     }
 
+    @Test("A :batch slug is marked batch-only; a normal slug is not, and a role forbidding .batch drops it")
+    func batchVariantIsMarkedAndExcluded() throws {
+        let body = #"{"data":[{"id":"a/b","name":"B"},{"id":"a/b:batch","name":"B batch"}]}"#
+        let models = try decode(body)
+        let normal = try #require(models.first { $0.modelID == "a/b" })
+        let batch = try #require(models.first { $0.modelID == "a/b:batch" })
+        #expect(normal.capabilities.state(of: .batch) == nil)     // untouched
+        #expect(batch.capabilities.state(of: .batch) == true)     // marked batch-only
+
+        // A role that forbids .batch keeps the normal model and drops the batch one.
+        #expect(normal.satisfies(requiredCapabilities: [], mustNotBePresent: [.batch], includedAvailabilityStates: []))
+        #expect(!batch.satisfies(requiredCapabilities: [], mustNotBePresent: [.batch], includedAvailabilityStates: []))
+    }
+
     /// A suffixed id absent from the catalog makes an exact-match pricing lookup miss, and a
     /// missed price reads as a free request rather than an error. Inheriting the base row is what
     /// keeps that from happening.

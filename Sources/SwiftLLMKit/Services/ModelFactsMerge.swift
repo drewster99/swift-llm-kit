@@ -79,6 +79,7 @@ public enum ModelFactsFieldTable {
 
     private static let capabilityFlags: [ModelFactsField] = [
         .field("capabilities.chat", \ModelFacts.capabilities.chat),
+        .field("capabilities.batch", \ModelFacts.capabilities.batch),
         .field("capabilities.toolUse", \ModelFacts.capabilities.toolUse),
         .field("capabilities.vision", \ModelFacts.capabilities.vision),
         .field("capabilities.reasoning", \ModelFacts.capabilities.reasoning),

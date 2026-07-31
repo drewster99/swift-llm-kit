@@ -7,6 +7,10 @@ public enum ModelCapability: String, CaseIterable, Sendable, Codable, Hashable {
     /// the others, its boolean VIEW defaults to `true` (assume chat unless a provider says no); see
     /// ``ModelInfo/supportsChatCompletions``, which is now a view over this capability.
     case chat
+    /// The model is a BATCH-only variant (async batch-submission API, e.g. OpenRouter's `:batch`
+    /// slug), so it cannot back an interactive agent. Present so a role can forbid it via
+    /// `mustNotBePresent: [.batch]`; it is never a thing to REQUIRE.
+    case batch
     case toolUse
     case vision
     case reasoning
@@ -31,6 +35,7 @@ public enum ModelCapability: String, CaseIterable, Sendable, Codable, Hashable {
     public var label: String {
         switch self {
         case .chat:                return "Chat"
+        case .batch:               return "Batch-only"
         case .toolUse:             return "Tools"
         case .vision:              return "Vision"
         case .reasoning:           return "Reasoning"
@@ -55,6 +60,7 @@ public enum ModelCapability: String, CaseIterable, Sendable, Codable, Hashable {
     public var editorTitle: String {
         switch self {
         case .chat:                return "Chat completions"
+        case .batch:               return "Batch-only model"
         case .toolUse:             return "Tool use"
         case .vision:              return "Vision (image input)"
         case .reasoning:           return "Reasoning / thinking"
@@ -79,6 +85,7 @@ public enum ModelCapability: String, CaseIterable, Sendable, Codable, Hashable {
     public var editorDescription: String {
         switch self {
         case .chat:                return "Model serves the chat-completions surface Agent Smith talks to. Off means it's responses-/embeddings-only, and assigning it to an agent fails with HTTP 404."
+        case .batch:               return "This is a batch-only variant (async batch-submission API, e.g. OpenRouter's `:batch`). It can't run an interactive agent, so it's excluded from role pickers."
         case .toolUse:             return "Model can call tools. Frequently mis-reported as off for cloud/self-hosted models that do support it."
         case .vision:              return "Model can accept images in the prompt. Off means a pasted image is rejected (HTTP 400)."
         case .reasoning:           return "Model supports extended reasoning (thinking budget / effort)."
