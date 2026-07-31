@@ -1,5 +1,70 @@
 import Foundation
 
+/// One runtime behavior knob. The set of cases IS the set of typed flags on ``BehaviorFlags`` —
+/// adding a flag means adding a case here, a matching stored `var` on ``BehaviorFlags`` (so
+/// providers can read it directly), and a line in each subscript below. Editors and label lists
+/// iterate `allCases`, so a new flag surfaces everywhere automatically.
+public enum BehaviorFlag: String, CaseIterable, Sendable, Hashable {
+    case glmTemplateSalvage
+    case useMaxCompletionTokens
+    case disableParallelToolCalls
+    case replayReasoningContent
+    case supportsDeveloperRole
+    case requiresAdaptiveThinking
+    case supportsReasoningEffort
+    case mustNeverSendTemperatureParam
+
+    /// Short human-readable label, used by ``BehaviorFlags/displayLabels``.
+    public var label: String {
+        switch self {
+        case .glmTemplateSalvage:            return "GLM salvage"
+        case .useMaxCompletionTokens:        return "max_completion_tokens"
+        case .disableParallelToolCalls:      return "no parallel tools"
+        case .replayReasoningContent:        return "replay reasoning"
+        case .supportsDeveloperRole:         return "developer role"
+        case .requiresAdaptiveThinking:      return "adaptive thinking"
+        case .supportsReasoningEffort:       return "reasoning_effort"
+        case .mustNeverSendTemperatureParam: return "no temperature"
+        }
+    }
+
+    /// Full title for the per-model behavior-flags editor. Exhaustive so a new case can't ship without one.
+    public var editorTitle: String {
+        switch self {
+        case .glmTemplateSalvage:            return "GLM template salvage"
+        case .useMaxCompletionTokens:        return "Use `max_completion_tokens`"
+        case .disableParallelToolCalls:      return "Disable parallel tool calls"
+        case .replayReasoningContent:        return "Replay reasoning content"
+        case .supportsDeveloperRole:         return "Supports `developer` role"
+        case .requiresAdaptiveThinking:      return "Requires adaptive thinking"
+        case .supportsReasoningEffort:       return "Supports `reasoning_effort`"
+        case .mustNeverSendTemperatureParam: return "Never send temperature"
+        }
+    }
+
+    /// One-line help for the per-model behavior-flags editor. Exhaustive by design.
+    public var editorDescription: String {
+        switch self {
+        case .glmTemplateSalvage:
+            return "Recover tool-call args from `<arg_key>/<arg_value>` blocks the model leaks into `content`, and strip GLM chat-template control tokens. Required for GLM-4 / GLM-5 on most adapters; harmless on non-GLM responses."
+        case .useMaxCompletionTokens:
+            return "Send `max_completion_tokens` instead of `max_tokens` on chat completions. Required for OpenAI GPT-5 / o-series; rejected by DeepSeek and most other OpenAI-compatible backends."
+        case .disableParallelToolCalls:
+            return "Omit `parallel_tool_calls` from the request. It's sent as `true` by default; turn this ON only for a strict endpoint that rejects the unknown field with HTTP 400."
+        case .replayReasoningContent:
+            return "Replay each assistant message's `reasoning_content` on later requests. Required by some thinking models that 400 without it (e.g. DeepSeek V4 Pro); rejected by others (e.g. deepseek-reasoner), so opt-in per model."
+        case .supportsDeveloperRole:
+            return "Model accepts OpenAI's `developer` message role (o-series / GPT-5). When off, `developer` messages are downgraded to `system` — the safe default for non-OpenAI backends."
+        case .requiresAdaptiveThinking:
+            return "Anthropic models that require `thinking: {type: \"adaptive\"}` and reject the legacy manual budget format with HTTP 400 (Claude Opus 4.7 / 4.8). When on, the configured thinking budget is ignored."
+        case .supportsReasoningEffort:
+            return "OpenAI-compatible models that accept a top-level `reasoning_effort` field (o-series, GPT-5). When on and an effort level is set, it's emitted; non-reasoning models 400 on the field, so it's gated."
+        case .mustNeverSendTemperatureParam:
+            return "Model rejects the `temperature` parameter entirely — any value (even 0) fails with HTTP 400 (OpenAI o-series / GPT-5 reasoning family). When on, temperature is omitted from every request."
+        }
+    }
+}
+
 /// Per-(provider+model) behavior flags consumed by providers at request time.
 ///
 /// Flags here are *runtime behavior* knobs, not catalog metadata — they shape
@@ -133,33 +198,46 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         self.extras = extras
     }
 
+    /// Read/write a flag by its ``BehaviorFlag`` case. The typed `var`s remain the storage (and the
+    /// direct read path providers use); this is the enum-keyed view editors and iteration use.
+    public subscript(flag: BehaviorFlag) -> Bool {
+        get {
+            switch flag {
+            case .glmTemplateSalvage:            return glmTemplateSalvage
+            case .useMaxCompletionTokens:        return useMaxCompletionTokens
+            case .disableParallelToolCalls:      return disableParallelToolCalls
+            case .replayReasoningContent:        return replayReasoningContent
+            case .supportsDeveloperRole:         return supportsDeveloperRole
+            case .requiresAdaptiveThinking:      return requiresAdaptiveThinking
+            case .supportsReasoningEffort:       return supportsReasoningEffort
+            case .mustNeverSendTemperatureParam: return mustNeverSendTemperatureParam
+            }
+        }
+        set {
+            switch flag {
+            case .glmTemplateSalvage:            glmTemplateSalvage = newValue
+            case .useMaxCompletionTokens:        useMaxCompletionTokens = newValue
+            case .disableParallelToolCalls:      disableParallelToolCalls = newValue
+            case .replayReasoningContent:        replayReasoningContent = newValue
+            case .supportsDeveloperRole:         supportsDeveloperRole = newValue
+            case .requiresAdaptiveThinking:      requiresAdaptiveThinking = newValue
+            case .supportsReasoningEffort:       supportsReasoningEffort = newValue
+            case .mustNeverSendTemperatureParam: mustNeverSendTemperatureParam = newValue
+            }
+        }
+    }
+
     /// True when every flag is at its default value. Useful to short-circuit
     /// equality checks and to skip persisting empty entries.
     public var isAllDefault: Bool {
-        !glmTemplateSalvage
-            && !useMaxCompletionTokens
-            && !disableParallelToolCalls
-            && !replayReasoningContent
-            && !supportsDeveloperRole
-            && !requiresAdaptiveThinking
-            && !supportsReasoningEffort
-            && !mustNeverSendTemperatureParam
-            && extras.isEmpty
+        BehaviorFlag.allCases.allSatisfy { !self[$0] } && extras.isEmpty
     }
 
-    /// Short human-readable labels for each non-default flag — for display in
-    /// the Settings UI. Order is stable and reflects how a reader would scan
-    /// the row left-to-right. `extras` keys are appended last with a `*` prefix.
+    /// Short human-readable labels for each non-default flag — for display in the Settings UI.
+    /// Order is the ``BehaviorFlag`` case order (a stable left-to-right scan). `extras` keys are
+    /// appended last with a `*` prefix.
     public var displayLabels: [String] {
-        var out: [String] = []
-        if glmTemplateSalvage { out.append("GLM salvage") }
-        if useMaxCompletionTokens { out.append("max_completion_tokens") }
-        if disableParallelToolCalls { out.append("no parallel tools") }
-        if replayReasoningContent { out.append("replay reasoning") }
-        if supportsDeveloperRole { out.append("developer role") }
-        if requiresAdaptiveThinking { out.append("adaptive thinking") }
-        if supportsReasoningEffort { out.append("reasoning_effort") }
-        if mustNeverSendTemperatureParam { out.append("no temperature") }
+        var out = BehaviorFlag.allCases.filter { self[$0] }.map(\.label)
         for key in extras.keys.sorted() {
             out.append("*\(key)")
         }
@@ -242,15 +320,38 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
         self.extras = extras
     }
 
+    /// Read/write an override field by its ``BehaviorFlag`` case. `nil` = no override (inherit).
+    public subscript(flag: BehaviorFlag) -> Bool? {
+        get {
+            switch flag {
+            case .glmTemplateSalvage:            return glmTemplateSalvage
+            case .useMaxCompletionTokens:        return useMaxCompletionTokens
+            case .disableParallelToolCalls:      return disableParallelToolCalls
+            case .replayReasoningContent:        return replayReasoningContent
+            case .supportsDeveloperRole:         return supportsDeveloperRole
+            case .requiresAdaptiveThinking:      return requiresAdaptiveThinking
+            case .supportsReasoningEffort:       return supportsReasoningEffort
+            case .mustNeverSendTemperatureParam: return mustNeverSendTemperatureParam
+            }
+        }
+        set {
+            switch flag {
+            case .glmTemplateSalvage:            glmTemplateSalvage = newValue
+            case .useMaxCompletionTokens:        useMaxCompletionTokens = newValue
+            case .disableParallelToolCalls:      disableParallelToolCalls = newValue
+            case .replayReasoningContent:        replayReasoningContent = newValue
+            case .supportsDeveloperRole:         supportsDeveloperRole = newValue
+            case .requiresAdaptiveThinking:      requiresAdaptiveThinking = newValue
+            case .supportsReasoningEffort:       supportsReasoningEffort = newValue
+            case .mustNeverSendTemperatureParam: mustNeverSendTemperatureParam = newValue
+            }
+        }
+    }
+
     public func apply(to flags: inout BehaviorFlags, forceReplace: Bool) {
-        if let v = glmTemplateSalvage, (forceReplace || v) { flags.glmTemplateSalvage = v }
-        if let v = useMaxCompletionTokens, (forceReplace || v) { flags.useMaxCompletionTokens = v }
-        if let v = disableParallelToolCalls, (forceReplace || v) { flags.disableParallelToolCalls = v }
-        if let v = replayReasoningContent, (forceReplace || v) { flags.replayReasoningContent = v }
-        if let v = supportsDeveloperRole, (forceReplace || v) { flags.supportsDeveloperRole = v }
-        if let v = requiresAdaptiveThinking, (forceReplace || v) { flags.requiresAdaptiveThinking = v }
-        if let v = supportsReasoningEffort, (forceReplace || v) { flags.supportsReasoningEffort = v }
-        if let v = mustNeverSendTemperatureParam, (forceReplace || v) { flags.mustNeverSendTemperatureParam = v }
+        for flag in BehaviorFlag.allCases {
+            if let v = self[flag], (forceReplace || v) { flags[flag] = v }
+        }
         if let extrasPatch = extras {
             if forceReplace {
                 flags.extras = extrasPatch
@@ -265,14 +366,6 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
 
     /// True when every override field is nil. Lets callers skip applying empty patches.
     public var isEmpty: Bool {
-        glmTemplateSalvage == nil
-            && useMaxCompletionTokens == nil
-            && disableParallelToolCalls == nil
-            && replayReasoningContent == nil
-            && supportsDeveloperRole == nil
-            && requiresAdaptiveThinking == nil
-            && supportsReasoningEffort == nil
-            && mustNeverSendTemperatureParam == nil
-            && (extras?.isEmpty ?? true)
+        BehaviorFlag.allCases.allSatisfy { self[$0] == nil } && (extras?.isEmpty ?? true)
     }
 }
