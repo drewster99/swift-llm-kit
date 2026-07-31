@@ -573,7 +573,7 @@ public struct ModelFetchService: Sendable {
                     facts.capabilities.reasoning = abilities.reasoning
                     facts.capabilities.audioInput = abilities.audio
                     facts.capabilities.audioOutput = abilities.audioSpeech
-                    facts.supportsChatCompletions = abilities.completionChat
+                    facts.capabilities.chat = abilities.completionChat
                 }
                 facts.deprecatedOn = model.deprecation.flatMap(parseISODate)
                 facts.deprecationReplacement = model.deprecationReplacementModel
@@ -604,7 +604,7 @@ public struct ModelFetchService: Sendable {
                 // The methods list is an explicit enumeration: when present, "generateContent"
                 // distinguishes chat models from embedding/image ones both directions. Absent →
                 // stays nil (materializes to the true-by-default convention).
-                facts.supportsChatCompletions = model.supportedGenerationMethods
+                facts.capabilities.chat = model.supportedGenerationMethods
                     .map { $0.contains("generateContent") }
                 // `thinking` is stated only when present; absent says nothing.
                 facts.capabilities.reasoning = model.thinking

@@ -196,11 +196,11 @@ struct DecoderStatedFactsTests {
         let decoded = try service.decodeModelFactsForTesting(from: Data(body.utf8), apiType: .mistral)
         let m1 = try #require(decoded.first { $0.modelID == "m1" }).facts
         #expect(m1.capabilities.toolUse == false)           // stated NO — believed (kills the old `?? false`)
-        #expect(m1.supportsChatCompletions == true)
+        #expect(m1.capabilities.chat == true)
         #expect(m1.capabilities.vision == nil)              // leaf absent → unknown
         let m2 = try #require(decoded.first { $0.modelID == "m2" }).facts
         #expect(m2.capabilities.toolUse == nil)             // whole block absent → all unknown
-        #expect(m2.supportsChatCompletions == nil)
+        #expect(m2.capabilities.chat == nil)
     }
 
     @Test("HuggingFace: stated supports_tools=false is believed, absent is unknown")
@@ -241,7 +241,7 @@ struct DecoderStatedFactsTests {
         let facts = try #require(try service.decodeModelFactsForTesting(from: Data(body.utf8), apiType: .openAICompatible).first).facts
         #expect(facts.capabilities.vision == nil)
         #expect(facts.capabilities.toolUse == nil)
-        #expect(facts.supportsChatCompletions == nil)
+        #expect(facts.capabilities.chat == nil)
         #expect(facts.maxInputTokens == nil)
     }
 
@@ -264,9 +264,9 @@ struct DecoderStatedFactsTests {
                    {"name":"models/g-silent"}]}
         """#
         let decoded = try service.decodeModelFactsForTesting(from: Data(body.utf8), apiType: .gemini)
-        #expect(try #require(decoded.first { $0.modelID == "g-chat" }).facts.supportsChatCompletions == true)
-        #expect(try #require(decoded.first { $0.modelID == "g-embed" }).facts.supportsChatCompletions == false)
-        #expect(try #require(decoded.first { $0.modelID == "g-silent" }).facts.supportsChatCompletions == nil)
+        #expect(try #require(decoded.first { $0.modelID == "g-chat" }).facts.capabilities.chat == true)
+        #expect(try #require(decoded.first { $0.modelID == "g-embed" }).facts.capabilities.chat == false)
+        #expect(try #require(decoded.first { $0.modelID == "g-silent" }).facts.capabilities.chat == nil)
     }
 }
 
@@ -290,11 +290,11 @@ struct IntentionalDivergenceTests {
     @Test("A vendor-stated chat YES now survives LiteLLM's chat NO (old pipeline downgraded it)")
     func vendorChatYesSurvivesLiteLLMNo() {
         var authoritative = ModelFacts()
-        authoritative.supportsChatCompletions = true    // Gemini stating generateContent
+        authoritative.capabilities.chat = true    // Gemini stating generateContent
         var enrichment = ModelFacts()
-        enrichment.supportsChatCompletions = false      // LiteLLM's mode-derived claim
+        enrichment.capabilities.chat = false      // LiteLLM's mode-derived claim
         let merged = ModelFactsMerger.merge(authoritative: authoritative, enrichment: enrichment).merged
-        #expect(merged.supportsChatCompletions == true)
+        #expect(merged.capabilities.chat == true)
     }
 
     @Test("Downloaded overrides are now FORCE: they can fix a wrong vendor claim")
@@ -331,7 +331,7 @@ struct LiteLLMFactsConversionTests {
         let facts = entry.asFacts
         #expect(facts.capabilities.toolUse == true)     // positive converts
         #expect(facts.capabilities.vision == nil)       // false-in-LiteLLM = didn't say → nil
-        #expect(facts.supportsChatCompletions == false) // the one genuine negative it states
+        #expect(facts.capabilities.chat == false) // the one genuine negative it states
         #expect(facts.mode == "embedding")
         #expect(facts.maxInputTokens == 128_000)
     }

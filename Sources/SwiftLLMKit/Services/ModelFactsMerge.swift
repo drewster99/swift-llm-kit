@@ -61,7 +61,6 @@ public enum ModelFactsFieldTable {
         .field("sizeLabel", \ModelFacts.sizeLabel),
         .field("quantizationLabel", \ModelFacts.quantizationLabel),
         .field("pricing", \ModelFacts.pricing),                 // atomic composite
-        .field("supportsChatCompletions", \ModelFacts.supportsChatCompletions),
         .field("mode", \ModelFacts.mode),
         .field("validEffortLevels", \ModelFacts.validEffortLevels),
         .field("deprecatedOn", \ModelFacts.deprecatedOn),
@@ -79,6 +78,7 @@ public enum ModelFactsFieldTable {
     ]
 
     private static let capabilityFlags: [ModelFactsField] = [
+        .field("capabilities.chat", \ModelFacts.capabilities.chat),
         .field("capabilities.toolUse", \ModelFacts.capabilities.toolUse),
         .field("capabilities.vision", \ModelFacts.capabilities.vision),
         .field("capabilities.reasoning", \ModelFacts.capabilities.reasoning),
@@ -243,7 +243,9 @@ extension LiteLLMEntry {
         if supportsSystemMessages { facts.capabilities.systemMessages = true }
         if supportsAssistantPrefill { facts.capabilities.assistantPrefill = true }
         if supportsToolChoice { facts.capabilities.toolChoice = true }
-        if !supportsChatCompletions { facts.supportsChatCompletions = false }
+        // Chat is the one capability LiteLLM can state NEGATIVELY: mode != chat is a definitive
+        // "not a chat model" (embedding/moderation/…), so record the known false.
+        if !supportsChatCompletions { facts.capabilities.chat = false }
         return facts
     }
 }

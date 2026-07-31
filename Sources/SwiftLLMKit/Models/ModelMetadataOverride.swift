@@ -4,6 +4,9 @@ import Foundation
 /// Non-nil values replace the corresponding flag on ``ModelCapabilities``;
 /// `nil` values leave the existing flag unchanged.
 public struct ModelCapabilitiesOverride: Codable, Sendable, Equatable {
+    /// Chat-completions support. Lives here (not as a standalone override field) so chat is a
+    /// capability at every layer — its resolved value is ``ModelInfo/supportsChatCompletions``.
+    public var chat: Bool?
     public var toolUse: Bool?
     public var vision: Bool?
     public var reasoning: Bool?
@@ -23,6 +26,7 @@ public struct ModelCapabilitiesOverride: Codable, Sendable, Equatable {
     public var toolResultRoundTrip: Bool?
 
     public init(
+        chat: Bool? = nil,
         toolUse: Bool? = nil,
         vision: Bool? = nil,
         reasoning: Bool? = nil,
@@ -41,6 +45,7 @@ public struct ModelCapabilitiesOverride: Codable, Sendable, Equatable {
         toolChoice: Bool? = nil,
         toolResultRoundTrip: Bool? = nil
     ) {
+        self.chat = chat
         self.toolUse = toolUse
         self.vision = vision
         self.reasoning = reasoning
@@ -67,6 +72,7 @@ public struct ModelCapabilitiesOverride: Codable, Sendable, Equatable {
     ///   - forceReplace: When `true`, non-nil values always replace existing values.
     ///     When `false`, non-nil values only upgrade `false` → `true` (OR semantics).
     public func apply(to capabilities: inout ModelCapabilities, forceReplace: Bool) {
+        if let v = chat, (forceReplace || v) { capabilities[.chat] = v }
         if let v = toolUse, (forceReplace || v) { capabilities.toolUse = v }
         if let v = vision, (forceReplace || v) { capabilities.vision = v }
         if let v = reasoning, (forceReplace || v) { capabilities.reasoning = v }
@@ -84,6 +90,56 @@ public struct ModelCapabilitiesOverride: Codable, Sendable, Equatable {
         if let v = assistantPrefill, (forceReplace || v) { capabilities.assistantPrefill = v }
         if let v = toolChoice, (forceReplace || v) { capabilities.toolChoice = v }
         if let v = toolResultRoundTrip, (forceReplace || v) { capabilities.toolResultRoundTrip = v }
+    }
+
+    /// Enum-keyed access to a capability's override value (`nil` = no override). The exhaustive
+    /// switch makes a newly-added ``ModelCapability`` a COMPILE error here until it's wired, which is
+    /// what lets `CapabilitiesEditorSheet` drive its rows from `ModelCapability.allCases` safely.
+    public subscript(_ capability: ModelCapability) -> Bool? {
+        get {
+            switch capability {
+            case .chat: return chat
+            case .toolUse: return toolUse
+            case .vision: return vision
+            case .reasoning: return reasoning
+            case .codeExecution: return codeExecution
+            case .promptCaching: return promptCaching
+            case .computerUse: return computerUse
+            case .audioInput: return audioInput
+            case .audioOutput: return audioOutput
+            case .videoInput: return videoInput
+            case .responseSchema: return responseSchema
+            case .parallelToolCalls: return parallelToolCalls
+            case .pdfInput: return pdfInput
+            case .webSearch: return webSearch
+            case .systemMessages: return systemMessages
+            case .assistantPrefill: return assistantPrefill
+            case .toolChoice: return toolChoice
+            case .toolResultRoundTrip: return toolResultRoundTrip
+            }
+        }
+        set {
+            switch capability {
+            case .chat: chat = newValue
+            case .toolUse: toolUse = newValue
+            case .vision: vision = newValue
+            case .reasoning: reasoning = newValue
+            case .codeExecution: codeExecution = newValue
+            case .promptCaching: promptCaching = newValue
+            case .computerUse: computerUse = newValue
+            case .audioInput: audioInput = newValue
+            case .audioOutput: audioOutput = newValue
+            case .videoInput: videoInput = newValue
+            case .responseSchema: responseSchema = newValue
+            case .parallelToolCalls: parallelToolCalls = newValue
+            case .pdfInput: pdfInput = newValue
+            case .webSearch: webSearch = newValue
+            case .systemMessages: systemMessages = newValue
+            case .assistantPrefill: assistantPrefill = newValue
+            case .toolChoice: toolChoice = newValue
+            case .toolResultRoundTrip: toolResultRoundTrip = newValue
+            }
+        }
     }
 }
 
@@ -111,8 +167,16 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
     public var capabilities: ModelCapabilitiesOverride?
     /// Override pricing data. Replaces the entire pricing structure when set.
     public var pricing: ModelPricing?
-    /// Override chat completions support.
-    public var supportsChatCompletions: Bool?
+    /// Override chat-completions support. A convenience SHIM over ``capabilities`` `.chat` — chat is
+    /// a capability now, so this is not a separate stored field; reading and writing route through
+    /// the capabilities container, keeping one source of truth.
+    public var supportsChatCompletions: Bool? {
+        get { capabilities?[.chat] }
+        set {
+            if newValue != nil && capabilities == nil { capabilities = ModelCapabilitiesOverride() }
+            capabilities?[.chat] = newValue
+        }
+    }
     /// Override per-(provider+model) runtime behavior flags. Per-flag, not all-or-nothing.
     public var behaviorFlags: BehaviorFlagsOverride?
     /// Hide this model from pickers. Hiding is presentation, never deletion — every record
@@ -142,11 +206,14 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
         self.sizeLabel = sizeLabel
         self.capabilities = capabilities
         self.pricing = pricing
-        self.supportsChatCompletions = supportsChatCompletions
         self.behaviorFlags = behaviorFlags
         self.hidden = hidden
         self.isAvailable = isAvailable
         self.isAccessDenied = isAccessDenied
+        // Route the convenience param into capabilities.chat, but only when explicitly given, so a
+        // nil here never clobbers a chat value supplied through the `capabilities` argument. (Done
+        // last: the computed setter touches `self`, which requires every stored property set first.)
+        if let supportsChatCompletions { self.supportsChatCompletions = supportsChatCompletions }
     }
 
     /// Applies this override to a ``ModelInfo`` value.
@@ -172,14 +239,8 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
         if let v = pricing, (forceReplace || model.pricing == nil) {
             model.pricing = v
         }
-        if let v = supportsChatCompletions {
-            if forceReplace {
-                model.supportsChatCompletions = v
-            } else if !v {
-                // Gap-fill: only downgrade (mark as unsupported), never upgrade
-                model.supportsChatCompletions = false
-            }
-        }
+        // Chat is a capability now — it rides inside `capabilities` and is applied by the override
+        // below alongside every other flag; no separate chat handling.
         if let capOverride = capabilities {
             capOverride.apply(to: &model.capabilities, forceReplace: forceReplace)
         }
@@ -195,5 +256,53 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
         if let v = isAccessDenied, (forceReplace || model.isAccessDenied == nil) {
             model.isAccessDenied = v
         }
+    }
+}
+
+// MARK: - Codable (chat migration)
+//
+// Custom because `supportsChatCompletions` is now a computed shim over `capabilities.chat`, not a
+// stored field: synthesized Codable would neither encode it nor migrate an OLD override that still
+// carries the standalone `supportsChatCompletions` key. On read that legacy key is folded into
+// `capabilities.chat` (new-format capabilities win); on write nothing separate is emitted.
+extension ModelMetadataOverride {
+    private enum CodingKeys: String, CodingKey {
+        case displayName, maxInputTokens, maxOutputTokens, sizeLabel, capabilities, pricing
+        case supportsChatCompletions
+        case behaviorFlags, hidden, isAvailable, isAccessDenied
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        displayName = try c.decodeIfPresent(String.self, forKey: .displayName)
+        maxInputTokens = try c.decodeIfPresent(Int.self, forKey: .maxInputTokens)
+        maxOutputTokens = try c.decodeIfPresent(Int.self, forKey: .maxOutputTokens)
+        sizeLabel = try c.decodeIfPresent(String.self, forKey: .sizeLabel)
+        capabilities = try c.decodeIfPresent(ModelCapabilitiesOverride.self, forKey: .capabilities)
+        pricing = try c.decodeIfPresent(ModelPricing.self, forKey: .pricing)
+        behaviorFlags = try c.decodeIfPresent(BehaviorFlagsOverride.self, forKey: .behaviorFlags)
+        hidden = try c.decodeIfPresent(Bool.self, forKey: .hidden)
+        isAvailable = try c.decodeIfPresent(Bool.self, forKey: .isAvailable)
+        isAccessDenied = try c.decodeIfPresent(Bool.self, forKey: .isAccessDenied)
+        // Migrate the legacy standalone chat flag into capabilities.chat — new-format capabilities win.
+        if capabilities?[.chat] == nil,
+           let legacyChat = try c.decodeIfPresent(Bool.self, forKey: .supportsChatCompletions) {
+            if capabilities == nil { capabilities = ModelCapabilitiesOverride() }
+            capabilities?[.chat] = legacyChat
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(displayName, forKey: .displayName)
+        try c.encodeIfPresent(maxInputTokens, forKey: .maxInputTokens)
+        try c.encodeIfPresent(maxOutputTokens, forKey: .maxOutputTokens)
+        try c.encodeIfPresent(sizeLabel, forKey: .sizeLabel)
+        try c.encodeIfPresent(capabilities, forKey: .capabilities)   // chat rides inside here
+        try c.encodeIfPresent(pricing, forKey: .pricing)
+        try c.encodeIfPresent(behaviorFlags, forKey: .behaviorFlags)
+        try c.encodeIfPresent(hidden, forKey: .hidden)
+        try c.encodeIfPresent(isAvailable, forKey: .isAvailable)
+        try c.encodeIfPresent(isAccessDenied, forKey: .isAccessDenied)
     }
 }

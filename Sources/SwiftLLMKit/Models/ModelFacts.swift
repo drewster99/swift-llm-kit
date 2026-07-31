@@ -30,7 +30,7 @@ public struct ModelFacts: Codable, Sendable, Equatable {
     public var quantizationLabel: String?
     /// Atomic: merges whole-value-or-nothing.
     public var pricing: ModelPricing?
-    public var supportsChatCompletions: Bool?
+    // Chat support is now `capabilities.chat` — a capability like every other, no standalone field.
     public var mode: String?
     /// `nil` = source said nothing about effort. An explicit `[]` is a statement: "no effort levels".
     public var validEffortLevels: [String]?
@@ -75,11 +75,11 @@ public struct ModelFacts: Codable, Sendable, Equatable {
     // MARK: - Materialization
 
     /// Collapses merged facts into the app-facing ``ModelInfo``. Capabilities stay TRI-STATE — a
-    /// silent (`nil`) capability materializes as UNKNOWN, not false, since `ModelCapabilitiesOverride`
-    /// only writes its non-nil fields onto a fresh all-unknown ``ModelCapabilities``. The remaining
-    /// historical defaults still apply for display (`supportsChatCompletions` reads `true` when chat
-    /// is unknown; effort levels `nil` → `[]`). Inside the layers, unknown stays `nil` so lower
-    /// layers can still speak.
+    /// silent (`nil`) capability, chat included, materializes as UNKNOWN, not false, since
+    /// `ModelCapabilitiesOverride` only writes its non-nil fields onto a fresh all-unknown
+    /// ``ModelCapabilities``. ``ModelInfo/supportsChatCompletions`` still reads `true` when `.chat`
+    /// is unknown (the one historical display default); effort levels `nil` → `[]`. Inside the
+    /// layers, unknown stays `nil` so lower layers can still speak.
     public func materialize(providerID: String, modelID: String) -> ModelInfo {
         var caps = ModelCapabilities()
         capabilities.apply(to: &caps, forceReplace: true)
@@ -96,7 +96,6 @@ public struct ModelFacts: Codable, Sendable, Equatable {
             sizeLabel: sizeLabel,
             quantizationLabel: quantizationLabel,
             pricing: pricing,
-            supportsChatCompletions: supportsChatCompletions,   // raw tri-state: nil stays unknown (reads true)
             mode: mode,
             validEffortLevels: validEffortLevels ?? [],
             behaviorFlags: flags,
@@ -138,9 +137,8 @@ extension ModelMetadataOverride {
         facts.maxInputTokens = maxInputTokens
         facts.maxOutputTokens = maxOutputTokens
         facts.sizeLabel = sizeLabel
-        if let capabilities { facts.capabilities = capabilities }
+        if let capabilities { facts.capabilities = capabilities }   // chat rides inside capabilities
         facts.pricing = pricing
-        facts.supportsChatCompletions = supportsChatCompletions
         if let behaviorFlags { facts.behaviorFlags = behaviorFlags }
         facts.hidden = hidden
         facts.isAvailable = isAvailable

@@ -291,7 +291,7 @@ extension ModelProfile {
             guard finding.status == .established, finding.source == .probed else { return nil }
             return finding.value
         }
-        facts.supportsChatCompletions = probed(chat)
+        facts.capabilities.chat = probed(chat)
         facts.capabilities.toolUse = probed(toolCalling)
         facts.capabilities.toolResultRoundTrip = probed(toolResultRoundTrip)
         facts.capabilities.vision = probed(vision)

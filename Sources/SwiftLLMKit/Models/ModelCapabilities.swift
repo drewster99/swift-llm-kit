@@ -50,6 +50,54 @@ public enum ModelCapability: String, CaseIterable, Sendable, Codable, Hashable {
         case .toolResultRoundTrip: return "Tool Round-Trip"
         }
     }
+
+    /// Full title for the per-model capability editor. Exhaustive so a new case can't ship without one.
+    public var editorTitle: String {
+        switch self {
+        case .chat:                return "Chat completions"
+        case .toolUse:             return "Tool use"
+        case .vision:              return "Vision (image input)"
+        case .reasoning:           return "Reasoning / thinking"
+        case .codeExecution:       return "Code execution"
+        case .promptCaching:       return "Prompt caching"
+        case .computerUse:         return "Computer use"
+        case .audioInput:          return "Audio input"
+        case .audioOutput:         return "Audio output"
+        case .videoInput:          return "Video input"
+        case .responseSchema:      return "Response schema"
+        case .parallelToolCalls:   return "Parallel tool calls"
+        case .pdfInput:            return "PDF input"
+        case .webSearch:           return "Web search"
+        case .systemMessages:      return "System messages"
+        case .assistantPrefill:    return "Assistant prefill"
+        case .toolChoice:          return "Tool choice"
+        case .toolResultRoundTrip: return "Tool result round-trip"
+        }
+    }
+
+    /// One-line help for the per-model capability editor. Exhaustive by design.
+    public var editorDescription: String {
+        switch self {
+        case .chat:                return "Model serves the chat-completions surface Agent Smith talks to. Off means it's responses-/embeddings-only, and assigning it to an agent fails with HTTP 404."
+        case .toolUse:             return "Model can call tools. Frequently mis-reported as off for cloud/self-hosted models that do support it."
+        case .vision:              return "Model can accept images in the prompt. Off means a pasted image is rejected (HTTP 400)."
+        case .reasoning:           return "Model supports extended reasoning (thinking budget / effort)."
+        case .codeExecution:       return "Model has a built-in code-execution tool."
+        case .promptCaching:       return "Provider supports prompt/context caching for this model."
+        case .computerUse:         return "Model supports computer-use / GUI-control tooling."
+        case .audioInput:          return "Model can accept audio as input."
+        case .audioOutput:         return "Model can produce audio output."
+        case .videoInput:          return "Model can accept video as input."
+        case .responseSchema:      return "Model supports structured-output / JSON-schema responses."
+        case .parallelToolCalls:   return "Model can emit multiple tool calls in one turn."
+        case .pdfInput:            return "Model can accept PDF documents as input."
+        case .webSearch:           return "Model has a built-in web-search tool."
+        case .systemMessages:      return "Model accepts a system message (some backends fold it into the first user turn)."
+        case .assistantPrefill:    return "Model supports prefilling the start of the assistant's reply."
+        case .toolChoice:          return "Model honors an explicit `tool_choice` selection."
+        case .toolResultRoundTrip: return "Model consumes tool RESULTS, not just emits calls — the half an agent depends on. Probe-established; force only to correct a stale verdict."
+        }
+    }
 }
 
 // A capability is usable as a coding KEY (its rawValue), so ``ModelCapabilities`` can serialize as a

@@ -62,7 +62,7 @@ public enum ModelProber {
         profile.benchmarks = facts.benchmarks
         if let value = facts.maxInputTokens { profile.maxContextTokens = .decoded(value, evidence) }
         if let value = facts.maxOutputTokens { profile.maxOutputTokens = .decoded(value, evidence) }
-        if let value = facts.supportsChatCompletions { profile.chat = .decoded(value, evidence) }
+        if let value = facts.capabilities.chat { profile.chat = .decoded(value, evidence) }
         if let value = facts.capabilities.toolUse { profile.toolCalling = .decoded(value, evidence) }
         if let value = facts.capabilities.vision { profile.vision = .decoded(value, evidence) }
         if let value = facts.capabilities.pdfInput { profile.pdfInput = .decoded(value, evidence) }

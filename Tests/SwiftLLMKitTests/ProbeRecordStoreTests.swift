@@ -204,7 +204,7 @@ struct ProbeEvidenceCombinerTests {
     func degenerateCases() {
         var profile = ModelProfile(providerID: "p", modelID: "m")
         profile.chat = .established(true, "echoed")
-        #expect(ProbeEvidenceCombiner.combinedFacts(local: record(profile, at: 0), downloaded: nil, forProviderID: "builtin.zai").supportsChatCompletions == true)
+        #expect(ProbeEvidenceCombiner.combinedFacts(local: record(profile, at: 0), downloaded: nil, forProviderID: "builtin.zai").capabilities.chat == true)
         #expect(ProbeEvidenceCombiner.combinedFacts(local: nil, downloaded: nil, forProviderID: "builtin.zai").isSilent)
     }
 }
@@ -235,7 +235,7 @@ struct GoldenProbeMergeTests {
     func deadButListedFabricatesNothing() {
         // Gemini still lists the model with generateContent — authoritative states chat=true.
         var authoritative = ModelFacts()
-        authoritative.supportsChatCompletions = true
+        authoritative.capabilities.chat = true
         authoritative.maxInputTokens = 1_048_576
 
         // The probe halted at the reachability gate: isAvailable=false established, everything
@@ -250,7 +250,7 @@ struct GoldenProbeMergeTests {
         #expect(empirical.capabilities.vision == nil)
 
         let result = ModelFactsMerger.merge(authoritative: authoritative, empirical: empirical)
-        #expect(result.merged.supportsChatCompletions == true)   // the listing's claim, unchanged
+        #expect(result.merged.capabilities.chat == true)   // the listing's claim, unchanged
         #expect(result.merged.capabilities.vision == nil)         // nothing fabricated
         #expect(result.merged.isAvailable == false)               // the dead model IS marked dead
         #expect(result.provenance["isAvailable"] == .empirical)
@@ -331,7 +331,7 @@ struct FactsSeedTests {
         facts.capabilities.vision = true       // stated yes
         facts.capabilities.pdfInput = nil      // NOT stated (e.g. a payload missing the leaf)
         facts.capabilities.toolUse = false     // stated NO (e.g. Mistral function_calling=false)
-        facts.supportsChatCompletions = true
+        facts.capabilities.chat = true
         facts.maxInputTokens = 200_000
 
         let seed = ModelProber.seedProfile(
@@ -381,7 +381,7 @@ struct AccountScopingHardeningTests {
         )
         let combined = ProbeEvidenceCombiner.combinedFacts(
             local: nil, downloaded: shipped, forProviderID: "builtin.alibaba")
-        #expect(combined.supportsChatCompletions == true)     // model-scoped flows
+        #expect(combined.capabilities.chat == true)     // model-scoped flows
         #expect(combined.isAccessDenied == nil, "another account's restriction must never project")
     }
 
