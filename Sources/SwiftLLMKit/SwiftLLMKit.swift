@@ -816,10 +816,17 @@ public final class LLMKitManager {
                     .map { String($0.dropFirst(providerPrefix.count)) }
             )
             for modelID in overrideOnlyIDs.subtracting(decodedIDs).sorted() {
-                // Override-only models were never in the listing, so they have no fetch time.
+                // Override-only models aren't in the CURRENT listing, but a delisted-but-callable
+                // model (e.g. an Anthropic snapshot in its deprecation window) genuinely WAS seen
+                // before. Preserve its last-seen time from the prior catalog slice — still present in
+                // `models` here, since the slice isn't replaced until this returns — rather than
+                // resetting "last fetched" to nil and discarding real history.
+                let priorFetchedAt = models.first {
+                    $0.providerID == provider.id && $0.modelID == modelID
+                }?.fetchedAt
                 providerModels.append(await composeModel(
                     modelID: modelID, authoritative: ModelFacts(), provider: provider,
-                    fetchedAt: nil
+                    fetchedAt: priorFetchedAt
                 ))
             }
 
