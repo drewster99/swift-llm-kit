@@ -170,7 +170,8 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
         self.quantizationLabel = quantizationLabel
         self.pricing = pricing
         // Chat support lives in `capabilities` as `.chat`; stamp it only when the caller stated a
-        // value. Omitted ⇒ unknown, which `supportsChatCompletions` reads back as `true`.
+        // value. Omitted ⇒ unknown; `supportsChatCompletions` then reads `false` (uniform with every
+        // other capability), and gating consumers reject only a KNOWN non-chat.
         if let supportsChatCompletions { self.capabilities[.chat] = supportsChatCompletions }
         self.mode = mode
         self.validEffortLevels = validEffortLevels

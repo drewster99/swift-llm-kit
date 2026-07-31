@@ -3,9 +3,10 @@ import Foundation
 /// One feature a model can support. The set of cases IS the set of capability flags — adding a
 /// capability means adding a case here and a matching computed accessor on ``ModelCapabilities``.
 public enum ModelCapability: String, CaseIterable, Sendable, Codable, Hashable {
-    /// The model answers on `/v1/chat/completions` — the baseline every agent role needs. Unlike
-    /// the others, its boolean VIEW defaults to `true` (assume chat unless a provider says no); see
-    /// ``ModelInfo/supportsChatCompletions``, which is now a view over this capability.
+    /// The model answers on `/v1/chat/completions` — the baseline every agent role needs. Read like
+    /// every other capability (no special default; unknown is not "supported"); see
+    /// ``ModelInfo/supportsChatCompletions``, a view over this capability. Consumers that must not
+    /// penalize an unmeasured model gate on a KNOWN non-chat (`state(of: .chat) == false`).
     case chat
     /// The model is a BATCH-only variant (async batch-submission API, e.g. OpenRouter's `:batch`
     /// slug), so it cannot back an interactive agent. Present so a role can forbid it via
