@@ -793,11 +793,14 @@ public final class LLMKitManager {
             let providerPrefix = "\(provider.id)/"
             metadataCompositions = metadataCompositions.filter { !$0.key.hasPrefix(providerPrefix) }
 
+            // One timestamp for the whole listing: every decoded model was just fetched together.
+            let fetchedAt = Date()
             var providerModels: [ModelInfo] = []
             providerModels.reserveCapacity(decodedFacts.count)
             for decoded in decodedFacts {
                 providerModels.append(await composeModel(
-                    modelID: decoded.modelID, authoritative: decoded.facts, provider: provider
+                    modelID: decoded.modelID, authoritative: decoded.facts, provider: provider,
+                    fetchedAt: fetchedAt
                 ))
             }
 
@@ -813,8 +816,10 @@ public final class LLMKitManager {
                     .map { String($0.dropFirst(providerPrefix.count)) }
             )
             for modelID in overrideOnlyIDs.subtracting(decodedIDs).sorted() {
+                // Override-only models were never in the listing, so they have no fetch time.
                 providerModels.append(await composeModel(
-                    modelID: modelID, authoritative: ModelFacts(), provider: provider
+                    modelID: modelID, authoritative: ModelFacts(), provider: provider,
+                    fetchedAt: nil
                 ))
             }
 
@@ -843,7 +848,10 @@ public final class LLMKitManager {
     /// inspector. `authoritative` is empty for override-only models (union-of-layers existence:
     /// the merge doesn't care which layer created the key, and the inspector shows the absence
     /// of provider-stated fields for what it is).
-    private func composeModel(modelID: String, authoritative: ModelFacts, provider: ModelProvider) async -> ModelInfo {
+    /// - Parameter fetchedAt: When this model's `/models` listing was fetched, or `nil` for an
+    ///   override-only model that was never in a listing. Stamped onto the result as provenance,
+    ///   OUTSIDE the layer merge (it is not a fact any layer competes over).
+    private func composeModel(modelID: String, authoritative: ModelFacts, provider: ModelProvider, fetchedAt: Date?) async -> ModelInfo {
         // Downloaded-overrides layer: three key axes, least specific applied first so the
         // most specific wins — provider-wide defaults (e.g. all-OpenAI useMaxCompletionTokens),
         // then (apiType, modelID), then (providerID, modelID).
@@ -885,7 +893,12 @@ public final class LLMKitManager {
             userOverrides: userFacts
         )
         metadataCompositions["\(provider.id)/\(modelID)"] = composition
-        return composition.merged.materialize(providerID: provider.id, modelID: modelID)
+        var info = composition.merged.materialize(providerID: provider.id, modelID: modelID)
+        // Provenance timestamps, stamped after the merge: when the listing was fetched, and when a
+        // LOCAL probe last ran (its evidence stays in the ProbeRecord; only the time mirrors here).
+        info.fetchedAt = fetchedAt
+        info.lastProbedAt = localProbeRecords[probeKey]?.recordedAt
+        return info
     }
 
     // MARK: - Validation

@@ -108,6 +108,18 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
     /// context) rather than comparing against a fixed output cap that doesn't exist. Defaults
     /// false — the ordinary case where an output cap either exists or is simply unknown.
     public var outputBoundedByContext: Bool
+    /// When this model was last seen in the provider's `/models` listing — stamped at enrichment
+    /// each time that listing is fetched. `nil` for a model that has never appeared in a listing
+    /// (an override-only entry the merge materialized). Provenance, not a merged fact: it is set
+    /// AFTER the layer merge, never through it, so it never competes with catalog or probe data.
+    public var fetchedAt: Date?
+    /// When this model was last probed ON THIS MACHINE — the local ``ProbeRecord``'s `recordedAt`,
+    /// surfaced here at enrichment so callers read it off the model record like any other field.
+    /// `nil` when no local probe exists (bundled/downloaded evidence does not count — this answers
+    /// "when did *we* last probe it"). The probe EVIDENCE still lives in ``ProbeRecord`` as its
+    /// source of truth; only this timestamp is mirrored here, the same way probed capabilities
+    /// already flow into the merge via the empirical layer.
+    public var lastProbedAt: Date?
 
     // MARK: - Backward-compatible pricing accessors
 
@@ -157,7 +169,9 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
         hidden: Bool? = nil,
         isAvailable: Bool? = nil,
         isAccessDenied: Bool? = nil,
-        outputBoundedByContext: Bool = false
+        outputBoundedByContext: Bool = false,
+        fetchedAt: Date? = nil,
+        lastProbedAt: Date? = nil
     ) {
         self.providerID = providerID
         self.modelID = modelID
@@ -188,6 +202,8 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
         self.isAvailable = isAvailable
         self.isAccessDenied = isAccessDenied
         self.outputBoundedByContext = outputBoundedByContext
+        self.fetchedAt = fetchedAt
+        self.lastProbedAt = lastProbedAt
     }
 
     /// Whether the model was created/modified within the last 90 days.
@@ -213,7 +229,7 @@ extension ModelInfo: Codable {
         case mode, validEffortLevels, behaviorFlags
         case deprecatedOn, deprecationReplacement, maxTemperature, modelDescription
         case samplingDefaults, isFree, benchmarks, huggingFaceID, hidden, isAvailable, isAccessDenied
-        case outputBoundedByContext
+        case outputBoundedByContext, fetchedAt, lastProbedAt
         // Legacy keys for reading old persisted data
         case inputCostPerMillionTokens, outputCostPerMillionTokens
     }
@@ -253,6 +269,8 @@ extension ModelInfo: Codable {
         isAvailable = try container.decodeIfPresent(Bool.self, forKey: .isAvailable)
         outputBoundedByContext = try container.decodeIfPresent(Bool.self, forKey: .outputBoundedByContext) ?? false
         isAccessDenied = try container.decodeIfPresent(Bool.self, forKey: .isAccessDenied)
+        fetchedAt = try container.decodeIfPresent(Date.self, forKey: .fetchedAt)
+        lastProbedAt = try container.decodeIfPresent(Date.self, forKey: .lastProbedAt)
 
         // Read new pricing field, or fall back to legacy flat cost fields.
         if let p = try container.decodeIfPresent(ModelPricing.self, forKey: .pricing) {
@@ -305,6 +323,8 @@ extension ModelInfo: Codable {
         try container.encodeIfPresent(isAvailable, forKey: .isAvailable)
         try container.encodeIfPresent(isAccessDenied, forKey: .isAccessDenied)
         if outputBoundedByContext { try container.encode(true, forKey: .outputBoundedByContext) }
+        try container.encodeIfPresent(fetchedAt, forKey: .fetchedAt)
+        try container.encodeIfPresent(lastProbedAt, forKey: .lastProbedAt)
         // Legacy fields intentionally not written — new format only.
     }
 }
