@@ -606,7 +606,7 @@ public struct ModelFetchService: Sendable {
                 facts.displayName = model.displayName
                 // The methods list is an explicit enumeration: when present, "generateContent"
                 // distinguishes chat models from embedding/image ones both directions. Absent →
-                // stays nil (materializes to the true-by-default convention).
+                // stays nil (chat UNKNOWN — no default; gating rejects only a known non-chat model).
                 facts.capabilities.chat = model.supportedGenerationMethods
                     .map { $0.contains("generateContent") }
                 // `thinking` is stated only when present; absent says nothing.

@@ -973,8 +973,10 @@ public final class LLMKitManager {
                 return
             }
 
-            // Check model supports chat completions
-            if !modelInfo.supportsChatCompletions {
+            // Reject only a model KNOWN not to serve chat completions (embedding/responses-only).
+            // An UNMEASURED chat capability must not fail validation — that would block every model
+            // no source has stated chat for (many local/OpenAI-compatible endpoints).
+            if modelInfo.capabilities.state(of: .chat) == false {
                 configurations[index].isValid = false
                 configurations[index].validationError = "Model '\(config.modelID)' does not support the chat completions endpoint"
                 return

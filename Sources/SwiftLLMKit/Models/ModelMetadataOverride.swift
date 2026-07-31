@@ -225,6 +225,12 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
 
     /// Applies this override to a ``ModelInfo`` value.
     ///
+    /// NOT the production merge path — the live pipeline composes overrides through ``asFacts`` and
+    /// ``ModelFactsMerger`` (per-field, priority-based), never this method. Retained for direct
+    /// application and tests. Its `forceReplace: false` gap-fill is 2-state ("upgrade false→true");
+    /// under the tri-state model it does not read the target's known/unknown state, so use the
+    /// facts merger for anything that must respect tri-state semantics.
+    ///
     /// - Parameters:
     ///   - model: The model info to modify in-place.
     ///   - forceReplace: When `true`, non-nil override fields replace existing

@@ -77,8 +77,8 @@ public struct ModelFacts: Codable, Sendable, Equatable {
     /// Collapses merged facts into the app-facing ``ModelInfo``. Capabilities stay TRI-STATE — a
     /// silent (`nil`) capability, chat included, materializes as UNKNOWN, not false, since
     /// `ModelCapabilitiesOverride` only writes its non-nil fields onto a fresh all-unknown
-    /// ``ModelCapabilities``. ``ModelInfo/supportsChatCompletions`` still reads `true` when `.chat`
-    /// is unknown (the one historical display default); effort levels `nil` → `[]`. Inside the
+    /// ``ModelCapabilities``. Chat carries no special default: `.chat` unknown stays unknown, and
+    /// gating consumers reject only a KNOWN non-chat model. Effort levels `nil` → `[]`. Inside the
     /// layers, unknown stays `nil` so lower layers can still speak.
     public func materialize(providerID: String, modelID: String) -> ModelInfo {
         var caps = ModelCapabilities()

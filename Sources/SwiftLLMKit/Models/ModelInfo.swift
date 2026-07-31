@@ -26,16 +26,20 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
     /// Rich pricing data for this model. Supports tiered pricing, cache
     /// pricing, and service tier variants.
     public var pricing: ModelPricing?
-    /// Whether this model supports `/v1/chat/completions`. A 2-state VIEW over ``capabilities``'
-    /// `.chat`: unknown reads `true` (assume chat unless a provider says no), so it behaves exactly
-    /// as the former stored property; setting it records an explicit `capabilities[.chat]`. The
-    /// capability is now the single source of truth for chat support — this is a convenience shim.
+    /// Whether this model is KNOWN to support `/v1/chat/completions`. A uniform 2-state VIEW over
+    /// ``capabilities``' `.chat` — unknown reads `false`, exactly like every other capability flag —
+    /// with no "assume chat" default; setting it records an explicit `capabilities[.chat]`. The
+    /// capability is the single source of truth.
+    ///
+    /// Callers that must NOT penalize an unknown chat model (config validation, the editor banner)
+    /// test `capabilities.state(of: .chat) == false` — a KNOWN non-chat — rather than this collapsed
+    /// view, so an unmeasured model is never treated as non-chat.
     ///
     /// Endpoint reachability only — it does NOT mean the model can back an agent. Gemini's image
     /// models answer on the chat endpoint and are `true` here. Whether a model can actually drive
     /// an agent is ``capabilities``' `toolUse` to answer, on evidence rather than on kind.
     public var supportsChatCompletions: Bool {
-        get { capabilities[.chat] ?? true }
+        get { capabilities.contains(.chat) }
         set { capabilities[.chat] = newValue }
     }
     /// The model's kind as reported by LiteLLM (`chat`, `embedding`, `image_generation`,

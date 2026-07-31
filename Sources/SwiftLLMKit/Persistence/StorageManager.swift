@@ -97,9 +97,13 @@ struct StorageManager: Sendable {
         guard FileManager.default.fileExists(atPath: modelCatalogURL.path) else { return [] }
         let data = try Data(contentsOf: modelCatalogURL)
         let decoder = JSONDecoder()
-        if let file = try? decoder.decode(ModelCatalogFile.self, from: data),
-           file.version >= ModelCatalogFile.currentVersion {
-            return file.models
+        if let file = try? decoder.decode(ModelCatalogFile.self, from: data) {
+            // It IS a versioned envelope. Trust it only when this build understands the version — a
+            // NEWER version may have changed what the same shape MEANS (exactly what v1→v2 did to
+            // `false`), so on a mismatch discard and let the next refresh rebuild the cache rather
+            // than misread it. Mirrors FailableRecord's future-version rejection; a catalog is a
+            // rebuildable cache, so an empty return is safe.
+            return file.version == ModelCatalogFile.currentVersion ? file.models : []
         }
         // Legacy bare-array cache (pre-tri-state): a stored capability `false` ambiguously meant
         // "unknown, collapsed to false", so trusting it as known-false would wrongly hide models

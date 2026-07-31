@@ -133,18 +133,24 @@ public enum ModelProber {
             // directions are decodable — unlike decoders where false just means "didn't say".
             profile.vision = .decoded(info.capabilities.vision, "capabilities.image_input")
             profile.pdfInput = .decoded(info.capabilities.pdfInput, "capabilities.pdf_input")
-            profile.chat = .decoded(info.supportsChatCompletions, "provider /models payload")
+            if let chat = info.capabilities.state(of: .chat) {
+                profile.chat = .decoded(chat, "provider /models payload")
+            }
         case .ollama:
             if info.capabilities.toolUse {
                 profile.toolCalling = .decoded(true, "tags payload lists 'tools'")
             }
         case .gemini:
-            profile.chat = .decoded(info.supportsChatCompletions, "supportedGenerationMethods")
+            if let chat = info.capabilities.state(of: .chat) {
+                profile.chat = .decoded(chat, "supportedGenerationMethods")
+            }
         case .mistral:
             // Mistral's capabilities block states each flag explicitly (true/false), like
             // Anthropic's — so both directions are decodable, including tool calling
             // (`function_calling`), which almost no other vendor publishes.
-            profile.chat = .decoded(info.supportsChatCompletions, "capabilities.completion_chat")
+            if let chat = info.capabilities.state(of: .chat) {
+                profile.chat = .decoded(chat, "capabilities.completion_chat")
+            }
             profile.toolCalling = .decoded(info.capabilities.toolUse, "capabilities.function_calling")
             profile.vision = .decoded(info.capabilities.vision, "capabilities.vision")
         default:

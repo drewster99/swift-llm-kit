@@ -13,11 +13,11 @@ struct ModelInfoChatCapabilityTests {
         ModelInfo(providerID: "p", modelID: "m", supportsChatCompletions: supportsChatCompletions)
     }
 
-    @Test("Unstated chat is UNKNOWN in capabilities but reads true through the shim")
-    func unknownChatReadsTrue() {
+    @Test("Unstated chat is UNKNOWN and reads FALSE — uniform with every other flag, no assume-true")
+    func unknownChatReadsFalse() {
         let m = model()
         #expect(m.capabilities.state(of: .chat) == nil)     // genuinely unknown
-        #expect(m.supportsChatCompletions)                  // shim defaults true
+        #expect(!m.supportsChatCompletions)                 // 2-state view: unknown reads false
     }
 
     @Test("An explicit chat value is recorded as a KNOWN capability")

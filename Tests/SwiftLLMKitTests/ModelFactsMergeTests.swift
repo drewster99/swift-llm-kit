@@ -135,7 +135,7 @@ struct ModelFactsMergerTests {
     func materializationDefaults() {
         let merged = ModelFactsMerger.merge(authoritative: ModelFacts()).merged
         let info = merged.materialize(providerID: "p", modelID: "m")
-        #expect(info.supportsChatCompletions == true)   // nil → true (historical default)
+        #expect(info.supportsChatCompletions == false)  // nil → false (uniform; chat has no assume-true default)
         #expect(info.capabilities.toolUse == false)     // nil → false
         #expect(info.validEffortLevels == [])           // nil → []
         #expect(info.displayName == "m")                // nil → modelID
