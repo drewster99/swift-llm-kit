@@ -171,4 +171,38 @@ struct TrailingSystemMessageTests {
         let rejectedFacts = rejected.asEmpiricalFacts(includeAccountScoped: false)
         #expect(rejectedFacts.behaviorFlags.supportsTrailingSystemMessage == false)
     }
+
+    // MARK: - Realistic probe shape (base system + trailing turn)
+
+    @Test("makeTrailingSystemTurnTest builds a base system, a user turn, then a trailing system nonce")
+    func probeTestShape() {
+        let test = ModelProber.makeTrailingSystemTurnTest()
+        #expect(test.messages.count == 3)
+        #expect(test.messages[0].role == .system)   // base system prompt
+        #expect(test.messages[1].role == .user)
+        #expect(test.messages[2].role == .system)   // the trailing turn
+        // The nonce lives ONLY in the trailing turn, so an echo proves that turn — not the base
+        // system — was read.
+        #expect(test.messages[2].content.textValue?.contains(test.nonce) == true)
+        #expect(test.messages[0].content.textValue?.contains(test.nonce) == false)
+    }
+
+    @Test("The probe's messages, sent through a flag-on provider, land the nonce in a trailing system turn")
+    func probeRoutesThroughConsumer() throws {
+        let test = ModelProber.makeTrailingSystemTurnTest()
+        let provider = OpenAICompatibleProvider(
+            configuration: ModelConfiguration(name: "t", providerID: "p", modelID: "some-model"),
+            provider: ModelProvider(id: "p", name: "p", apiType: .openAICompatible,
+                                    endpoint: try #require(URL(string: "https://api.example.com/v1"))),
+            readAPIKey: Self.dummyKey,
+            behaviorFlags: BehaviorFlags(supportsTrailingSystemMessage: true)
+        )
+        let body = provider.buildRequestBody(messages: test.messages, tools: [])
+        let wire = try #require(body["messages"] as? [[String: Any]])
+        let last = try #require(wire.last)
+        #expect(last["role"] as? String == "system")
+        #expect((last["content"] as? String)?.contains(test.nonce) == true)
+        // The base system stays a distinct leading system message, not merged with the trailing nonce.
+        #expect((wire.first?["content"] as? String)?.contains(test.nonce) == false)
+    }
 }

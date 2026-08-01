@@ -39,7 +39,13 @@ public enum ModelProber {
     /// on a harness-malformed request); truncated/empty 200s no longer grade `noToolCall`; and
     /// rejections naming our own request knobs no longer read as tool refusals. v2 records'
     /// `toolCalling`/`toolResultRoundTrip` = false are suspect; re-probe.
-    public static let proberVersion = 3
+    ///
+    /// v4: the trailing-system-turn probe changed shape — it now sends the REAL production request
+    /// (a base system prompt PLUS a trailing `{role: system}` turn) through the provider's own
+    /// consumer with `supportsTrailingSystemMessage` forced on, instead of forcing a raw body with no
+    /// base system. v3 `trailingSystemMessage` findings were measured in that isolated shape and are
+    /// suspect; the caller re-probes JUST that finding when it reuses a v3 record (no full re-sweep).
+    public static let proberVersion = 4
 
     /// Builds a probe seed from a TRI-STATE facts record — the preferred seeding path.
     ///
@@ -379,71 +385,65 @@ public enum ModelProber {
 
     // MARK: - Trailing system turn
 
-    /// One trailing-system-turn test: the request body to force, and the nonce that grades the answer.
+    /// One trailing-system-turn test: the messages to SEND and the nonce that grades the answer.
     ///
     /// The two travel together because they are meaningless apart — the nonce is embedded in the
-    /// forced body, so a caller that built one without the other would be grading against a code the
+    /// trailing turn, so a caller that built one without the other would be grading against a code the
     /// model was never given.
     public struct TrailingSystemTurnTest: Sendable {
-        /// Merged into the outbound body via `ModelConfiguration.extraJSONOverrides`.
-        public let overrides: [String: AnyCodable]
+        /// A base system prompt, a user turn, then a trailing system turn carrying the nonce — the
+        /// exact production shape. Sent THROUGH the provider (not as a forced raw body): with
+        /// ``BehaviorFlags/supportsTrailingSystemMessage`` on, the provider's own consumer keeps the
+        /// trailing turn in place.
+        public let messages: [LLMMessage]
         /// The code the trailing system turn carries; an echo is the proof it was read.
         public let nonce: String
     }
 
-    /// Builds the forced request body for a trailing `{"role": "system"}` steering turn.
+    /// Builds the messages for a trailing `{role: system}` steering turn, in the REAL shape we send.
     ///
-    /// **Why the body has to be forced.** Every provider in this kit hoists mid-array `.system`
-    /// messages out of the conversation and into the front of the prompt (Anthropic's top-level
-    /// `system` field, Gemini's `systemInstruction`, OpenAI-compat's `messages[0]`), so a system
-    /// message handed to `send()` can never reach the wire in trailing position. Overriding
-    /// `messages` wholesale is what gets past that: `mergeJSONOverrides` replaces arrays outright
-    /// rather than merging element-wise, so this body is the body. Without it the probe would
-    /// measure our own hoist and report a uniform "no" for every model, including ones that
-    /// support the turn perfectly well.
-    ///
-    /// The shape is Anthropic's documented legal one — the system turn follows a `user` message and
-    /// is the last entry — so a rejection is about model support rather than our own malformed
-    /// request. No top-level `system` is emitted (the caller passes no `.system` message), keeping
-    /// the test to one variable.
+    /// **Probe what we actually send.** Earlier versions forced a raw `messages` body to bypass the
+    /// provider's system-hoisting, which measured the endpoint in isolation — a system turn alone,
+    /// with NO base system prompt. Production never looks like that: there is always a base system
+    /// prompt (top-level `system` on Anthropic, `messages[0]` on OpenAI-compatible / Ollama) AND the
+    /// trailing turn. Now that ``BehaviorFlags/supportsTrailingSystemMessage`` exists, the probe
+    /// sends these messages THROUGH the provider's own path with the flag forced on, so the wire
+    /// shape is exactly production — base system included — and a pass means our real request works,
+    /// not that an artificial one does. A provider whose consumer does NOT emit a trailing turn
+    /// (Gemini folds it into `systemInstruction`) must not be probed with this — it would echo the
+    /// nonce from the top and fabricate a pass; the caller gates that out by `apiType`.
     ///
     /// **Say plainly that this is a capability test**, exactly as ``CapabilityProbe/makeProbeTool``
-    /// and the chat probe do. Neither of those has ever been refused, and this one should read the
-    /// same way: a nonce to echo, and a sentence saying why.
+    /// and the chat probe do: a nonce to echo, and a sentence saying why. The first version dressed
+    /// it up as an access-code extraction and models refused it (measured 2026-07-26: `claude-fable-5`
+    /// returned `stop_reason: refusal`, `claude-opus-4-8` declined, `claude-sonnet-5` flagged it
+    /// suspicious) — three of four supporting models scored as failures. Don't dress a probe up.
     ///
-    /// The first version instead invented a fiction — "The access code is X. Reply with exactly
-    /// that code and nothing else." — and models treated it as an attempt to extract a secret,
-    /// which is a fair reading. Measured 2026-07-26: `claude-fable-5` returned `stop_reason:
-    /// refusal`, `claude-opus-4-8` replied "I wasn't given any legitimate instruction to reveal
-    /// one", and `claude-sonnet-5` echoed the nonce only while flagging the request as suspicious.
-    /// Three of the four models that DO support the feature were scored as failures for it. Don't
-    /// dress a probe up as anything; describe the test.
+    /// The trailing turn follows a `user` turn and is the last entry — the one shape our consumer
+    /// keeps in place and the wire accepts — so a rejection is about model support, not a malformed
+    /// request.
     public static func makeTrailingSystemTurnTest() -> TrailingSystemTurnTest {
         let nonce = CapabilityProbe.makeIdentifier()
-        let messages: AnyCodable = .array([
-            .dictionary([
-                "role": .string("user"),
-                "content": .string(
-                    "We are testing whether you can read a system instruction placed after this "
-                    + "message. Please follow the instruction that follows."
-                )
-            ]),
-            .dictionary([
-                "role": .string("system"),
-                "content": .string(
-                    "You are in an automated capability test confirming this model can read a "
-                    + "system instruction placed after the user's message. "
-                    + "Reply with exactly this identifier and nothing else: \(nonce)"
-                )
-            ])
-        ])
-        return TrailingSystemTurnTest(overrides: ["messages": messages], nonce: nonce)
+        let messages: [LLMMessage] = [
+            .system("You are a helpful assistant taking part in an automated capability test."),
+            .user(
+                "We are testing whether you can read a system instruction placed after this "
+                + "message. Please follow the instruction that follows."
+            ),
+            .system(
+                "You are in an automated capability test confirming this model can read a system "
+                + "instruction placed after the user's message, alongside the base system prompt. "
+                + "Reply with exactly this identifier and nothing else: \(nonce)"
+            )
+        ]
+        return TrailingSystemTurnTest(messages: messages, nonce: nonce)
     }
 
     /// Whether the endpoint accepts a trailing `{"role": "system"}` steering turn AND acts on it.
     ///
-    /// Hand this a provider whose configuration carries ``makeTrailingSystemTurnTest``'s overrides —
-    /// the `messages` argument below is discarded by the merge and exists only to satisfy `send`.
+    /// Hand this a provider built with ``BehaviorFlags/supportsTrailingSystemMessage`` forced on and
+    /// ``makeTrailingSystemTurnTest``'s messages: the provider's own consumer keeps the trailing turn
+    /// in place, so this measures the real production shape (base system prompt + trailing turn).
     ///
     /// Grading is deliberately three-way. An echoed nonce is `established(true)`: the model could
     /// not have known the code unless it read a turn that only exists in trailing position, so this
@@ -460,7 +460,7 @@ public enum ModelProber {
         let started = Date()
         calls?.increment()
         do {
-            let response = try await llm.send(messages: [.user("replaced by the forced body")], tools: [])
+            let response = try await llm.send(messages: test.messages, tools: [])
             let body = response.text ?? ""
             let duration = Date().timeIntervalSince(started)
             if body.contains(test.nonce) {
