@@ -62,6 +62,10 @@ public struct ModelConfigurationOverride: Codable, Sendable, Equatable {
     /// Fallbacks (4096 / 128000) apply only when the model reports no limit AND the field is un-set.
     public func resolved(against modelInfo: ModelInfo, name: String? = nil) -> ModelConfiguration {
         ModelConfiguration(
+            // Deterministic so this projection is genuinely PURE (see the doc above): recomputing it
+            // yields an identical value rather than a fresh random `id` that would defeat every
+            // equality/`.task(id:)` check downstream. NOT the random `init(id:)` default.
+            id: ModelConfiguration.deterministicID(providerID: modelInfo.providerID, modelID: modelInfo.modelID),
             name: name ?? modelInfo.displayName,
             providerID: modelInfo.providerID,
             modelID: modelInfo.modelID,

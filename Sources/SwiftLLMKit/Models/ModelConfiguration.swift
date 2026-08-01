@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// A user-defined configuration pairing a provider + model with inference settings.
 public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
@@ -150,6 +151,26 @@ extension ModelConfiguration {
             // Setting false intentionally does nothing — caller should assign
             // `temperature` directly. No previous value to restore.
         }
+    }
+}
+
+// MARK: - Deterministic identity for projections
+
+extension ModelConfiguration {
+    /// A deterministic `id` for a config that is a PURE PROJECTION of a `(provider, model)` — e.g.
+    /// the result of ``ModelConfigurationOverride/resolved(against:name:)``. Such a config is
+    /// *derived*, not authored: recomputing it must yield an identical value, `id` included.
+    ///
+    /// The general `init(id: UUID = UUID())` default is deliberately random — a genuinely NEW config
+    /// (e.g. one the user adds to the pool, looked up and persisted by `id`) needs a unique identity.
+    /// A derived projection has the opposite requirement: a fresh random `id` each call makes an
+    /// `Equatable` value compare unequal to its own recomputation, which thrashes any SwiftUI
+    /// `.onChange`/`.task(id:)` observing it into a per-frame update loop. Deriving the id from the
+    /// `(providerID, modelID)` it configures keeps the projection stable across recomputes and changes
+    /// it exactly when the model does.
+    public static func deterministicID(providerID: String, modelID: String) -> UUID {
+        let digest = SHA256.hash(data: Data("\(providerID)\n\(modelID)".utf8))
+        return digest.withUnsafeBytes { UUID(uuid: $0.load(as: uuid_t.self)) }
     }
 }
 

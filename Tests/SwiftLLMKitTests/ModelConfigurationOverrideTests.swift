@@ -49,6 +49,23 @@ struct ModelConfigurationOverrideTests {
         #expect(resolved.temperature == nil)           // no default → omit
     }
 
+    @Test("resolved() is a PURE projection: identical inputs give an Equatable-equal value (stable id)")
+    func resolvedIsDeterministic() {
+        let override = ModelConfigurationOverride(temperature: 0.2)
+        // Two independent calls with identical inputs must be fully equal — `id` included. A fresh
+        // random per-call id (the prior bug) made these compare unequal, which thrashed any SwiftUI
+        // `.onChange`/`.task(id:)` observing the projection into a per-frame update loop.
+        let a = override.resolved(against: model())
+        let b = override.resolved(against: model())
+        #expect(a == b)
+        #expect(a.id == b.id)
+        // The identity is derived from the (providerID, modelID) it configures …
+        #expect(a.id == ModelConfiguration.deterministicID(providerID: "p", modelID: "m"))
+        // … so a different model yields a different identity.
+        let otherModel = ModelInfo(providerID: "p", modelID: "other", displayName: "Other")
+        #expect(override.resolved(against: otherModel).id != a.id)
+    }
+
     // MARK: warnings
 
     @Test("An override above a KNOWN bound warns; at/below does not")
