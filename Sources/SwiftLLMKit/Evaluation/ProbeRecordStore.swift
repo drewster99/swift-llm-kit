@@ -350,7 +350,37 @@ extension ProbeRecord {
         var stripped = self
         stripped.profile.isAccessDenied = .notAttempted
         stripped.profile.effortLevels = [:]
+        stripped.profile.stripEvidenceTraceRefs()
         return stripped
+    }
+}
+
+extension ModelProfile {
+    /// Removes transient provider error-trace refs — `(ref: <uuid>)` — from every finding's
+    /// evidence. Those are per-request server trace IDs (e.g. Ollama-cloud's HTTP 500/410 error
+    /// bodies) that must not ship in exported/bundled records: they're stale noise the moment the
+    /// request that produced them completes. `strippedForExport` applies this so shipped evidence
+    /// keeps the human-readable error message but not the trace ID.
+    public mutating func stripEvidenceTraceRefs() {
+        func strip<T>(_ finding: inout ProbeFinding<T>) {
+            finding.evidence = ModelProfile.strippingTraceRefs(finding.evidence)
+        }
+        strip(&chat); strip(&toolCalling); strip(&toolResultRoundTrip)
+        strip(&vision); strip(&pdfInput); strip(&acceptsTemperature)
+        strip(&maxOutputTokens); strip(&maxContextTokens)
+        strip(&isAvailable); strip(&isAccessDenied)
+        if var bound = maxOutputBoundedByContext { strip(&bound); maxOutputBoundedByContext = bound }
+        if var trailing = trailingSystemMessage { strip(&trailing); trailingSystemMessage = trailing }
+        effortLevels = effortLevels.mapValues {
+            var f = $0; f.evidence = ModelProfile.strippingTraceRefs(f.evidence); return f
+        }
+    }
+
+    /// Strips ` (ref: <uuid>)` trace-ID suffixes from a provider error-evidence string.
+    static func strippingTraceRefs(_ evidence: String?) -> String? {
+        guard let evidence else { return nil }
+        return evidence.replacingOccurrences(
+            of: #"\s*\(ref:\s*[0-9a-fA-F-]+\)"#, with: "", options: .regularExpression)
     }
 }
 

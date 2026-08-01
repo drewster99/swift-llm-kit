@@ -478,4 +478,17 @@ struct BundledProbeSeedTests {
         #expect(seed.allSatisfy { $0.profile.isAccessDenied.status != .established },
                 "account-scoped access-denial must never ship in the bundled seed")
     }
+
+    @Test("strippedForExport removes provider error-trace refs but keeps the message")
+    func stripsEvidenceTraceRefs() {
+        var profile = ModelProfile(providerID: "p", modelID: "m")
+        profile.isAvailable = .established(false, "HTTP 410: {\"error\":\"glm-4.6 was retired (ref: 8c022417-b1b1-4d91-a7f2-61fd7c3dad86)\"}")
+        profile.vision = .inconclusive("HTTP 500: {\"error\":\"Internal Server Error (ref: f0b70fbe-81cb-4a35-94e5-57e3605bfadf)\"}")
+        let stripped = ProbeRecord(proberVersion: ModelProber.proberVersion, recordedAt: Date(),
+                                   key: ProbeRecordKey(apiType: "ollama", host: "h", modelID: "m"),
+                                   providerID: "p", profile: profile).strippedForExport
+        #expect(!(stripped.profile.isAvailable.evidence ?? "").contains("ref:"))
+        #expect(!(stripped.profile.vision.evidence ?? "").contains("ref:"))
+        #expect((stripped.profile.isAvailable.evidence ?? "").contains("retired"), "the human-readable message must survive")
+    }
 }
