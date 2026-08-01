@@ -97,7 +97,7 @@ struct OllamaProvider: LLMProvider {
         // natively support a tool role still receive the result content, just
         // wrapped as user text with a "[Tool result for <id>]: ..." prefix.
         let finalMessages = Self.normalizeMessages(messages)
-        let body = buildRequestBody(messages: Self.extractSystemMessages(finalMessages), tools: tools, overrides: overrides)
+        let body = buildRequestBody(messages: Self.extractSystemMessages(finalMessages, allowTrailingSystem: behaviorFlags.supportsTrailingSystemMessage), tools: tools, overrides: overrides)
         // .sortedKeys keeps wire bytes stable across requests for any
         // downstream prefix-caching the model applies.
         let requestData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
@@ -221,7 +221,7 @@ struct OllamaProvider: LLMProvider {
         tools: [LLMToolDefinition]
     ) -> [[String: Any]] {
         let normalized = Self.normalizeMessages(messages)
-        let withSystemFront = Self.extractSystemMessages(normalized)
+        let withSystemFront = Self.extractSystemMessages(normalized, allowTrailingSystem: behaviorFlags.supportsTrailingSystemMessage)
         return withSystemFront.map(encodeMessage)
     }
 
@@ -297,11 +297,17 @@ struct OllamaProvider: LLMProvider {
     /// non-OpenAI backends translate it to system. Without this, the developer
     /// turn would survive into `encodeMessage` and emit `"role": "developer"` on
     /// the wire, which Ollama's templates reject or misinterpret.
-    private static func extractSystemMessages(_ messages: [LLMMessage]) -> [LLMMessage] {
+    private static func extractSystemMessages(_ messages: [LLMMessage], allowTrailingSystem: Bool) -> [LLMMessage] {
+        // A trailing `{role: system}` steering turn is left in place — Ollama supports the system
+        // role natively and `normalizeMessages` passes it through, so it stays last — on models
+        // known to read one. Every other system/developer message is hoisted to a single leading
+        // system message, as before.
+        let trailingSystemIndex = LLMMessage.trailingSystemTurnIndex(in: messages, allowed: allowTrailingSystem)
         var systemParts: [String] = []
         var nonSystem: [LLMMessage] = []
-        for message in messages {
-            if (message.role == .system || message.role == .developer),
+        for (index, message) in messages.enumerated() {
+            if index != trailingSystemIndex,
+               (message.role == .system || message.role == .developer),
                case .text(let text) = message.content {
                 systemParts.append(text)
             } else {

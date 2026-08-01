@@ -102,8 +102,18 @@ struct AnthropicProvider: LLMProvider {
         // Concatenate all system messages so per-turn context doesn't overwrite the base prompt.
         var systemParts: [String] = []
         var conversationMessages: [LLMMessage] = []
+        // When the model is known to read a trailing `{role: system}` steering turn, keep that one
+        // message in place (emitted as role "system" at the tail below) rather than hoisting it into
+        // the top-level `system` field. Every other system/developer message collapses as before.
+        let trailingSystemIndex = LLMMessage.trailingSystemTurnIndex(
+            in: messages, allowed: behaviorFlags.supportsTrailingSystemMessage)
+        var trailingSystemText: String?
 
-        for message in messages {
+        for (index, message) in messages.enumerated() {
+            if index == trailingSystemIndex, let text = message.content.textValue {
+                trailingSystemText = text
+                continue
+            }
             // .developer is treated as system for Anthropic (no native support).
             // Both collapse into the top-level system field.
             if (message.role == .system || message.role == .developer),
@@ -119,7 +129,13 @@ struct AnthropicProvider: LLMProvider {
         // Merge consecutive same-role messages. The Anthropic API requires strict user/assistant
         // alternation. Multiple tool_result messages (role "user") can follow an assistant tool_use,
         // and must be combined into a single user message with all tool_result content blocks.
-        let encodedMessages = Self.mergeConsecutiveSameRole(try conversationMessages.map(encodeMessage))
+        var encodedMessages = Self.mergeConsecutiveSameRole(try conversationMessages.map(encodeMessage))
+        // Emit the held-out trailing system turn verbatim as role "system", after the final user
+        // turn — the shape Anthropic accepts on models that support it (per the trailing-system
+        // probe). It follows a user message, so it never merges with the turn before it.
+        if let trailingSystemText {
+            encodedMessages.append(["role": "system", "content": trailingSystemText])
+        }
 
         // Adaptive thinking (Opus 4.7, 4.8) — `thinking: {type: "adaptive"}`,
         // no budget_tokens. The `thinkingBudget` field is interpreted as a

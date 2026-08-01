@@ -108,6 +108,7 @@ public enum ModelFactsFieldTable {
         .field("behaviorFlags.requiresAdaptiveThinking", \ModelFacts.behaviorFlags.requiresAdaptiveThinking),
         .field("behaviorFlags.supportsReasoningEffort", \ModelFacts.behaviorFlags.supportsReasoningEffort),
         .field("behaviorFlags.mustNeverSendTemperatureParam", \ModelFacts.behaviorFlags.mustNeverSendTemperatureParam),
+        .field("behaviorFlags.supportsTrailingSystemMessage", \ModelFacts.behaviorFlags.supportsTrailingSystemMessage),
         .field("behaviorFlags.extras", \ModelFacts.behaviorFlags.extras),
     ]
 }

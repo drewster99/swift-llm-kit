@@ -13,6 +13,7 @@ public enum BehaviorFlag: String, CaseIterable, Sendable, Hashable {
     case requiresAdaptiveThinking
     case supportsReasoningEffort
     case mustNeverSendTemperatureParam
+    case supportsTrailingSystemMessage
 
     /// Short human-readable label, used by ``BehaviorFlags/displayLabels``.
     public var label: String {
@@ -25,6 +26,7 @@ public enum BehaviorFlag: String, CaseIterable, Sendable, Hashable {
         case .requiresAdaptiveThinking:      return "adaptive thinking"
         case .supportsReasoningEffort:       return "reasoning_effort"
         case .mustNeverSendTemperatureParam: return "no temperature"
+        case .supportsTrailingSystemMessage: return "trailing system"
         }
     }
 
@@ -39,6 +41,7 @@ public enum BehaviorFlag: String, CaseIterable, Sendable, Hashable {
         case .requiresAdaptiveThinking:      return "Requires adaptive thinking"
         case .supportsReasoningEffort:       return "Supports `reasoning_effort`"
         case .mustNeverSendTemperatureParam: return "Never send temperature"
+        case .supportsTrailingSystemMessage: return "Supports trailing system message"
         }
     }
 
@@ -61,6 +64,8 @@ public enum BehaviorFlag: String, CaseIterable, Sendable, Hashable {
             return "OpenAI-compatible models that accept a top-level `reasoning_effort` field (o-series, GPT-5). When on and an effort level is set, it's emitted; non-reasoning models 400 on the field, so it's gated."
         case .mustNeverSendTemperatureParam:
             return "Model rejects the `temperature` parameter entirely — any value (even 0) fails with HTTP 400 (OpenAI o-series / GPT-5 reasoning family). When on, temperature is omitted from every request."
+        case .supportsTrailingSystemMessage:
+            return "Model reads a `{role: system}` steering turn placed as the LAST message, immediately after the final user turn. When on, the provider leaves such a trailing system message in place instead of hoisting it into the top-level system prompt. Probe-established (Anthropic gates it per model, and OpenAI-compatible / Ollama backends vary); force only to correct a stale verdict."
         }
     }
 }
@@ -168,6 +173,15 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
     /// it forces so the meaning and the default (false = send normally) are both unambiguous.
     public var mustNeverSendTemperatureParam: Bool = false
 
+    /// Model reads a `{role: system}` steering turn placed as the LAST message, immediately after
+    /// the final user turn. When true, providers that normally hoist system messages out of the
+    /// conversation (Anthropic's top-level `system`, OpenAI-compatible's `messages[0]`, Ollama's
+    /// leading system) instead leave exactly that one trailing system message in place, encoded as
+    /// role `system`. Established by ``ModelProfile/trailingSystemMessage``; nothing publishes it,
+    /// so it is probe-only. Default false — the trailing turn is hoisted like every other system
+    /// message, the behavior from before this flag existed.
+    public var supportsTrailingSystemMessage: Bool = false
+
     /// Free-form key/value bag for one-off provider tweaks that haven't earned
     /// a typed field yet. Promoted fields must always have a Codable default
     /// so older persisted state still decodes cleanly.
@@ -185,6 +199,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         requiresAdaptiveThinking: Bool = false,
         supportsReasoningEffort: Bool = false,
         mustNeverSendTemperatureParam: Bool = false,
+        supportsTrailingSystemMessage: Bool = false,
         extras: [String: String] = [:]
     ) {
         self.glmTemplateSalvage = glmTemplateSalvage
@@ -195,6 +210,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         self.requiresAdaptiveThinking = requiresAdaptiveThinking
         self.supportsReasoningEffort = supportsReasoningEffort
         self.mustNeverSendTemperatureParam = mustNeverSendTemperatureParam
+        self.supportsTrailingSystemMessage = supportsTrailingSystemMessage
         self.extras = extras
     }
 
@@ -211,6 +227,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
             case .requiresAdaptiveThinking:      return requiresAdaptiveThinking
             case .supportsReasoningEffort:       return supportsReasoningEffort
             case .mustNeverSendTemperatureParam: return mustNeverSendTemperatureParam
+            case .supportsTrailingSystemMessage: return supportsTrailingSystemMessage
             }
         }
         set {
@@ -223,6 +240,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
             case .requiresAdaptiveThinking:      requiresAdaptiveThinking = newValue
             case .supportsReasoningEffort:       supportsReasoningEffort = newValue
             case .mustNeverSendTemperatureParam: mustNeverSendTemperatureParam = newValue
+            case .supportsTrailingSystemMessage: supportsTrailingSystemMessage = newValue
             }
         }
     }
@@ -247,7 +265,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
     // MARK: - Codable (backward-compatible)
 
     private enum CodingKeys: String, CodingKey {
-        case glmTemplateSalvage, useMaxCompletionTokens, disableParallelToolCalls, replayReasoningContent, supportsDeveloperRole, requiresAdaptiveThinking, supportsReasoningEffort, mustNeverSendTemperatureParam, extras
+        case glmTemplateSalvage, useMaxCompletionTokens, disableParallelToolCalls, replayReasoningContent, supportsDeveloperRole, requiresAdaptiveThinking, supportsReasoningEffort, mustNeverSendTemperatureParam, supportsTrailingSystemMessage, extras
     }
 
     public init(from decoder: Decoder) throws {
@@ -260,6 +278,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         requiresAdaptiveThinking = try c.decodeIfPresent(Bool.self, forKey: .requiresAdaptiveThinking) ?? false
         supportsReasoningEffort = try c.decodeIfPresent(Bool.self, forKey: .supportsReasoningEffort) ?? false
         mustNeverSendTemperatureParam = try c.decodeIfPresent(Bool.self, forKey: .mustNeverSendTemperatureParam) ?? false
+        supportsTrailingSystemMessage = try c.decodeIfPresent(Bool.self, forKey: .supportsTrailingSystemMessage) ?? false
         extras = try c.decodeIfPresent([String: String].self, forKey: .extras) ?? [:]
     }
 
@@ -275,6 +294,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         if requiresAdaptiveThinking { try c.encode(requiresAdaptiveThinking, forKey: .requiresAdaptiveThinking) }
         if supportsReasoningEffort { try c.encode(supportsReasoningEffort, forKey: .supportsReasoningEffort) }
         if mustNeverSendTemperatureParam { try c.encode(mustNeverSendTemperatureParam, forKey: .mustNeverSendTemperatureParam) }
+        if supportsTrailingSystemMessage { try c.encode(supportsTrailingSystemMessage, forKey: .supportsTrailingSystemMessage) }
         if !extras.isEmpty { try c.encode(extras, forKey: .extras) }
     }
 }
@@ -296,6 +316,7 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
     public var requiresAdaptiveThinking: Bool?
     public var supportsReasoningEffort: Bool?
     public var mustNeverSendTemperatureParam: Bool?
+    public var supportsTrailingSystemMessage: Bool?
     public var extras: [String: String]?
 
     public init(
@@ -307,6 +328,7 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
         requiresAdaptiveThinking: Bool? = nil,
         supportsReasoningEffort: Bool? = nil,
         mustNeverSendTemperatureParam: Bool? = nil,
+        supportsTrailingSystemMessage: Bool? = nil,
         extras: [String: String]? = nil
     ) {
         self.glmTemplateSalvage = glmTemplateSalvage
@@ -317,6 +339,7 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
         self.requiresAdaptiveThinking = requiresAdaptiveThinking
         self.supportsReasoningEffort = supportsReasoningEffort
         self.mustNeverSendTemperatureParam = mustNeverSendTemperatureParam
+        self.supportsTrailingSystemMessage = supportsTrailingSystemMessage
         self.extras = extras
     }
 
@@ -332,6 +355,7 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
             case .requiresAdaptiveThinking:      return requiresAdaptiveThinking
             case .supportsReasoningEffort:       return supportsReasoningEffort
             case .mustNeverSendTemperatureParam: return mustNeverSendTemperatureParam
+            case .supportsTrailingSystemMessage: return supportsTrailingSystemMessage
             }
         }
         set {
@@ -344,6 +368,7 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
             case .requiresAdaptiveThinking:      requiresAdaptiveThinking = newValue
             case .supportsReasoningEffort:       supportsReasoningEffort = newValue
             case .mustNeverSendTemperatureParam: mustNeverSendTemperatureParam = newValue
+            case .supportsTrailingSystemMessage: supportsTrailingSystemMessage = newValue
             }
         }
     }

@@ -143,7 +143,16 @@ struct OpenAICompatibleProvider: LLMProvider {
         var systemParts: [String] = []
         var developerParts: [String] = []
         var nonSystemMessages: [[String: Any]] = []
-        for message in messages {
+        // A trailing `{role: system}` steering turn stays at the tail (as role "system") on models
+        // known to read one, instead of being folded into the leading system message.
+        let trailingSystemIndex = LLMMessage.trailingSystemTurnIndex(
+            in: messages, allowed: behaviorFlags.supportsTrailingSystemMessage)
+        var trailingSystemText: String?
+        for (index, message) in messages.enumerated() {
+            if index == trailingSystemIndex, case .text(let text) = message.content {
+                trailingSystemText = text
+                continue
+            }
             if message.role == .system, case .text(let text) = message.content {
                 systemParts.append(text)
             } else if message.role == .developer, case .text(let text) = message.content {
@@ -166,6 +175,11 @@ struct OpenAICompatibleProvider: LLMProvider {
             orderedMessages.append(["role": "developer", "content": developerParts.joined(separator: "\n\n")])
         }
         orderedMessages.append(contentsOf: nonSystemMessages)
+        // The held-out trailing system turn is emitted last, after the final user turn — the shape
+        // proven by the trailing-system probe for models that honor it.
+        if let trailingSystemText {
+            orderedMessages.append(["role": "system", "content": trailingSystemText])
+        }
 
         // OpenAI deprecated `max_tokens` on Chat Completions; GPT-5.x and o-series
         // reject it outright and require `max_completion_tokens`. DeepSeek and the

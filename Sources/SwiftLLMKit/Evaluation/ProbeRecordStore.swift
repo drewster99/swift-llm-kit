@@ -232,6 +232,12 @@ extension ModelProfile {
             let alreadyProbed = current?.status == .established && current?.source == .probed
             if !alreadyProbed { maxOutputBoundedByContext = bound }
         }
+        if let trailing = prior.trailingSystemMessage,
+           trailing.status == .established, trailing.source == .probed {
+            let current = trailingSystemMessage
+            let alreadyProbed = current?.status == .established && current?.source == .probed
+            if !alreadyProbed { trailingSystemMessage = trailing }
+        }
         for (level, finding) in prior.effortLevels
         where finding.status == .established && finding.source == .probed {
             let current = effortLevels[level]
@@ -255,6 +261,7 @@ extension ModelProfile {
             || probed(vision) || probed(pdfInput) || probed(acceptsTemperature)
             || probed(maxOutputTokens) || probed(maxContextTokens)
             || (maxOutputBoundedByContext.map(probed) ?? false)
+            || (trailingSystemMessage.map(probed) ?? false)
             || effortLevels.values.contains { probed($0) }
     }
 
@@ -308,6 +315,12 @@ extension ModelProfile {
         facts.isAvailable = probed(isAvailable)
         if probed(acceptsTemperature) == false {
             facts.behaviorFlags.mustNeverSendTemperatureParam = true
+        }
+        // Trailing `{role: system}` support is a model/endpoint capability, not account-scoped: an
+        // established finding — honored OR rejected — sets the flag, so a provider stops hoisting a
+        // trailing steering turn only where the endpoint proved it reads one.
+        if let trailing = trailingSystemMessage.flatMap(probed) {
+            facts.behaviorFlags.supportsTrailingSystemMessage = trailing
         }
         if includeAccountScoped {
             facts.isAccessDenied = probed(isAccessDenied)

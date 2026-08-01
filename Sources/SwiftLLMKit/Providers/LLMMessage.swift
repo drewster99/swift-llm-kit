@@ -260,6 +260,25 @@ public struct LLMMessage: Codable, Sendable, Equatable {
         LLMMessage(_role: .developer, _content: .text(text))
     }
 
+    /// The index of a trailing `{role: system}` steering turn a hoisting provider should leave in
+    /// place instead of relocating, per ``BehaviorFlags/supportsTrailingSystemMessage``.
+    ///
+    /// Returns the last index ONLY when `allowed` is true, that last message is `.system`, and the
+    /// message immediately before it is `.user` — the one shape the probe validates and the wire
+    /// accepts. `nil` otherwise (flag off, fewer than two messages, no trailing system, or the turn
+    /// before it isn't a user turn), in which case every system message is hoisted as before.
+    ///
+    /// The single source of truth for the rule; the three providers that hoist system messages
+    /// (Anthropic, OpenAI-compatible, Ollama) consult this and emit exactly that one message as role
+    /// `system` at the tail. Deliberately positional and role-only — a `.developer` turn does not
+    /// qualify (it has its own handling), and content shape is the caller's concern.
+    public static func trailingSystemTurnIndex(in messages: [LLMMessage], allowed: Bool) -> Int? {
+        guard allowed, messages.count >= 2 else { return nil }
+        let last = messages.count - 1
+        guard messages[last].role == .system, messages[last - 1].role == .user else { return nil }
+        return last
+    }
+
     /// **Build the assistant turn from a real LLMResponse — preserves
     /// text, tool calls, reasoning, and provider continuation data in one
     /// shot.** This is the misuse-resistant path: use it whenever you're
