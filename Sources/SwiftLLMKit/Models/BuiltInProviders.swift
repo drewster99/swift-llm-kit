@@ -41,13 +41,18 @@ public enum BuiltInProviders {
         public static let openRouter = "builtin.openrouter"
         public static let xAI = "builtin.xai"
         public static let alibabaCloud = "builtin.alibabacloud"
+        public static let alibabaCloudBeijing = "builtin.alibabacloud-beijing"
+        public static let alibabaCloudSingapore = "builtin.alibabacloud-singapore"
+        public static let deepSeek = "builtin.deepseek"
         public static let huggingFace = "builtin.huggingface"
         public static let lmStudio = "builtin.lmstudio"
         public static let metaModel = "builtin.meta-model-api"
         public static let mistral = "builtin.mistral"
+        public static let moonshot = "builtin.moonshot"
         public static let ollama = "builtin.ollama"
         public static let ollamaCloud = "builtin.ollama-cloud"
         public static let zAI = "builtin.zai"
+        public static let zAICoding = "builtin.zai-coding"
     }
 
     /// All bundled built-in provider presets, in the order declared in the JSON file.

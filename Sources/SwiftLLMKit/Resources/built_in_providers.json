@@ -1,6 +1,8 @@
 {
   "version": 2,
   "_comment": "liteLLMProviderName matches the `litellm_provider` FIELD in LiteLLM's model_prices_and_context_window.json — never a key prefix. null means LiteLLM catalogues no models for this provider.",
+  "_comment_deepseek_endpoint": "DeepSeek's documented base URL is the bare host; `/v1` exists only for OpenAI-SDK compatibility and denotes no version. Both resolve (verified: /models and /v1/models each 401 rather than 404), so the bare form is kept — it is what the endpoint preset has always used, and the two must agree for adoption to fire.",
+  "_comment_variants": "A built-in's endpoint is FIXED (only the API key is user-editable), so every endpoint a user might need is its own preset — regional and variant endpoints included. Each entry's endpoint must match its ProviderAPIType.endpointPresets entry byte-for-byte, because seedBuiltInProviders() adopts a user's custom provider into a built-in slot only on an exact (apiType, endpoint) match. BuiltInProviderEndpointPresetParityTests enforces the 1:1 correspondence. Variants share the parent's liteLLMProviderName because they serve the same catalogue.",
   "providers": [
     {
       "id": "builtin.anthropic",
@@ -44,11 +46,35 @@
     },
     {
       "id": "builtin.alibabacloud",
-      "displayName": "Alibaba Cloud",
+      "displayName": "Alibaba Cloud (US)",
       "apiType": "alibabaCloud",
       "endpoint": "https://dashscope-us.aliyuncs.com/compatible-mode/v1",
       "popular": false,
       "liteLLMProviderName": "dashscope"
+    },
+    {
+      "id": "builtin.alibabacloud-beijing",
+      "displayName": "Alibaba Cloud (Beijing)",
+      "apiType": "alibabaCloud",
+      "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "popular": false,
+      "liteLLMProviderName": "dashscope"
+    },
+    {
+      "id": "builtin.alibabacloud-singapore",
+      "displayName": "Alibaba Cloud (Singapore)",
+      "apiType": "alibabaCloud",
+      "endpoint": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      "popular": false,
+      "liteLLMProviderName": "dashscope"
+    },
+    {
+      "id": "builtin.deepseek",
+      "displayName": "DeepSeek",
+      "apiType": "openAICompatible",
+      "endpoint": "https://api.deepseek.com",
+      "popular": false,
+      "liteLLMProviderName": "deepseek"
     },
     {
       "id": "builtin.huggingface",
@@ -83,6 +109,14 @@
       "liteLLMProviderName": "mistral"
     },
     {
+      "id": "builtin.moonshot",
+      "displayName": "Moonshot AI",
+      "apiType": "openAICompatible",
+      "endpoint": "https://api.moonshot.ai/v1",
+      "popular": false,
+      "liteLLMProviderName": "moonshot"
+    },
+    {
       "id": "builtin.ollama",
       "displayName": "Ollama (local)",
       "apiType": "ollama",
@@ -100,9 +134,17 @@
     },
     {
       "id": "builtin.zai",
-      "displayName": "z.ai",
+      "displayName": "z.ai (General)",
       "apiType": "zAI",
       "endpoint": "https://api.z.ai/api/paas/v4",
+      "popular": false,
+      "liteLLMProviderName": "zai"
+    },
+    {
+      "id": "builtin.zai-coding",
+      "displayName": "z.ai (Coding)",
+      "apiType": "zAI",
+      "endpoint": "https://api.z.ai/api/coding/paas/v4",
       "popular": false,
       "liteLLMProviderName": "zai"
     }

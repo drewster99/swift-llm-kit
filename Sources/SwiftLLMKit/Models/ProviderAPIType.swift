@@ -83,6 +83,7 @@ public enum ProviderAPIType: String, Codable, Sendable, CaseIterable, Equatable 
             return [
                 EndpointPreset("OpenAI", "https://api.openai.com/v1"),
                 EndpointPreset("DeepSeek", "https://api.deepseek.com"),
+                EndpointPreset("Moonshot AI", "https://api.moonshot.ai/v1"),
             ]
         case .ollama:
             return [

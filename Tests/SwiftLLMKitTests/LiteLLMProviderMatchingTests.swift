@@ -171,33 +171,53 @@ struct LiteLLMResolutionTests {
 @Suite("Built-in provider LiteLLM mapping")
 struct BuiltInProviderMappingTests {
 
+    /// The expected mapping, stated independently of the JSON so a typo in either shows up as a
+    /// disagreement rather than as two copies of the same mistake. Model counts are from the
+    /// upstream catalogue at the time each entry was added.
+    private static let expectedMappings: [String: String?] = [
+        "builtin.anthropic": "anthropic",                // 23 bare claude-* entries; zero "anthropic/" keys
+        "builtin.openai": "openai",
+        "builtin.gemini": "gemini",
+        "builtin.xai": "xai",
+        "builtin.mistral": "mistral",
+        "builtin.zai": "zai",
+        "builtin.zai-coding": "zai",                     // same catalogue, coding-tuned endpoint
+        "builtin.ollama": "ollama",
+        "builtin.ollama-cloud": "ollama",
+        "builtin.openrouter": "openrouter",
+        "builtin.alibabacloud": "dashscope",             // Alibaba's API is DashScope
+        "builtin.alibabacloud-beijing": "dashscope",     // same catalogue, different region
+        "builtin.alibabacloud-singapore": "dashscope",
+        "builtin.deepseek": "deepseek",                  // 12 entries under litellm_provider "deepseek"
+        "builtin.moonshot": "moonshot",                  // 22 entries, all kimi-* under "moonshot"
+        "builtin.meta-model-api": nil,                   // Meta Model API (Muse Spark) — not in LiteLLM
+        "builtin.huggingface": nil,                      // LiteLLM catalogues none
+        "builtin.lmstudio": nil                          // local, arbitrary models
+    ]
+
     @Test("The bundled provider JSON decodes (guards the silent-empty failure mode)")
     func bundledJSONDecodes() {
-        #expect(BuiltInProviders.all.count == 13)
+        #expect(BuiltInProviders.all.count == 18)
     }
 
     @Test("Every built-in maps to the litellm_provider value its models actually use")
     func mappingsMatchUpstream() {
-        let expected: [String: String?] = [
-            "builtin.anthropic": "anthropic",       // 23 bare claude-* entries; zero "anthropic/" keys
-            "builtin.openai": "openai",
-            "builtin.gemini": "gemini",
-            "builtin.xai": "xai",
-            "builtin.mistral": "mistral",
-            "builtin.zai": "zai",
-            "builtin.ollama": "ollama",
-            "builtin.ollama-cloud": "ollama",
-            "builtin.openrouter": "openrouter",
-            "builtin.alibabacloud": "dashscope",    // Alibaba's API is DashScope
-            "builtin.meta-model-api": nil,          // Meta Model API (Muse Spark) — not in LiteLLM
-            "builtin.huggingface": nil,             // LiteLLM catalogues none
-            "builtin.lmstudio": nil                 // local, arbitrary models
-        ]
-        for (id, want) in expected {
+        for (id, want) in Self.expectedMappings {
             let preset = BuiltInProviders.preset(id: id)
             #expect(preset != nil, "missing preset \(id)")
             #expect(preset?.liteLLMProviderName == want, "\(id) mapped to \(preset?.liteLLMProviderName ?? "nil")")
         }
+    }
+
+    /// The loop above only checks the built-ins the table happens to name, so a newly added provider
+    /// could ship with no LiteLLM mapping — and therefore no pricing or context data — without any
+    /// test noticing. Pin the table to the bundle in both directions.
+    @Test("Every built-in is named in the mapping table (a new provider can't go unpinned)")
+    func everyBuiltInIsPinned() {
+        let bundled = Set(BuiltInProviders.all.map(\.id))
+        let pinned = Set(Self.expectedMappings.keys)
+        #expect(bundled.subtracting(pinned).isEmpty, "built-ins missing from the table: \(bundled.subtracting(pinned).sorted())")
+        #expect(pinned.subtracting(bundled).isEmpty, "table names non-existent built-ins: \(pinned.subtracting(bundled).sorted())")
     }
 
     @Test("The mapping survives into the constructed ModelProvider")
@@ -213,6 +233,83 @@ struct BuiltInProviderMappingTests {
         let json = #"{"id":"custom-1","name":"Mine","apiType":"openAICompatible","endpoint":"https://x.test/v1"}"#
         let provider = try JSONDecoder().decode(ModelProvider.self, from: Data(json.utf8))
         #expect(provider.liteLLMProviderName == nil)
+    }
+}
+
+// MARK: - Built-in / endpoint-preset parity
+
+/// `ProviderAPIType.endpointPresets` and `built_in_providers.json` are two hand-maintained lists of
+/// the same endpoints, and nothing but these tests connects them. Drift is SILENT and costs real
+/// behaviour, because a preset with no matching built-in leaves a user permanently on a
+/// user-created provider:
+///
+/// - `seedBuiltInProviders()` adopts an existing provider into a built-in slot only when its
+///   `apiType` AND `endpoint` match a preset exactly, so an unmatched endpoint is never adopted.
+/// - `BundledModelMetadata`'s `providerEntries` / `providerDefaults` axes are keyed by providerID,
+///   so a custom provider can only ever be reached by the coarse per-apiType axis.
+///
+/// This shipped drifted: DeepSeek, z.ai (Coding), and both non-US DashScope regions were endpoint
+/// presets with no built-in for as long as built-ins had existed.
+@Suite("Built-in providers and endpoint presets stay 1:1")
+struct BuiltInProviderEndpointPresetParityTests {
+
+    /// `(apiType, endpoint)` — the exact tuple `seedBuiltInProviders()` matches on.
+    struct Pair: Hashable, CustomStringConvertible {
+        let apiType: ProviderAPIType
+        let endpoint: URL
+        var description: String { "\(apiType.rawValue) \(endpoint.absoluteString)" }
+    }
+
+    private var presetPairs: Set<Pair> {
+        Set(ProviderAPIType.allEndpointPresets.map { Pair(apiType: $0.apiType, endpoint: $0.preset.url) })
+    }
+
+    private var builtInPairs: Set<Pair> {
+        Set(BuiltInProviders.all.map { Pair(apiType: $0.apiType, endpoint: $0.endpoint) })
+    }
+
+    @Test("Every endpoint preset has a built-in provider")
+    func everyPresetHasABuiltIn() {
+        let orphans = presetPairs.subtracting(builtInPairs)
+        #expect(orphans.isEmpty, "endpoint presets with no built-in: \(orphans.map(\.description).sorted())")
+    }
+
+    @Test("Every built-in provider has an endpoint preset")
+    func everyBuiltInHasAPreset() {
+        let orphans = builtInPairs.subtracting(presetPairs)
+        #expect(orphans.isEmpty, "built-ins with no endpoint preset: \(orphans.map(\.description).sorted())")
+    }
+
+    /// Adoption resolves a preset by `(apiType, endpoint)`, so a duplicate pair would make which
+    /// built-in a user's provider gets adopted into depend on declaration order.
+    @Test("No two built-ins share an (apiType, endpoint) pair")
+    func builtInPairsAreUnique() {
+        #expect(builtInPairs.count == BuiltInProviders.all.count)
+    }
+
+    @Test("Built-in IDs are unique")
+    func idsAreUnique() {
+        #expect(BuiltInProviders.allIDs.count == BuiltInProviders.all.count)
+    }
+
+    /// Every `BuiltInProviders.ID` constant is a promise that a preset by that name exists;
+    /// `preset(id:)` returns nil rather than throwing, so a stale constant fails quietly at runtime.
+    @Test("Every declared ID constant resolves to a bundled preset")
+    func idConstantsResolve() {
+        let declared = [
+            BuiltInProviders.ID.anthropic, BuiltInProviders.ID.gemini, BuiltInProviders.ID.openai,
+            BuiltInProviders.ID.openRouter, BuiltInProviders.ID.xAI,
+            BuiltInProviders.ID.alibabaCloud, BuiltInProviders.ID.alibabaCloudBeijing,
+            BuiltInProviders.ID.alibabaCloudSingapore, BuiltInProviders.ID.deepSeek,
+            BuiltInProviders.ID.huggingFace, BuiltInProviders.ID.lmStudio,
+            BuiltInProviders.ID.metaModel, BuiltInProviders.ID.mistral, BuiltInProviders.ID.moonshot,
+            BuiltInProviders.ID.ollama, BuiltInProviders.ID.ollamaCloud,
+            BuiltInProviders.ID.zAI, BuiltInProviders.ID.zAICoding
+        ]
+        for id in declared {
+            #expect(BuiltInProviders.preset(id: id) != nil, "ID constant \(id) has no bundled preset")
+        }
+        #expect(Set(declared) == BuiltInProviders.allIDs, "ID constants and bundled providers disagree")
     }
 }
 

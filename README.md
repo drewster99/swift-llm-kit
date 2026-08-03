@@ -7,17 +7,23 @@ Keychain.
 
 ## Supported providers
 
+Each ships as a built-in preset with a stable ID and a fixed endpoint; any other
+OpenAI-compatible backend can be added as a custom provider.
+
 - **Anthropic** (Claude)
-- **OpenAI** (and OpenAI-compatible: DeepSeek, LM Studio, etc.)
+- **OpenAI**
 - **Google Gemini**
 - **xAI** (Grok)
-- **z.ai**
+- **DeepSeek**
+- **Moonshot AI** (Kimi)
+- **z.ai** (general and coding endpoints)
 - **Meta Llama**
 - **Mistral**
-- **Alibaba Cloud** (DashScope)
+- **Alibaba Cloud** (DashScope — US, Singapore, Beijing)
 - **Hugging Face**
 - **OpenRouter**
 - **Ollama** (local or cloud)
+- **LM Studio** (local)
 
 ## Features
 
