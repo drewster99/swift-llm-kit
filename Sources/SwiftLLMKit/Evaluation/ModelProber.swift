@@ -1062,6 +1062,86 @@ public enum ModelProber {
         }
     }
 
+
+    // MARK: - Structured output
+
+    /// Whether the model actually HONORS a structured-output request.
+    ///
+    /// Graded on the RESPONSE, not on acceptance — and that distinction is the whole point.
+    /// `probeParameterAcceptance` discards the body and calls any 200 a pass, which for
+    /// `response_format` records every endpoint that silently IGNORES the field as supporting it.
+    /// An ignored `response_format` is indistinguishable from an honored one at the status-code
+    /// level and completely distinguishable one line deeper, so this probe reads the text and
+    /// parses it.
+    ///
+    /// The prompt asks for something whose correct answer is unambiguous, so a model that answers
+    /// in prose fails on the parse rather than on the content.
+    public static func probeStructuredOutput(
+        _ mode: LLMResponseFormat,
+        llm: any LLMProvider,
+        modelID: String,
+        calls: ProbeCallCounter? = nil
+    ) async -> ProbeFinding<Bool> {
+        let started = Date()
+        calls?.increment()
+        do {
+            let response = try await llm.send(
+                messages: [.user("Reply with a JSON object having exactly one key \"ok\" set to true.")],
+                tools: [],
+                overrides: LLMCallOverrides(responseFormat: mode))
+            let text = response.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard let data = text.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data),
+                  object is [String: Any] else {
+                // A 200 whose body is not a JSON object means the field was accepted and ignored.
+                return .established(false, "returned non-JSON despite response_format: \(text.prefix(120))",
+                                    duration: Date().timeIntervalSince(started))
+            }
+            return .established(true, "returned a JSON object as requested",
+                                duration: Date().timeIntervalSince(started))
+        } catch {
+            let detail = CapabilityProbe.rejectionDetail(error)
+            let lowered = detail.lowercased()
+            if !CapabilityProbe.classifyFailure(error).meansNoAnswer,
+               lowered.contains("response_format") || lowered.contains("json_schema")
+                || lowered.contains("json_object") || lowered.contains("schema") {
+                return .established(false, detail, duration: Date().timeIntervalSince(started))
+            }
+            return .inconclusive(detail, duration: Date().timeIntervalSince(started))
+        }
+    }
+
+    // MARK: - tool_choice options
+
+    /// Whether one `tool_choice` option is accepted.
+    ///
+    /// Acceptance-graded on purpose, unlike structured output: an endpoint that ignored
+    /// `tool_choice: required` would still have to return SOMETHING, and grading "did it really
+    /// force a call" against a model free to answer directly produces false negatives on exactly
+    /// the models that behave best. A refusal naming the parameter is the reliable signal.
+    public static func probeToolChoice(
+        _ choice: LLMToolChoice,
+        llm: any LLMProvider,
+        modelID: String,
+        calls: ProbeCallCounter? = nil
+    ) async -> ProbeFinding<Bool> {
+        let started = Date()
+        calls?.increment()
+        do {
+            _ = try await llm.send(messages: [.user("Reply with the single word: ok")],
+                                   tools: [CapabilityProbe.makeProbeTool()],
+                                   overrides: LLMCallOverrides(toolChoice: choice))
+            return .established(true, "accepted tool_choice", duration: Date().timeIntervalSince(started))
+        } catch {
+            let detail = CapabilityProbe.rejectionDetail(error)
+            if !CapabilityProbe.classifyFailure(error).meansNoAnswer,
+               detail.lowercased().contains("tool_choice") || detail.lowercased().contains("tool choice") {
+                return .established(false, detail, duration: Date().timeIntervalSince(started))
+            }
+            return .inconclusive(detail, duration: Date().timeIntervalSince(started))
+        }
+    }
+
     // MARK: - Error → finding
 
     /// Maps a thrown error to a Bool finding for capabilities where a refusal that NAMES the
