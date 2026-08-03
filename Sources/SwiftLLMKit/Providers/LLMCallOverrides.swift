@@ -33,6 +33,19 @@ public struct LLMCallOverrides: Sendable, Equatable {
     public var effort: String?
     /// Per-call REASONING effort (`reasoning_effort`).
     public var reasoningEffort: String?
+    /// Turn reasoning on or off for this call. `nil` leaves the model's default alone.
+    ///
+    /// The wire shape depends on the model's ``ReasoningControl``; the provider translates. Gated
+    /// on `reasoningEnableable` / `reasoningDisableable`, since Kimi documents models that support
+    /// only one direction.
+    public var reasoningEnabled: Bool?
+    /// Per-call reasoning token budget. Gated on the `thinkingBudgetTokens` capability.
+    public var thinkingBudgetTokens: Int?
+    /// Retain reasoning content across turns (`thinking.keep`). Gated on `thinkingKeepAll`.
+    public var keepThinking: Bool?
+    /// Request structured output. Gated on the matching capability — see
+    /// ``LLMResponseFormat/requiredCapability``.
+    public var responseFormat: LLMResponseFormat?
     public var maxOutputTokens: Int?
     public var temperature: Double?
     public var topP: Double?
@@ -44,6 +57,10 @@ public struct LLMCallOverrides: Sendable, Equatable {
         toolChoice: LLMToolChoice? = nil,
         effort: String? = nil,
         reasoningEffort: String? = nil,
+        reasoningEnabled: Bool? = nil,
+        thinkingBudgetTokens: Int? = nil,
+        keepThinking: Bool? = nil,
+        responseFormat: LLMResponseFormat? = nil,
         maxOutputTokens: Int? = nil,
         temperature: Double? = nil,
         topP: Double? = nil,
@@ -54,6 +71,10 @@ public struct LLMCallOverrides: Sendable, Equatable {
         self.toolChoice = toolChoice
         self.effort = effort
         self.reasoningEffort = reasoningEffort
+        self.reasoningEnabled = reasoningEnabled
+        self.thinkingBudgetTokens = thinkingBudgetTokens
+        self.keepThinking = keepThinking
+        self.responseFormat = responseFormat
         self.maxOutputTokens = maxOutputTokens
         self.temperature = temperature
         self.topP = topP

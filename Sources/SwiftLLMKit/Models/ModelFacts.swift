@@ -38,6 +38,9 @@ public struct ModelFacts: Codable, Sendable, Equatable {
     /// Reasoning effort — OpenAI's / Moonshot's `reasoning_effort`, which exists only for reasoning
     /// models. `nil` = this source said nothing. See ``EffortSupport``.
     public var reasoningEffort: EffortSupport?
+    /// HOW reasoning is switched on/off on this model. `nil` = no source has said; providers then
+    /// keep their existing behaviour rather than silently disabling reasoning. See ``ReasoningControl``.
+    public var reasoningControl: ReasoningControl?
     /// Per-flag tri-state, same container reasoning as `capabilities`.
     public var behaviorFlags: BehaviorFlagsOverride
     public var deprecatedOn: Date?
@@ -103,6 +106,7 @@ public struct ModelFacts: Codable, Sendable, Equatable {
             mode: mode,
             generalEffort: generalEffort,
             reasoningEffort: reasoningEffort,
+            reasoningControl: reasoningControl,
             behaviorFlags: flags,
             deprecatedOn: deprecatedOn,
             deprecationReplacement: deprecationReplacement,
@@ -147,6 +151,7 @@ extension ModelMetadataOverride {
         if let behaviorFlags { facts.behaviorFlags = behaviorFlags }
         facts.generalEffort = generalEffort
         facts.reasoningEffort = reasoningEffort
+        facts.reasoningControl = reasoningControl
         facts.hidden = hidden
         facts.isAvailable = isAvailable
         facts.isAccessDenied = isAccessDenied

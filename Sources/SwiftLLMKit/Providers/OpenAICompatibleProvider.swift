@@ -14,6 +14,11 @@ struct OpenAICompatibleProvider: LLMProvider {
     /// The model's reasoning-effort support, resolved from the catalog at construction. `nil` =
     /// unknown, which here means "don't send it" (fails closed — a non-reasoning model 400s).
     private let reasoningEffortSupport: EffortSupport?
+    /// HOW this model switches reasoning on/off. `nil` = unknown; the legacy apiType behaviour
+    /// applies rather than guessing a mechanism.
+    private let reasoningControl: ReasoningControl?
+    /// The model's capabilities, for gating knobs whose wrong emission is an HTTP 400.
+    private let modelCapabilities: ModelCapabilities
     private let session: URLSession
     /// Stable conversation ID for xAI prompt caching. Generated once per provider instance.
     private let conversationID: String
@@ -26,6 +31,8 @@ struct OpenAICompatibleProvider: LLMProvider {
         parallelToolCalls: Bool = false,
         behaviorFlags: BehaviorFlags = BehaviorFlags(),
         reasoningEffortSupport: EffortSupport? = nil,
+        reasoningControl: ReasoningControl? = nil,
+        modelCapabilities: ModelCapabilities = ModelCapabilities(),
         session: URLSession = llmURLSession
     ) {
         self.configuration = configuration
@@ -35,6 +42,8 @@ struct OpenAICompatibleProvider: LLMProvider {
         self.parallelToolCalls = parallelToolCalls
         self.behaviorFlags = behaviorFlags
         self.reasoningEffortSupport = reasoningEffortSupport
+        self.reasoningControl = reasoningControl
+        self.modelCapabilities = modelCapabilities
         self.session = session
         self.conversationID = UUID().uuidString
     }
@@ -216,11 +225,48 @@ struct OpenAICompatibleProvider: LLMProvider {
             body["presence_penalty"] = pp
         }
 
-        // Alibaba Cloud thinking support (uses different keys than Anthropic).
-        if provider.apiType == .alibabaCloud,
-           let budget = configuration.thinkingBudget, budget > 0 {
-            body["enable_thinking"] = true
-            body["thinking_budget"] = ThinkingBudget.effective(budget)
+        // Reasoning on/off and budget, by the model's OWN mechanism rather than a branch on
+        // apiType — Moonshot, DeepSeek and OpenAI are all `openAICompatible` and want three
+        // different shapes, so an apiType branch cannot tell them apart.
+        //
+        // Each direction is gated on the capability that says it is legal: Kimi documents models
+        // that can be switched on but not off, and vice versa, so a wrong guess is an HTTP 400.
+        // An UNKNOWN mechanism keeps the legacy apiType behaviour instead of emitting nothing —
+        // silently disabling reasoning on every not-yet-recorded model would be a regression.
+        let requestedBudget = overrides.thinkingBudgetTokens ?? configuration.thinkingBudget
+        let control = reasoningControl ?? (provider.apiType == .alibabaCloud ? .enableThinkingFlag : nil)
+        switch control {
+        case .enableThinkingFlag:
+            if let budget = requestedBudget, budget > 0 {
+                body["enable_thinking"] = true
+                if modelCapabilities.state(of: .thinkingBudgetTokens) != false {
+                    body["thinking_budget"] = ThinkingBudget.effective(budget)
+                }
+            } else if overrides.reasoningEnabled == false,
+                      modelCapabilities.state(of: .reasoningDisableable) == true {
+                body["enable_thinking"] = false
+            }
+        case .thinkingBlock:
+            // `{"type": "enabled"|"disabled"}`, optionally with `keep`.
+            var thinking: [String: Any] = [:]
+            if let wantsReasoning = overrides.reasoningEnabled {
+                let gate: ModelCapability = wantsReasoning ? .reasoningEnableable : .reasoningDisableable
+                if modelCapabilities.state(of: gate) == true {
+                    thinking["type"] = wantsReasoning ? "enabled" : "disabled"
+                }
+            }
+            if overrides.keepThinking == true, modelCapabilities.state(of: .thinkingKeepAll) == true {
+                thinking["keep"] = "all"
+            }
+            if let budget = requestedBudget, budget > 0,
+               modelCapabilities.state(of: .thinkingBudgetTokens) == true {
+                thinking["budget_tokens"] = ThinkingBudget.effective(budget)
+            }
+            if !thinking.isEmpty { body["thinking"] = thinking }
+        case .unsupported, .reasoningEffortOnly, .anthropicThinking, .geminiThinkingConfig, nil:
+            // `.unsupported`/`.reasoningEffortOnly` have no on/off knob; the last two belong to providers
+            // that do not route through this builder.
+            break
         }
 
         // OpenAI `reasoning_effort` — depth control for reasoning models
@@ -242,16 +288,27 @@ struct OpenAICompatibleProvider: LLMProvider {
             body["reasoning_effort"] = effort
         }
 
+        // Structured output. Fails CLOSED: an unsupported `response_format` is an HTTP 400, and
+        // the two modes are gated separately because a model may take one and reject the other.
+        if let format = overrides.responseFormat,
+           modelCapabilities.state(of: format.requiredCapability) == true {
+            body["response_format"] = format.openAIWireValue
+        }
+
         if !tools.isEmpty {
             body["tools"] = tools.map { tool in
-                [
-                    "type": "function",
-                    "function": [
-                        "name": tool.name,
-                        "description": tool.description,
-                        "parameters": tool.parameters.mapValues(\.rawValue)
-                    ] as [String: Any]
-                ] as [String: Any]
+                var function: [String: Any] = [
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.parameters.mapValues(\.rawValue)
+                ]
+                // `strict` is omitted unless the model is KNOWN to support it: endpoints that don't
+                // recognise it vary between ignoring and rejecting the request.
+                if let strict = tool.strict,
+                   modelCapabilities.state(of: .strictToolDefinitions) == true {
+                    function["strict"] = strict
+                }
+                return ["type": "function", "function": function] as [String: Any]
             }
             // Sent by default (see the provider factory); a strict endpoint that rejects
             // the field is opted out upstream via `disableParallelToolCalls`, which sets

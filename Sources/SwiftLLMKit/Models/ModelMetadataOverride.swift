@@ -25,6 +25,15 @@ public struct ModelCapabilitiesOverride: Codable, Sendable, Equatable {
     public var systemMessages: Bool?
     public var assistantPrefill: Bool?
     public var toolChoice: Bool?
+    public var reasoningEnableable: Bool?
+    public var reasoningDisableable: Bool?
+    public var thinkingKeepAll: Bool?
+    public var thinkingBudgetTokens: Bool?
+    public var structuredOutputJSONObject: Bool?
+    public var toolChoiceRequired: Bool?
+    public var toolChoiceNone: Bool?
+    public var toolChoiceSpecificFunction: Bool?
+    public var strictToolDefinitions: Bool?
     public var toolResultRoundTrip: Bool?
 
     public init(
@@ -46,6 +55,15 @@ public struct ModelCapabilitiesOverride: Codable, Sendable, Equatable {
         systemMessages: Bool? = nil,
         assistantPrefill: Bool? = nil,
         toolChoice: Bool? = nil,
+        reasoningEnableable: Bool? = nil,
+        reasoningDisableable: Bool? = nil,
+        thinkingKeepAll: Bool? = nil,
+        thinkingBudgetTokens: Bool? = nil,
+        structuredOutputJSONObject: Bool? = nil,
+        toolChoiceRequired: Bool? = nil,
+        toolChoiceNone: Bool? = nil,
+        toolChoiceSpecificFunction: Bool? = nil,
+        strictToolDefinitions: Bool? = nil,
         toolResultRoundTrip: Bool? = nil
     ) {
         self.chat = chat
@@ -66,6 +84,15 @@ public struct ModelCapabilitiesOverride: Codable, Sendable, Equatable {
         self.systemMessages = systemMessages
         self.assistantPrefill = assistantPrefill
         self.toolChoice = toolChoice
+        self.reasoningEnableable = reasoningEnableable
+        self.reasoningDisableable = reasoningDisableable
+        self.thinkingKeepAll = thinkingKeepAll
+        self.thinkingBudgetTokens = thinkingBudgetTokens
+        self.structuredOutputJSONObject = structuredOutputJSONObject
+        self.toolChoiceRequired = toolChoiceRequired
+        self.toolChoiceNone = toolChoiceNone
+        self.toolChoiceSpecificFunction = toolChoiceSpecificFunction
+        self.strictToolDefinitions = strictToolDefinitions
         self.toolResultRoundTrip = toolResultRoundTrip
     }
 
@@ -94,6 +121,15 @@ public struct ModelCapabilitiesOverride: Codable, Sendable, Equatable {
         if let v = systemMessages, (forceReplace || v) { capabilities.systemMessages = v }
         if let v = assistantPrefill, (forceReplace || v) { capabilities.assistantPrefill = v }
         if let v = toolChoice, (forceReplace || v) { capabilities.toolChoice = v }
+        if let v = reasoningEnableable, (forceReplace || v) { capabilities.reasoningEnableable = v }
+        if let v = reasoningDisableable, (forceReplace || v) { capabilities.reasoningDisableable = v }
+        if let v = thinkingKeepAll, (forceReplace || v) { capabilities.thinkingKeepAll = v }
+        if let v = thinkingBudgetTokens, (forceReplace || v) { capabilities.thinkingBudgetTokens = v }
+        if let v = structuredOutputJSONObject, (forceReplace || v) { capabilities.structuredOutputJSONObject = v }
+        if let v = toolChoiceRequired, (forceReplace || v) { capabilities.toolChoiceRequired = v }
+        if let v = toolChoiceNone, (forceReplace || v) { capabilities.toolChoiceNone = v }
+        if let v = toolChoiceSpecificFunction, (forceReplace || v) { capabilities.toolChoiceSpecificFunction = v }
+        if let v = strictToolDefinitions, (forceReplace || v) { capabilities.strictToolDefinitions = v }
         if let v = toolResultRoundTrip, (forceReplace || v) { capabilities.toolResultRoundTrip = v }
     }
 
@@ -121,6 +157,15 @@ public struct ModelCapabilitiesOverride: Codable, Sendable, Equatable {
             case .systemMessages: return systemMessages
             case .assistantPrefill: return assistantPrefill
             case .toolChoice: return toolChoice
+            case .reasoningEnableable: return reasoningEnableable
+            case .reasoningDisableable: return reasoningDisableable
+            case .thinkingKeepAll: return thinkingKeepAll
+            case .thinkingBudgetTokens: return thinkingBudgetTokens
+            case .structuredOutputJSONObject: return structuredOutputJSONObject
+            case .toolChoiceRequired: return toolChoiceRequired
+            case .toolChoiceNone: return toolChoiceNone
+            case .toolChoiceSpecificFunction: return toolChoiceSpecificFunction
+            case .strictToolDefinitions: return strictToolDefinitions
             case .toolResultRoundTrip: return toolResultRoundTrip
             }
         }
@@ -144,6 +189,15 @@ public struct ModelCapabilitiesOverride: Codable, Sendable, Equatable {
             case .systemMessages: systemMessages = newValue
             case .assistantPrefill: assistantPrefill = newValue
             case .toolChoice: toolChoice = newValue
+            case .reasoningEnableable: reasoningEnableable = newValue
+            case .reasoningDisableable: reasoningDisableable = newValue
+            case .thinkingKeepAll: thinkingKeepAll = newValue
+            case .thinkingBudgetTokens: thinkingBudgetTokens = newValue
+            case .structuredOutputJSONObject: structuredOutputJSONObject = newValue
+            case .toolChoiceRequired: toolChoiceRequired = newValue
+            case .toolChoiceNone: toolChoiceNone = newValue
+            case .toolChoiceSpecificFunction: toolChoiceSpecificFunction = newValue
+            case .strictToolDefinitions: strictToolDefinitions = newValue
             case .toolResultRoundTrip: toolResultRoundTrip = newValue
             }
         }
@@ -194,6 +248,9 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
     public var generalEffort: EffortSupport?
     /// Override reasoning-effort support (`reasoning_effort`). Same reasoning as ``generalEffort``.
     public var reasoningEffort: EffortSupport?
+    /// Override the reasoning control mechanism. Overridable because no vendor publishes it today —
+    /// without a slot here the picker in the model editor would have nowhere to persist.
+    public var reasoningControl: ReasoningControl?
     /// Hide this model from pickers. Hiding is presentation, never deletion — every record
     /// underneath survives, and un-hiding is removing this one field.
     public var hidden: Bool?
@@ -213,6 +270,7 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
         behaviorFlags: BehaviorFlagsOverride? = nil,
         generalEffort: EffortSupport? = nil,
         reasoningEffort: EffortSupport? = nil,
+        reasoningControl: ReasoningControl? = nil,
         hidden: Bool? = nil,
         isAvailable: Bool? = nil,
         isAccessDenied: Bool? = nil
@@ -226,6 +284,7 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
         self.behaviorFlags = behaviorFlags
         self.generalEffort = generalEffort
         self.reasoningEffort = reasoningEffort
+        self.reasoningControl = reasoningControl
         self.hidden = hidden
         self.isAvailable = isAvailable
         self.isAccessDenied = isAccessDenied

@@ -1349,6 +1349,8 @@ public final class LLMKitManager {
         let catalogModel = models.first { $0.providerID == modelProvider.id && $0.modelID == config.modelID }
         let generalEffortSupport = catalogModel?.generalEffort
         let reasoningEffortSupport = catalogModel?.reasoningEffort
+        let reasoningControl = catalogModel?.reasoningControl
+        let modelCapabilities = catalogModel?.capabilities ?? ModelCapabilities()
 
         let providerID = modelProvider.id
         let providerName = modelProvider.name
@@ -1383,6 +1385,9 @@ public final class LLMKitManager {
                 readAPIKey: readAPIKey, verboseLogging: verbose,
                 parallelToolCalls: enableParallel,
                 behaviorFlags: flags,
+                reasoningEffortSupport: reasoningEffortSupport,
+                reasoningControl: reasoningControl,
+                modelCapabilities: modelCapabilities,
                 session: session
             )
         case .ollama:

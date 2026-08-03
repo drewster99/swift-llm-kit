@@ -64,6 +64,7 @@ public enum ModelFactsFieldTable {
         .field("mode", \ModelFacts.mode),
         .field("generalEffort", \ModelFacts.generalEffort),
         .field("reasoningEffort", \ModelFacts.reasoningEffort),
+        .field("reasoningControl", \ModelFacts.reasoningControl),
         .field("deprecatedOn", \ModelFacts.deprecatedOn),
         .field("deprecationReplacement", \ModelFacts.deprecationReplacement),
         .field("maxTemperature", \ModelFacts.maxTemperature),
@@ -97,6 +98,15 @@ public enum ModelFactsFieldTable {
         .field("capabilities.systemMessages", \ModelFacts.capabilities.systemMessages),
         .field("capabilities.assistantPrefill", \ModelFacts.capabilities.assistantPrefill),
         .field("capabilities.toolChoice", \ModelFacts.capabilities.toolChoice),
+        .field("capabilities.reasoningEnableable", \ModelFacts.capabilities.reasoningEnableable),
+        .field("capabilities.reasoningDisableable", \ModelFacts.capabilities.reasoningDisableable),
+        .field("capabilities.thinkingKeepAll", \ModelFacts.capabilities.thinkingKeepAll),
+        .field("capabilities.thinkingBudgetTokens", \ModelFacts.capabilities.thinkingBudgetTokens),
+        .field("capabilities.structuredOutputJSONObject", \ModelFacts.capabilities.structuredOutputJSONObject),
+        .field("capabilities.toolChoiceRequired", \ModelFacts.capabilities.toolChoiceRequired),
+        .field("capabilities.toolChoiceNone", \ModelFacts.capabilities.toolChoiceNone),
+        .field("capabilities.toolChoiceSpecificFunction", \ModelFacts.capabilities.toolChoiceSpecificFunction),
+        .field("capabilities.strictToolDefinitions", \ModelFacts.capabilities.strictToolDefinitions),
         .field("capabilities.toolResultRoundTrip", \ModelFacts.capabilities.toolResultRoundTrip),
     ]
 

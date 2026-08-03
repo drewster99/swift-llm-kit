@@ -31,6 +31,15 @@ public enum ModelCapability: String, CaseIterable, Sendable, Codable, Hashable {
     /// Empirical-only: the model called a tool AND consumed the tool result (returned the probe's
     /// identifier). The half an agent actually depends on; no vendor publishes it.
     case toolResultRoundTrip
+    case reasoningEnableable
+    case reasoningDisableable
+    case thinkingKeepAll
+    case thinkingBudgetTokens
+    case structuredOutputJSONObject
+    case toolChoiceRequired
+    case toolChoiceNone
+    case toolChoiceSpecificFunction
+    case strictToolDefinitions
 
     /// Short human-readable label, used by ``ModelCapabilities/enabledLabels``.
     public var label: String {
@@ -53,6 +62,15 @@ public enum ModelCapability: String, CaseIterable, Sendable, Codable, Hashable {
         case .systemMessages:      return "System Msgs"
         case .assistantPrefill:    return "Prefill"
         case .toolChoice:          return "Tool Choice"
+        case .reasoningEnableable: return "Reasoning can be turned ON"
+        case .reasoningDisableable: return "Reasoning can be turned OFF"
+        case .thinkingKeepAll: return "Supports `thinking.keep`"
+        case .thinkingBudgetTokens: return "Accepts a thinking token budget"
+        case .structuredOutputJSONObject: return "Structured output: `json_object`"
+        case .toolChoiceRequired: return "Tool choice: `required`"
+        case .toolChoiceNone: return "Tool choice: `none`"
+        case .toolChoiceSpecificFunction: return "Tool choice: specific function"
+        case .strictToolDefinitions: return "Supports `strict` tool definitions"
         case .toolResultRoundTrip: return "Tool Round-Trip"
         }
     }
@@ -78,6 +96,15 @@ public enum ModelCapability: String, CaseIterable, Sendable, Codable, Hashable {
         case .systemMessages:      return "System messages"
         case .assistantPrefill:    return "Assistant prefill"
         case .toolChoice:          return "Tool choice"
+        case .reasoningEnableable: return "reasoning on"
+        case .reasoningDisableable: return "reasoning off"
+        case .thinkingKeepAll: return "thinking keep"
+        case .thinkingBudgetTokens: return "thinking budget"
+        case .structuredOutputJSONObject: return "json_object"
+        case .toolChoiceRequired: return "tool_choice req"
+        case .toolChoiceNone: return "tool_choice none"
+        case .toolChoiceSpecificFunction: return "tool_choice fn"
+        case .strictToolDefinitions: return "strict tools"
         case .toolResultRoundTrip: return "Tool result round-trip"
         }
     }
@@ -103,6 +130,15 @@ public enum ModelCapability: String, CaseIterable, Sendable, Codable, Hashable {
         case .systemMessages:      return "Model accepts a system message (some backends fold it into the first user turn)."
         case .assistantPrefill:    return "Model supports prefilling the start of the assistant's reply."
         case .toolChoice:          return "Model honors an explicit `tool_choice` selection."
+        case .reasoningEnableable: return "Model accepts an explicit request to enable reasoning. Some reasoning models only ever reason and reject being switched on."
+        case .reasoningDisableable: return "Model accepts an explicit request to disable reasoning. Thinking-only models reject this."
+        case .thinkingKeepAll: return "Model accepts `thinking.keep` to retain reasoning content across turns."
+        case .thinkingBudgetTokens: return "Model accepts an explicit reasoning token budget rather than only a named effort level."
+        case .structuredOutputJSONObject: return "Model accepts `response_format: {type: json_object}` and returns syntactically valid JSON."
+        case .toolChoiceRequired: return "Model accepts `tool_choice: required` (Anthropic `any`), forcing some tool call."
+        case .toolChoiceNone: return "Model accepts `tool_choice: none`, forbidding tool calls while tools are present."
+        case .toolChoiceSpecificFunction: return "Model accepts `tool_choice` naming one function, forcing that tool."
+        case .strictToolDefinitions: return "Model accepts `strict: true` on a function definition for guaranteed schema adherence."
         case .toolResultRoundTrip: return "Model consumes tool RESULTS, not just emits calls — the half an agent depends on. Probe-established; force only to correct a stale verdict."
         }
     }
@@ -171,6 +207,15 @@ public struct ModelCapabilities: Sendable, Equatable {
     public var assistantPrefill: Bool { get { has(.assistantPrefill) } set { set(.assistantPrefill, newValue) } }
     public var toolChoice: Bool { get { has(.toolChoice) } set { set(.toolChoice, newValue) } }
     public var toolResultRoundTrip: Bool { get { has(.toolResultRoundTrip) } set { set(.toolResultRoundTrip, newValue) } }
+    public var reasoningEnableable: Bool { get { has(.reasoningEnableable) } set { set(.reasoningEnableable, newValue) } }
+    public var reasoningDisableable: Bool { get { has(.reasoningDisableable) } set { set(.reasoningDisableable, newValue) } }
+    public var thinkingKeepAll: Bool { get { has(.thinkingKeepAll) } set { set(.thinkingKeepAll, newValue) } }
+    public var thinkingBudgetTokens: Bool { get { has(.thinkingBudgetTokens) } set { set(.thinkingBudgetTokens, newValue) } }
+    public var structuredOutputJSONObject: Bool { get { has(.structuredOutputJSONObject) } set { set(.structuredOutputJSONObject, newValue) } }
+    public var toolChoiceRequired: Bool { get { has(.toolChoiceRequired) } set { set(.toolChoiceRequired, newValue) } }
+    public var toolChoiceNone: Bool { get { has(.toolChoiceNone) } set { set(.toolChoiceNone, newValue) } }
+    public var toolChoiceSpecificFunction: Bool { get { has(.toolChoiceSpecificFunction) } set { set(.toolChoiceSpecificFunction, newValue) } }
+    public var strictToolDefinitions: Bool { get { has(.strictToolDefinitions) } set { set(.strictToolDefinitions, newValue) } }
 
     /// Whether the capability is KNOWN-TRUE. Unknown and known-false both read `false`.
     public func contains(_ capability: ModelCapability) -> Bool { has(capability) }

@@ -6,11 +6,19 @@ public struct LLMToolDefinition: Codable, Sendable {
     public var description: String
     /// JSON Schema describing the tool's parameters, stored as a dictionary.
     public var parameters: [String: AnyCodable]
+    /// Request guaranteed schema adherence via `strict: true` on the function definition.
+    ///
+    /// `nil` omits the key entirely, which is the safe default: endpoints that don't know `strict`
+    /// vary between ignoring it and rejecting the request, and the ones that DO support it impose
+    /// real schema restrictions (no open-ended objects) that a caller must opt into knowingly.
+    /// Gated on the `strictToolDefinitions` capability at emission.
+    public var strict: Bool?
 
-    public init(name: String, description: String, parameters: [String: AnyCodable]) {
+    public init(name: String, description: String, parameters: [String: AnyCodable], strict: Bool? = nil) {
         self.name = name
         self.description = description
         self.parameters = parameters
+        self.strict = strict
     }
 
     /// Rough character count estimating the serialized JSON size of this tool definition.

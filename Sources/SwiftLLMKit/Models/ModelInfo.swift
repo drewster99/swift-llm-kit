@@ -60,6 +60,8 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
     public var generalEffort: EffortSupport?
     /// Reasoning effort support (`reasoning_effort`), or `nil` if nothing is known.
     public var reasoningEffort: EffortSupport?
+    /// How reasoning is switched on/off, or `nil` if nothing is known. See ``ReasoningControl``.
+    public var reasoningControl: ReasoningControl?
     /// Per-(provider+model) runtime behavior knobs. Defaults to all-off — a
     /// model with no flags set behaves like a model from before this field
     /// existed. See `BehaviorFlags` for available knobs and the layering rules.
@@ -161,6 +163,7 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
         mode: String? = nil,
         generalEffort: EffortSupport? = nil,
         reasoningEffort: EffortSupport? = nil,
+        reasoningControl: ReasoningControl? = nil,
         behaviorFlags: BehaviorFlags = BehaviorFlags(),
         deprecatedOn: Date? = nil,
         deprecationReplacement: String? = nil,
@@ -194,6 +197,7 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
         self.mode = mode
         self.generalEffort = generalEffort
         self.reasoningEffort = reasoningEffort
+        self.reasoningControl = reasoningControl
         self.behaviorFlags = behaviorFlags
         self.deprecatedOn = deprecatedOn
         self.deprecationReplacement = deprecationReplacement
@@ -231,7 +235,7 @@ extension ModelInfo: Codable {
         case providerID, modelID, displayName, createdAt
         case maxInputTokens, maxOutputTokens, capabilities
         case sizeLabel, quantizationLabel, pricing, supportsChatCompletions
-        case mode, generalEffort, reasoningEffort, behaviorFlags
+        case mode, generalEffort, reasoningEffort, reasoningControl, behaviorFlags
         case deprecatedOn, deprecationReplacement, maxTemperature, modelDescription
         case samplingDefaults, isFree, benchmarks, huggingFaceID, hidden, isAvailable, isAccessDenied
         case outputBoundedByContext, fetchedAt, lastProbedAt
@@ -262,6 +266,7 @@ extension ModelInfo: Codable {
         mode = try container.decodeIfPresent(String.self, forKey: .mode)
         generalEffort = try container.decodeIfPresent(EffortSupport.self, forKey: .generalEffort)
         reasoningEffort = try container.decodeIfPresent(EffortSupport.self, forKey: .reasoningEffort)
+        reasoningControl = try container.decodeIfPresent(ReasoningControl.self, forKey: .reasoningControl)
         behaviorFlags = try container.decodeIfPresent(BehaviorFlags.self, forKey: .behaviorFlags) ?? BehaviorFlags()
         deprecatedOn = try container.decodeIfPresent(Date.self, forKey: .deprecatedOn)
         deprecationReplacement = try container.decodeIfPresent(String.self, forKey: .deprecationReplacement)
@@ -310,6 +315,7 @@ extension ModelInfo: Codable {
         try container.encodeIfPresent(mode, forKey: .mode)
         try container.encodeIfPresent(generalEffort, forKey: .generalEffort)
         try container.encodeIfPresent(reasoningEffort, forKey: .reasoningEffort)
+        try container.encodeIfPresent(reasoningControl, forKey: .reasoningControl)
         // Skip encoding behavior flags when they're at defaults to keep on-disk
         // payloads compact and round-trippable through clients that don't know
         // the field. The all-default case loads as the same value either way.
