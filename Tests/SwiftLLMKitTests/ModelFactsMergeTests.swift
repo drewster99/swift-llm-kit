@@ -137,7 +137,8 @@ struct ModelFactsMergerTests {
         let info = merged.materialize(providerID: "p", modelID: "m")
         #expect(info.supportsChatCompletions == false)  // nil → false (uniform; chat has no assume-true default)
         #expect(info.capabilities.toolUse == false)     // nil → false
-        #expect(info.validEffortLevels == [])           // nil → []
+        #expect(info.generalEffort == nil)              // nil stays nil — no more "?? []" collapse
+        #expect(info.reasoningEffort == nil)
         #expect(info.displayName == "m")                // nil → modelID
     }
 
@@ -171,7 +172,7 @@ struct DecoderStatedFactsTests {
         #expect(facts.capabilities.vision == true)          // stated
         #expect(facts.capabilities.pdfInput == false)       // stated NO — believed
         #expect(facts.capabilities.toolUse == nil)          // the block has no tool key: UNKNOWN, not false
-        #expect(facts.validEffortLevels == ["high", "max"]) // rank order
+        #expect(facts.generalEffort == .levels(["high", "max"]))   // GENERAL effort, rank order
         #expect(facts.behaviorFlags.requiresAdaptiveThinking == true)   // derived from enabled=false
         #expect(facts.behaviorFlags.mustNeverSendTemperatureParam == true)
     }
@@ -180,11 +181,11 @@ struct DecoderStatedFactsTests {
     func anthropicEffortStatement() throws {
         let noEffort = #"{"data":[{"id":"haiku-test","capabilities":{"effort":{"supported":false}}}]}"#
         let factsNo = try #require(try service.decodeModelFactsForTesting(from: Data(noEffort.utf8), apiType: .anthropic).first).facts
-        #expect(factsNo.validEffortLevels == [])            // a STATEMENT: no efforts
+        #expect(factsNo.generalEffort == .unsupported)      // a STATEMENT: no efforts
 
         let silent = #"{"data":[{"id":"old-test"}]}"#
         let factsSilent = try #require(try service.decodeModelFactsForTesting(from: Data(silent.utf8), apiType: .anthropic).first).facts
-        #expect(factsSilent.validEffortLevels == nil)       // said nothing
+        #expect(factsSilent.generalEffort == nil)           // said nothing
     }
 
     /// Moonshot AI extends the OpenAI `/models` shape with explicit capability leaves and an effort
@@ -206,8 +207,7 @@ struct DecoderStatedFactsTests {
         #expect(facts.capabilities.vision == true)
         #expect(facts.capabilities.reasoning == true)
         #expect(facts.capabilities.videoInput == true)
-        #expect(facts.validEffortLevels == ["low", "high", "max"])   // rank order, not payload order
-        #expect(facts.behaviorFlags.supportsReasoningEffort == true)
+        #expect(facts.reasoningEffort == .levels(["low", "high", "max"]))   // rank order, not payload order
         // Undocumented value spaces: guessing a home would mask probed truth under authoritative-wins.
         #expect(facts.capabilities.toolUse == nil)
     }
@@ -222,8 +222,7 @@ struct DecoderStatedFactsTests {
         #expect(no.capabilities.vision == false)        // stated NO — believed, not "unknown"
         #expect(no.capabilities.reasoning == false)
         #expect(no.capabilities.videoInput == false)
-        #expect(no.validEffortLevels == [])             // support:false is a STATEMENT: no ladder
-        #expect(no.behaviorFlags.supportsReasoningEffort == false)
+        #expect(no.reasoningEffort == .unsupported)     // support:false is a STATEMENT, now representable
 
         // Plain OpenAI / DeepSeek shape: none of the keys present.
         let bare = #"{"data":[{"id":"deepseek-v4-pro","object":"model","owned_by":"deepseek"}]}"#
@@ -231,8 +230,8 @@ struct DecoderStatedFactsTests {
         #expect(silent.capabilities.vision == nil)
         #expect(silent.capabilities.reasoning == nil)
         #expect(silent.capabilities.videoInput == nil)
-        #expect(silent.validEffortLevels == nil)
-        #expect(silent.behaviorFlags.supportsReasoningEffort == nil)
+        #expect(silent.reasoningEffort == nil)
+        #expect(silent.generalEffort == nil)
     }
 
     /// The image-token-price inference and the explicit leaf both target `capabilities.vision`.
@@ -256,8 +255,9 @@ struct DecoderStatedFactsTests {
     func effortSupportedWithoutLadder() throws {
         let body = #"{"data":[{"id":"m","reasoning_efforts":{"support":true}}]}"#
         let facts = try #require(try service.decodeModelFactsForTesting(from: Data(body.utf8), apiType: .openAICompatible).first).facts
-        #expect(facts.behaviorFlags.supportsReasoningEffort == true)
-        #expect(facts.validEffortLevels == nil)         // NOT [] — that would forbid every value
+        // "the parameter works, values unknown" — a state the old ladder+flag pair could not
+        // express without contradicting itself.
+        #expect(facts.reasoningEffort == .supportedLevelsUnknown)
     }
 
     /// `data` is an array, so a throw from ONE entry fails the enclosing decode and the provider's
@@ -279,8 +279,7 @@ struct DecoderStatedFactsTests {
         #expect(try #require(decoded.first { $0.modelID == "good-2" }).facts.capabilities.reasoning == true)
         // The malformed entries survive as models; only the unreadable FIELDS degrade to unknown.
         let badBlock = try #require(decoded.first { $0.modelID == "bad-block" }).facts
-        #expect(badBlock.validEffortLevels == nil)
-        #expect(badBlock.behaviorFlags.supportsReasoningEffort == nil)
+        #expect(badBlock.reasoningEffort == nil)
         let badBool = try #require(decoded.first { $0.modelID == "bad-bool" }).facts
         #expect(badBool.capabilities.vision == nil)
         #expect(badBool.maxInputTokens == nil)
@@ -305,8 +304,7 @@ struct DecoderStatedFactsTests {
     func brokenLadderKeepsSupportFlag() throws {
         let body = #"{"data":[{"id":"m","reasoning_efforts":{"support":false,"valid_efforts":{"oops":true}}}]}"#
         let facts = try #require(try service.decodeModelFactsForTesting(from: Data(body.utf8), apiType: .openAICompatible).first).facts
-        #expect(facts.behaviorFlags.supportsReasoningEffort == false)
-        #expect(facts.validEffortLevels == [])
+        #expect(facts.reasoningEffort == .unsupported)
     }
 
     @Test("Mistral: a present leaf is stated both directions; an absent leaf is unknown")
@@ -351,7 +349,7 @@ struct DecoderStatedFactsTests {
         let bare = try #require(decoded.first { $0.modelID == "a/no-arrays" }).facts
         #expect(bare.capabilities.vision == nil)
         #expect(bare.capabilities.toolUse == nil)
-        #expect(bare.validEffortLevels == nil)              // absent reasoning block ≠ "no efforts"
+        #expect(bare.reasoningEffort == nil)                // absent reasoning block ≠ "no efforts"
         let full = try #require(decoded.first { $0.modelID == "b/full" }).facts
         #expect(full.capabilities.vision == false)          // enumerated list without "image" = stated no
         #expect(full.capabilities.toolUse == false)         // enumerated params without "tools" = stated no
@@ -569,23 +567,32 @@ struct DecoderAuditFixTests {
     @Test("Seeding: a stated effort set is exhaustive — unlisted known levels seed as stated no")
     func seedingStatedEffortSetIsExhaustive() {
         var facts = ModelFacts()
-        facts.validEffortLevels = ["high", "max"]
+        facts.generalEffort = .levels(["high", "max"])
         let profile = ModelProber.seedProfile(
             fromDecodedFacts: DecodedModelFacts(modelID: "m", facts: facts), providerID: "p")
-        #expect(profile.effortLevels["high"]?.value == true)
-        #expect(profile.effortLevels["max"]?.value == true)
-        #expect(profile.effortLevels["xhigh"]?.value == false)
-        #expect(profile.effortLevels["none"]?.value == false)
-        #expect(profile.effortLevels["xhigh"]?.source == .decoded)
+        #expect(profile.generalEffortLevels["high"]?.value == true)
+        #expect(profile.generalEffortLevels["max"]?.value == true)
+        #expect(profile.generalEffortLevels["xhigh"]?.value == false)
+        #expect(profile.generalEffortLevels["none"]?.value == false)
+        #expect(profile.generalEffortLevels["xhigh"]?.source == .decoded)
+        #expect(profile.reasoningEffortLevels.isEmpty, "the other construct is untouched")
 
         var statedNone = ModelFacts()
-        statedNone.validEffortLevels = []
+        statedNone.generalEffort = .unsupported
         let noneProfile = ModelProber.seedProfile(
             fromDecodedFacts: DecodedModelFacts(modelID: "m2", facts: statedNone), providerID: "p")
-        #expect(EffortRank.table.keys.allSatisfy { noneProfile.effortLevels[$0]?.value == false })
+        #expect(EffortRank.table.keys.allSatisfy { noneProfile.generalEffortLevels[$0]?.value == false })
+
+        // "supported, levels unknown" states nothing per-level — the whole ladder is left to probe.
+        var levelsUnknown = ModelFacts()
+        levelsUnknown.reasoningEffort = .supportedLevelsUnknown
+        let unknownProfile = ModelProber.seedProfile(
+            fromDecodedFacts: DecodedModelFacts(modelID: "m4", facts: levelsUnknown), providerID: "p")
+        #expect(unknownProfile.reasoningEffortLevels.isEmpty)
 
         let silent = ModelProber.seedProfile(
             fromDecodedFacts: DecodedModelFacts(modelID: "m3", facts: ModelFacts()), providerID: "p")
-        #expect(silent.effortLevels.isEmpty)
+        #expect(silent.generalEffortLevels.isEmpty)
+        #expect(silent.reasoningEffortLevels.isEmpty)
     }
 }

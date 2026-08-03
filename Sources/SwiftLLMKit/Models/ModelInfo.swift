@@ -56,7 +56,10 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
     ///
     /// Replaces guessing from a vendor-blind allowlist: validation can check a chosen effort
     /// against THIS model's list, and a picker can offer exactly what the model takes.
-    public var validEffortLevels: [String]
+    /// General effort support (Anthropic `output_config.effort`), or `nil` if nothing is known.
+    public var generalEffort: EffortSupport?
+    /// Reasoning effort support (`reasoning_effort`), or `nil` if nothing is known.
+    public var reasoningEffort: EffortSupport?
     /// Per-(provider+model) runtime behavior knobs. Defaults to all-off — a
     /// model with no flags set behaves like a model from before this field
     /// existed. See `BehaviorFlags` for available knobs and the layering rules.
@@ -156,7 +159,8 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
         pricing: ModelPricing? = nil,
         supportsChatCompletions: Bool? = nil,
         mode: String? = nil,
-        validEffortLevels: [String] = [],
+        generalEffort: EffortSupport? = nil,
+        reasoningEffort: EffortSupport? = nil,
         behaviorFlags: BehaviorFlags = BehaviorFlags(),
         deprecatedOn: Date? = nil,
         deprecationReplacement: String? = nil,
@@ -188,7 +192,8 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
         // other capability), and gating consumers reject only a KNOWN non-chat.
         if let supportsChatCompletions { self.capabilities[.chat] = supportsChatCompletions }
         self.mode = mode
-        self.validEffortLevels = validEffortLevels
+        self.generalEffort = generalEffort
+        self.reasoningEffort = reasoningEffort
         self.behaviorFlags = behaviorFlags
         self.deprecatedOn = deprecatedOn
         self.deprecationReplacement = deprecationReplacement
@@ -226,7 +231,7 @@ extension ModelInfo: Codable {
         case providerID, modelID, displayName, createdAt
         case maxInputTokens, maxOutputTokens, capabilities
         case sizeLabel, quantizationLabel, pricing, supportsChatCompletions
-        case mode, validEffortLevels, behaviorFlags
+        case mode, generalEffort, reasoningEffort, behaviorFlags
         case deprecatedOn, deprecationReplacement, maxTemperature, modelDescription
         case samplingDefaults, isFree, benchmarks, huggingFaceID, hidden, isAvailable, isAccessDenied
         case outputBoundedByContext, fetchedAt, lastProbedAt
@@ -255,7 +260,8 @@ extension ModelInfo: Codable {
             capabilities[.chat] = legacyChat
         }
         mode = try container.decodeIfPresent(String.self, forKey: .mode)
-        validEffortLevels = try container.decodeIfPresent([String].self, forKey: .validEffortLevels) ?? []
+        generalEffort = try container.decodeIfPresent(EffortSupport.self, forKey: .generalEffort)
+        reasoningEffort = try container.decodeIfPresent(EffortSupport.self, forKey: .reasoningEffort)
         behaviorFlags = try container.decodeIfPresent(BehaviorFlags.self, forKey: .behaviorFlags) ?? BehaviorFlags()
         deprecatedOn = try container.decodeIfPresent(Date.self, forKey: .deprecatedOn)
         deprecationReplacement = try container.decodeIfPresent(String.self, forKey: .deprecationReplacement)
@@ -302,9 +308,8 @@ extension ModelInfo: Codable {
         try container.encodeIfPresent(quantizationLabel, forKey: .quantizationLabel)
         try container.encodeIfPresent(pricing, forKey: .pricing)
         try container.encodeIfPresent(mode, forKey: .mode)
-        if !validEffortLevels.isEmpty {
-            try container.encode(validEffortLevels, forKey: .validEffortLevels)
-        }
+        try container.encodeIfPresent(generalEffort, forKey: .generalEffort)
+        try container.encodeIfPresent(reasoningEffort, forKey: .reasoningEffort)
         // Skip encoding behavior flags when they're at defaults to keep on-disk
         // payloads compact and round-trippable through clients that don't know
         // the field. The all-default case loads as the same value either way.

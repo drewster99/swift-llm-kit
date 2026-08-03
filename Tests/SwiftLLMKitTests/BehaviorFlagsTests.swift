@@ -237,7 +237,7 @@ struct ModelInfoBehaviorFlagsCodableTests {
             providerID: "p", modelID: "m", displayName: "M",
             maxInputTokens: 200_000, maxOutputTokens: 64_000,
             pricing: ModelPricing(base: PricingTier(input: 0.000005, output: 0.000025)),
-            validEffortLevels: ["low", "medium", "high"],
+            generalEffort: .levels(["low", "medium", "high"]),
             deprecatedOn: Date(timeIntervalSince1970: 1_788_177_600),
             deprecationReplacement: "m2",
             maxTemperature: 2,

@@ -29,7 +29,10 @@ import Foundation
 ///   and Gemini; ignored by Anthropic and Ollama (no native field).
 public struct LLMCallOverrides: Sendable, Equatable {
     public var toolChoice: LLMToolChoice?
-    public var thinkingEffort: String?
+    /// Per-call GENERAL effort (Anthropic `output_config.effort`).
+    public var effort: String?
+    /// Per-call REASONING effort (`reasoning_effort`).
+    public var reasoningEffort: String?
     public var maxOutputTokens: Int?
     public var temperature: Double?
     public var topP: Double?
@@ -39,7 +42,8 @@ public struct LLMCallOverrides: Sendable, Equatable {
 
     public init(
         toolChoice: LLMToolChoice? = nil,
-        thinkingEffort: String? = nil,
+        effort: String? = nil,
+        reasoningEffort: String? = nil,
         maxOutputTokens: Int? = nil,
         temperature: Double? = nil,
         topP: Double? = nil,
@@ -48,7 +52,8 @@ public struct LLMCallOverrides: Sendable, Equatable {
         presencePenalty: Double? = nil
     ) {
         self.toolChoice = toolChoice
-        self.thinkingEffort = thinkingEffort
+        self.effort = effort
+        self.reasoningEffort = reasoningEffort
         self.maxOutputTokens = maxOutputTokens
         self.temperature = temperature
         self.topP = topP

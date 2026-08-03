@@ -31,17 +31,26 @@ public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
     /// models only accept adaptive thinking which lets the model choose depth.
     /// The field is interpreted as a boolean signal: budget > 0 means "enable
     /// adaptive thinking", budget == 0 / nil means "thinking off." Use
-    /// `thinkingEffort` to control depth on adaptive-thinking models.
+    /// ``effort`` to control depth on adaptive-thinking models.
     public var thinkingBudget: Int?
-    /// Anthropic adaptive-thinking effort hint. Valid values: `"low"`,
-    /// `"medium"`, `"high"`, `"xhigh"`, `"max"` (xhigh only on Opus 4.7, 4.8).
-    /// `nil` (default) omits the field and lets Anthropic default to `"high"`.
+    /// GENERAL effort — how much work the model does overall, independent of reasoning.
     ///
-    /// Emitted on Anthropic requests as a top-level `output_config: {effort: <value>}`
-    /// field, independent of the thinking mode. Older Anthropic models that don't
-    /// support the effort parameter will reject the request — set only on
-    /// supported models (Opus 4.5+, Sonnet 4.6+, Opus 4.6+, Opus 4.7+, Opus 4.8).
-    public var thinkingEffort: String?
+    /// Emitted on Anthropic requests as top-level `output_config: {effort: <value>}`. It is NOT a
+    /// thinking knob: it applies even when thinking is off, which is why it is not named for it.
+    /// The predecessor `thinkingEffort` fed BOTH this and `reasoning_effort`, so the name was
+    /// wrong for half its uses and no model could describe the two separately.
+    ///
+    /// `nil` omits the field. Suppressed when the model's ``ModelInfo/generalEffort`` is KNOWN
+    /// unsupported; sent when support is unknown, preserving the deliberate preference for a clear
+    /// API error over a silently-dropped knob.
+    public var effort: String?
+    /// REASONING effort — how much thinking the model does. Emitted as top-level
+    /// `reasoning_effort` on OpenAI-compatible endpoints (OpenAI o-series / GPT-5, Moonshot).
+    ///
+    /// `nil` omits the field. Sent ONLY when ``ModelInfo/reasoningEffort`` is known to support it:
+    /// non-reasoning models reject the parameter with HTTP 400, so this one fails closed while
+    /// ``effort`` fails open.
+    public var reasoningEffort: String?
     /// Use 1-hour prompt cache TTL instead of the default 5-minute ephemeral cache.
     /// Only relevant for `.anthropic` providers. Cached tokens cost 2x the base input price.
     public var extendedCacheTTL: Bool
@@ -67,7 +76,8 @@ public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
         maxOutputTokens: Int = 4096,
         maxContextTokens: Int = 128_000,
         thinkingBudget: Int? = nil,
-        thinkingEffort: String? = nil,
+        effort: String? = nil,
+        reasoningEffort: String? = nil,
         extendedCacheTTL: Bool = false,
         streaming: Bool = true,
         isValid: Bool = true,
@@ -82,7 +92,8 @@ public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
         self.maxOutputTokens = maxOutputTokens
         self.maxContextTokens = maxContextTokens
         self.thinkingBudget = thinkingBudget
-        self.thinkingEffort = thinkingEffort
+        self.effort = effort
+        self.reasoningEffort = reasoningEffort
         self.extendedCacheTTL = extendedCacheTTL
         self.streaming = streaming
         self.isValid = isValid
@@ -112,7 +123,8 @@ public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
         maxOutputTokens = try container.decode(Int.self, forKey: .maxOutputTokens)
         maxContextTokens = try container.decode(Int.self, forKey: .maxContextTokens)
         thinkingBudget = try container.decodeIfPresent(Int.self, forKey: .thinkingBudget)
-        thinkingEffort = try container.decodeIfPresent(String.self, forKey: .thinkingEffort)
+        effort = try container.decodeIfPresent(String.self, forKey: .effort)
+        reasoningEffort = try container.decodeIfPresent(String.self, forKey: .reasoningEffort)
         extendedCacheTTL = try container.decodeIfPresent(Bool.self, forKey: .extendedCacheTTL) ?? false
         streaming = try container.decode(Bool.self, forKey: .streaming)
         isValid = try container.decode(Bool.self, forKey: .isValid)
@@ -124,7 +136,7 @@ public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
     /// 0.0.21; its legacy decode lives in `LegacyCodingKeys` below.
     private enum CodingKeys: String, CodingKey {
         case id, name, providerID, modelID, temperature
-        case maxOutputTokens, maxContextTokens, thinkingBudget, thinkingEffort, extendedCacheTTL
+        case maxOutputTokens, maxContextTokens, thinkingBudget, effort, reasoningEffort, extendedCacheTTL
         case streaming, isValid, validationError, extraJSONOverrides
     }
 

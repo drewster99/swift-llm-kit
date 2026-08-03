@@ -72,20 +72,37 @@ public enum ModelProber {
         if let value = facts.capabilities.toolUse { profile.toolCalling = .decoded(value, evidence) }
         if let value = facts.capabilities.vision { profile.vision = .decoded(value, evidence) }
         if let value = facts.capabilities.pdfInput { profile.pdfInput = .decoded(value, evidence) }
-        if let levels = facts.validEffortLevels {
-            for level in levels { profile.effortLevels[level] = .decoded(true, evidence) }
-            // A non-nil list is the vendor enumerating THE valid set (Anthropic's per-level
-            // supported flags; a stated [] means "no effort levels at all"), so every known level
-            // not listed is a stated "no" — without this, vendor denials (xhigh on sonnet-4-6,
-            // everything on haiku-4-5) were indistinguishable from "nobody asked" and the ladder
-            // re-probed levels the vendor already answered.
-            for level in EffortRank.table.keys where !levels.contains(level) {
-                profile.effortLevels[level] = .decoded(false, evidence + " (not in the model's stated effort set)")
-            }
-        }
+        seedEffort(facts.generalEffort, into: &profile.generalEffortLevels, evidence: evidence)
+        seedEffort(facts.reasoningEffort, into: &profile.reasoningEffortLevels, evidence: evidence)
         // Listed in /models ⇒ presumed reachable, but only presumed — a live probe can overturn it.
         profile.isAvailable = .decoded(true, "present in provider /models listing")
         return profile
+    }
+
+    /// Seeds one effort ladder from a decoded ``EffortSupport``.
+    ///
+    /// A KNOWN ladder is the vendor enumerating THE valid set, so every level it omits is a stated
+    /// "no" — without that, vendor denials (xhigh on sonnet-4-6, everything on haiku-4-5) were
+    /// indistinguishable from "nobody asked" and the prober re-probed levels already answered.
+    /// ``EffortSupport/unsupported`` states "no" for every level; `supportedLevelsUnknown` states
+    /// nothing, leaving the whole ladder to the probe.
+    private static func seedEffort(_ support: EffortSupport?,
+                                   into ladder: inout [String: ProbeFinding<Bool>],
+                                   evidence: String) {
+        guard let support else { return }
+        switch support {
+        case .supportedLevelsUnknown:
+            return
+        case .unsupported:
+            for level in EffortRank.table.keys {
+                ladder[level] = .decoded(false, evidence + " (the model states no effort levels)")
+            }
+        case .levels(let levels):
+            for level in levels { ladder[level] = .decoded(true, evidence) }
+            for level in EffortRank.table.keys where !levels.contains(level) {
+                ladder[level] = .decoded(false, evidence + " (not in the model's stated effort set)")
+            }
+        }
     }
 
     /// Builds a profile pre-filled with everything the provider's `/models` payload already told
@@ -129,9 +146,8 @@ public enum ModelProber {
         if let output = info.maxOutputTokens {
             profile.maxOutputTokens = .decoded(output, "provider /models payload")
         }
-        for level in info.validEffortLevels {
-            profile.effortLevels[level] = .decoded(true, "provider /models payload")
-        }
+        seedEffort(info.generalEffort, into: &profile.generalEffortLevels, evidence: "provider /models payload")
+        seedEffort(info.reasoningEffort, into: &profile.reasoningEffortLevels, evidence: "provider /models payload")
 
         switch apiType {
         case .anthropic:
@@ -176,6 +192,13 @@ public enum ModelProber {
     ///   - llm: a provider already bound to the model under test. It exposes no capability data,
     ///     which is what keeps catalog claims out of a measurement of the truth.
     ///   - effortLevelsToProbe: named efforts to attempt beyond what the seed already settled.
+    ///     These measure GENERAL effort and are attempted only when the parameter below says the
+    ///     endpoint actually emits it.
+    ///   - supportsUnconditionalGeneralEffortEmission: whether this endpoint puts the general
+    ///     effort field on the wire whether or not the model is known to accept it (Anthropic
+    ///     does; flag-gated endpoints do not). Defaults to `false` — the SAFE answer, because on a
+    ///     gated endpoint the field is silently dropped and a "no error" would be recorded as a
+    ///     false positive. This guard used to live in the caller, where it could be forgotten.
     ///     Only meaningful where the provider emits the field unconditionally (Anthropic); where
     ///     emission is flag-gated (OpenAI-compatible), build per-level providers whose
     ///     configuration forces the field via `extraJSONOverrides` and use
@@ -184,6 +207,7 @@ public enum ModelProber {
         llm: any LLMProvider,
         seed: ModelProfile,
         effortLevelsToProbe: [String] = [],
+        supportsUnconditionalGeneralEffortEmission: Bool = false,
         preferLowImageDetail: Bool = false
     ) async -> ModelProfile {
         let started = Date()
@@ -340,8 +364,15 @@ public enum ModelProber {
         }
 
         // 5. Effort levels the seed didn't settle.
-        for level in effortLevelsToProbe where profile.effortLevels[level] == nil {
-            profile.effortLevels[level] = await probeEffortLevel(level, llm: llm, modelID: modelID, calls: calls)
+        // GENERAL effort only. `probeEffortLevel` sends the configuration's general effort, which
+        // Anthropic emits unconditionally — on a flag-gated endpoint an unsupported model silently
+        // drops the field and a "no error" would record a false positive. Callers used to have to
+        // know that and pass [] for non-Anthropic; the guard now lives here, where it cannot be
+        // forgotten. Reasoning ladders are measured by forcing the raw parameter instead.
+        if supportsUnconditionalGeneralEffortEmission {
+            for level in effortLevelsToProbe where profile.generalEffortLevels[level] == nil {
+                profile.generalEffortLevels[level] = await probeEffortLevel(level, llm: llm, modelID: modelID, calls: calls)
+            }
         }
 
         return finish(&profile, calls: calls, started: started)
@@ -1004,16 +1035,20 @@ public enum ModelProber {
                             duration: Date().timeIntervalSince(started))
     }
 
-    /// Whether a named effort level is accepted. See the driver's note on flag-gated emission:
-    /// where the provider only sends the field when a behavior flag is set (OpenAI-compatible),
-    /// a "no error" here confirms an already-known reasoning model but cannot discover a new one.
+    /// Whether a named GENERAL effort level is accepted.
+    ///
+    /// Sends the configuration's general effort, so it is only meaningful on an endpoint that emits
+    /// that field unconditionally (Anthropic). On a flag-gated endpoint the field is silently
+    /// dropped and a "no error" here would be a FALSE POSITIVE — which is why `probe(...)` will not
+    /// call this unless the caller states the endpoint emits unconditionally. Reasoning ladders are
+    /// measured by forcing the raw `reasoning_effort` parameter instead, which cannot be dropped.
     public static func probeEffortLevel(_ level: String, llm: any LLMProvider, modelID: String, calls: ProbeCallCounter? = nil) async -> ProbeFinding<Bool> {
         let started = Date()
         calls?.increment()
         do {
             _ = try await llm.send(messages: [
                 .user("Reply with the single word: ok")
-            ], tools: [], overrides: LLMCallOverrides(thinkingEffort: level))
+            ], tools: [], overrides: LLMCallOverrides(effort: level))
             return .established(true, "accepted effort '\(level)'", duration: Date().timeIntervalSince(started))
         } catch {
             let detail = CapabilityProbe.rejectionDetail(error)

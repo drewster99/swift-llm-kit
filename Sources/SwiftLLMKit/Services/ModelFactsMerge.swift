@@ -62,7 +62,8 @@ public enum ModelFactsFieldTable {
         .field("quantizationLabel", \ModelFacts.quantizationLabel),
         .field("pricing", \ModelFacts.pricing),                 // atomic composite
         .field("mode", \ModelFacts.mode),
-        .field("validEffortLevels", \ModelFacts.validEffortLevels),
+        .field("generalEffort", \ModelFacts.generalEffort),
+        .field("reasoningEffort", \ModelFacts.reasoningEffort),
         .field("deprecatedOn", \ModelFacts.deprecatedOn),
         .field("deprecationReplacement", \ModelFacts.deprecationReplacement),
         .field("maxTemperature", \ModelFacts.maxTemperature),
@@ -106,7 +107,6 @@ public enum ModelFactsFieldTable {
         .field("behaviorFlags.replayReasoningContent", \ModelFacts.behaviorFlags.replayReasoningContent),
         .field("behaviorFlags.supportsDeveloperRole", \ModelFacts.behaviorFlags.supportsDeveloperRole),
         .field("behaviorFlags.requiresAdaptiveThinking", \ModelFacts.behaviorFlags.requiresAdaptiveThinking),
-        .field("behaviorFlags.supportsReasoningEffort", \ModelFacts.behaviorFlags.supportsReasoningEffort),
         .field("behaviorFlags.mustNeverSendTemperatureParam", \ModelFacts.behaviorFlags.mustNeverSendTemperatureParam),
         .field("behaviorFlags.supportsTrailingSystemMessage", \ModelFacts.behaviorFlags.supportsTrailingSystemMessage),
         .field("behaviorFlags.extras", \ModelFacts.behaviorFlags.extras),

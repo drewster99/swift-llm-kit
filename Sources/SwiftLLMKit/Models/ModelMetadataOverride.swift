@@ -186,6 +186,14 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
     }
     /// Override per-(provider+model) runtime behavior flags. Per-flag, not all-or-nothing.
     public var behaviorFlags: BehaviorFlagsOverride?
+    /// Override general-effort support (Anthropic `output_config.effort`).
+    ///
+    /// Overridable because a wrong effort record is otherwise uncorrectable: the vendor may publish
+    /// nothing, and the empirical layer can only speak after a full ladder probe. Without a slot
+    /// here, neither a user nor a downloaded fix could repair it.
+    public var generalEffort: EffortSupport?
+    /// Override reasoning-effort support (`reasoning_effort`). Same reasoning as ``generalEffort``.
+    public var reasoningEffort: EffortSupport?
     /// Hide this model from pickers. Hiding is presentation, never deletion — every record
     /// underneath survives, and un-hiding is removing this one field.
     public var hidden: Bool?
@@ -203,6 +211,8 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
         pricing: ModelPricing? = nil,
         supportsChatCompletions: Bool? = nil,
         behaviorFlags: BehaviorFlagsOverride? = nil,
+        generalEffort: EffortSupport? = nil,
+        reasoningEffort: EffortSupport? = nil,
         hidden: Bool? = nil,
         isAvailable: Bool? = nil,
         isAccessDenied: Bool? = nil
@@ -214,6 +224,8 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
         self.capabilities = capabilities
         self.pricing = pricing
         self.behaviorFlags = behaviorFlags
+        self.generalEffort = generalEffort
+        self.reasoningEffort = reasoningEffort
         self.hidden = hidden
         self.isAvailable = isAvailable
         self.isAccessDenied = isAccessDenied

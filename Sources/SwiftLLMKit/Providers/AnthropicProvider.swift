@@ -11,6 +11,10 @@ struct AnthropicProvider: LLMProvider {
     private let verboseLogging: Bool
     private let session: URLSession
     private let behaviorFlags: BehaviorFlags
+    /// The model's general-effort support, resolved from the catalog at construction — the same
+    /// path `behaviorFlags` travels, so effort gating is per-model data rather than an apiType
+    /// branch. `nil` = unknown, which for general effort means "send it anyway" (fails open).
+    private let generalEffortSupport: EffortSupport?
 
     public init(
         configuration: ModelConfiguration,
@@ -18,7 +22,8 @@ struct AnthropicProvider: LLMProvider {
         readAPIKey: @Sendable @escaping () -> String,
         verboseLogging: Bool = false,
         session: URLSession = llmURLSession,
-        behaviorFlags: BehaviorFlags = BehaviorFlags()
+        behaviorFlags: BehaviorFlags = BehaviorFlags(),
+        generalEffortSupport: EffortSupport? = nil
     ) {
         self.configuration = configuration
         self.provider = provider
@@ -26,6 +31,7 @@ struct AnthropicProvider: LLMProvider {
         self.verboseLogging = verboseLogging
         self.session = session
         self.behaviorFlags = behaviorFlags
+        self.generalEffortSupport = generalEffortSupport
     }
 
     public func send(
@@ -93,7 +99,7 @@ struct AnthropicProvider: LLMProvider {
         overrides: LLMCallOverrides
     ) throws -> [String: Any] {
         let toolChoice = overrides.toolChoice
-        let thinkingEffortOverride = overrides.thinkingEffort
+        let effortOverride = overrides.effort
         let maxOutputTokensOverride = overrides.maxOutputTokens
         let temperatureOverride = overrides.temperature
         let topPOverride = overrides.topP
@@ -246,10 +252,13 @@ struct AnthropicProvider: LLMProvider {
         // that receive `reasoning_effort` per request without rebuilding the
         // provider per call.
         let effectiveEffort: String? = {
-            if let override = thinkingEffortOverride, !override.isEmpty { return override }
-            return configuration.thinkingEffort
+            if let override = effortOverride, !override.isEmpty { return override }
+            return configuration.effort
         }()
-        if let effort = effectiveEffort {
+        // Fails OPEN: emitted when support is UNKNOWN, suppressed only when the model is KNOWN not
+        // to take it. Preserves the deliberate preference for a clear API error over a silently
+        // dropped knob, while no longer sending a parameter we have measured to be rejected.
+        if let effort = effectiveEffort, generalEffortSupport?.isSupported != false {
             body["output_config"] = ["effort": effort] as [String: Any]
         }
 

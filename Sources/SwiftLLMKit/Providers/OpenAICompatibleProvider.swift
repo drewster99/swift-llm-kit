@@ -11,6 +11,9 @@ struct OpenAICompatibleProvider: LLMProvider {
     private let verboseLogging: Bool
     private let parallelToolCalls: Bool
     private let behaviorFlags: BehaviorFlags
+    /// The model's reasoning-effort support, resolved from the catalog at construction. `nil` =
+    /// unknown, which here means "don't send it" (fails closed — a non-reasoning model 400s).
+    private let reasoningEffortSupport: EffortSupport?
     private let session: URLSession
     /// Stable conversation ID for xAI prompt caching. Generated once per provider instance.
     private let conversationID: String
@@ -22,6 +25,7 @@ struct OpenAICompatibleProvider: LLMProvider {
         verboseLogging: Bool = false,
         parallelToolCalls: Bool = false,
         behaviorFlags: BehaviorFlags = BehaviorFlags(),
+        reasoningEffortSupport: EffortSupport? = nil,
         session: URLSession = llmURLSession
     ) {
         self.configuration = configuration
@@ -30,6 +34,7 @@ struct OpenAICompatibleProvider: LLMProvider {
         self.verboseLogging = verboseLogging
         self.parallelToolCalls = parallelToolCalls
         self.behaviorFlags = behaviorFlags
+        self.reasoningEffortSupport = reasoningEffortSupport
         self.session = session
         self.conversationID = UUID().uuidString
     }
@@ -121,7 +126,7 @@ struct OpenAICompatibleProvider: LLMProvider {
         overrides: LLMCallOverrides
     ) -> [String: Any] {
         let toolChoice = overrides.toolChoice
-        let thinkingEffortOverride = overrides.thinkingEffort
+        let reasoningEffortOverride = overrides.reasoningEffort
         let maxOutputTokensOverride = overrides.maxOutputTokens
         let temperatureOverride = overrides.temperature
         let topPOverride = overrides.topP
@@ -228,11 +233,12 @@ struct OpenAICompatibleProvider: LLMProvider {
         // value (used by HTTP servers that map `reasoning_effort` from
         // inbound requests). Empty string normalized to nil.
         let effectiveEffort: String? = {
-            if let override = thinkingEffortOverride, !override.isEmpty { return override }
-            return configuration.thinkingEffort
+            if let override = reasoningEffortOverride, !override.isEmpty { return override }
+            return configuration.reasoningEffort
         }()
-        if behaviorFlags.supportsReasoningEffort,
-           let effort = effectiveEffort {
+        // Fails CLOSED, unlike Anthropic's general effort above: a non-reasoning model rejects
+        // `reasoning_effort` with HTTP 400, so silence must mean "don't send it".
+        if reasoningEffortSupport?.isSupported == true, let effort = effectiveEffort {
             body["reasoning_effort"] = effort
         }
 

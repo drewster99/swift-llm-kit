@@ -959,27 +959,16 @@ public final class LLMKitManager {
         // to fire. Anthropic provider always emits it (no flag gating), so
         // a model that doesn't accept the field will 400 — preferable to
         // silent drop but worth surfacing pre-flight.
-        if let effort = config.thinkingEffort {
-            let validEfforts: Set<String> = ["minimal", "low", "medium", "high", "xhigh", "max"]
-            guard validEfforts.contains(effort) else {
+        // Both effort constructs validate by the same two questions — is the NAME one we know, and
+        // does THIS model accept that construct — so they share one routine. The per-apiType switch
+        // this replaced asked "does the provider consume the effort field?", which was the wrong
+        // question: it could not tell a general-effort model from a reasoning-effort one, and it
+        // hardcoded a provider list that every new backend had to be added to.
+        for (label, value) in [("effort", config.effort), ("reasoningEffort", config.reasoningEffort)] {
+            guard let value else { continue }
+            guard EffortRank.table.keys.contains(value.lowercased()) else {
                 configurations[index].isValid = false
-                configurations[index].validationError = "thinkingEffort '\(effort)' is not a recognized value (valid: \(validEfforts.sorted().joined(separator: ", ")))"
-                return
-            }
-            let configFlags = behaviorFlags(forProviderID: provider.id, modelID: config.modelID)
-            let providerSupports: Bool = {
-                switch provider.apiType {
-                case .anthropic, .alibabaCloud:
-                    return true   // Anthropic emits effort unconditionally; alibaba uses thinking_budget but effort field harmless
-                case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaModel, .openRouter:
-                    return configFlags.supportsReasoningEffort
-                case .gemini, .ollama:
-                    return false
-                }
-            }()
-            if !providerSupports {
-                configurations[index].isValid = false
-                configurations[index].validationError = "thinkingEffort is not supported by \(provider.apiType.displayName) for this model (drop it or pick a model with reasoning support)"
+                configurations[index].validationError = "\(label) '\(value)' is not a recognized value (valid: \(EffortRank.allKnown.joined(separator: ", ")))"
                 return
             }
         }
@@ -1007,11 +996,19 @@ public final class LLMKitManager {
             // which happily accepts `minimal` on a Claude model (a guaranteed 400) and can't know
             // that sonnet-4-6 takes `max` but not `xhigh`. An empty list means nobody told us the
             // levels, not "no levels", so it stays permissive.
-            if let effort = config.thinkingEffort,
-               !modelInfo.validEffortLevels.isEmpty,
-               !modelInfo.validEffortLevels.contains(effort) {
+            // Per-construct, against the model's OWN record. `rejects` fails safe: an unknown
+            // ladder never rejects, so a model no source has described stays permissive.
+            let constructs: [(String, String?, EffortSupport?)] = [
+                ("effort", config.effort, modelInfo.generalEffort),
+                ("reasoningEffort", config.reasoningEffort, modelInfo.reasoningEffort)
+            ]
+            for (label, value, support) in constructs {
+                guard let value, let support, support.rejects(value) else { continue }
                 configurations[index].isValid = false
-                configurations[index].validationError = "Model '\(config.modelID)' does not accept effort '\(effort)' (it accepts: \(modelInfo.validEffortLevels.joined(separator: ", ")))"
+                let detail = support.knownLevels.map { "it accepts: \($0.joined(separator: ", "))" }
+                    ?? "the model does not support this parameter"
+                configurations[index].validationError =
+                    "Model '\(config.modelID)' does not accept \(label) '\(value)' (\(detail))"
                 return
             }
 
@@ -1143,6 +1140,8 @@ public final class LLMKitManager {
 
         // Resolve behavior flags once — used by multiple per-apiType branches below.
         let prepFlags = behaviorFlags(forProviderID: provider.id, modelID: config.modelID)
+        // Effort support from the catalog, resolved once — same source the provider factory uses.
+        let prepModelInfo = models.first { $0.providerID == provider.id && $0.modelID == config.modelID }
 
         // Reasoning models (o-series, GPT-5 family) reject `temperature` outright — omit it
         // when the model is flagged.
@@ -1171,8 +1170,12 @@ public final class LLMKitManager {
                     ] as [String: Any]
                 }
             }
-            // Top-level `output_config.effort` — independent of thinking mode.
-            if let effort = config.thinkingEffort {
+            // Top-level `output_config.effort` — GENERAL effort, independent of thinking mode.
+            // Fails open (emitted unless the model is KNOWN not to take it), matching
+            // AnthropicProvider. Kept in step with it deliberately: this parallel path exists for
+            // callers that build their own body, and a gate that differed here would mean the same
+            // configuration produced two different requests.
+            if let effort = config.effort, prepModelInfo?.generalEffort?.isSupported != false {
                 body["output_config"] = ["effort": effort] as [String: Any]
             }
             // Enable prompt caching for all Anthropic requests.
@@ -1195,11 +1198,11 @@ public final class LLMKitManager {
                 outgoingMaxTokens = min(outgoingMaxTokens, context)
             }
             body[tokenLimitKey] = outgoingMaxTokens
-            // OpenAI reasoning_effort — depth control for reasoning models
-            // (o-series, GPT-5 family). Gated on `supportsReasoningEffort`
-            // because non-reasoning models reject the field with HTTP 400.
-            if prepFlags.supportsReasoningEffort,
-               let effort = config.thinkingEffort {
+            // `reasoning_effort` — REASONING effort. Fails closed (emitted only when the model is
+            // KNOWN to accept it) because non-reasoning models reject the field with HTTP 400.
+            // Same asymmetry as OpenAICompatibleProvider, for the same reason.
+            if prepModelInfo?.reasoningEffort?.isSupported == true,
+               let effort = config.reasoningEffort {
                 body["reasoning_effort"] = effort
             }
             // OpenRouter passes top-level cache_control through to Anthropic upstreams.
@@ -1341,6 +1344,11 @@ public final class LLMKitManager {
         // override skips the resolution — the probe factory below uses it to strip the flags
         // whose restrictions the probe is trying to measure.
         let flags = flagsOverride ?? behaviorFlags(forProviderID: modelProvider.id, modelID: config.modelID)
+        // Effort support travels the same catalog path as the behavior flags: resolved per
+        // (provider, model) here, never re-derived inside a provider from its apiType.
+        let catalogModel = models.first { $0.providerID == modelProvider.id && $0.modelID == config.modelID }
+        let generalEffortSupport = catalogModel?.generalEffort
+        let reasoningEffortSupport = catalogModel?.reasoningEffort
 
         let providerID = modelProvider.id
         let providerName = modelProvider.name
@@ -1360,7 +1368,8 @@ public final class LLMKitManager {
                 configuration: config, provider: modelProvider,
                 readAPIKey: readAPIKey, verboseLogging: verbose,
                 session: session,
-                behaviorFlags: flags
+                behaviorFlags: flags,
+                generalEffortSupport: generalEffortSupport
             )
         case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaModel, .alibabaCloud, .openRouter:
             // `parallel_tool_calls: true` is sent by default for every OpenAI-compatible

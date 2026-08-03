@@ -246,12 +246,12 @@ struct ModelProfileTests {
     func effortLevelsOrdered() {
         var p = ModelProfile(providerID: "builtin.anthropic", modelID: "claude-sonnet-4-6")
         // Sonnet 4.6 accepts max but NOT xhigh — the real gap that broke an earlier inference.
-        p.effortLevels = [
+        p.generalEffortLevels = [
             "max": .established(true), "high": .established(true),
             "xhigh": .established(false), "medium": .established(true),
             "low": .established(true), "none": .inconclusive("not tried")
         ]
-        #expect(p.establishedEffortLevels == ["low", "medium", "high", "max"])
+        #expect(p.establishedGeneralEffortLevels == ["low", "medium", "high", "max"])
     }
 
     @Test("Rank table orders max above xhigh, and unknowns sort last")
@@ -268,11 +268,11 @@ struct ModelProfileTests {
         var p = ModelProfile(providerID: "p", modelID: "m",
                              toolCalling: .established(true, "returned identifier"),
                              maxOutputTokens: .established(64000, "endpoint reported"))
-        p.effortLevels = ["high": .established(true)]
+        p.generalEffortLevels = ["high": .established(true)]
         let back = try JSONDecoder().decode(ModelProfile.self, from: JSONEncoder().encode(p))
         #expect(back.toolCalling.value == true)
         #expect(back.maxOutputTokens.value == 64000)
-        #expect(back.effortLevels["high"]?.value == true)
+        #expect(back.generalEffortLevels["high"]?.value == true)
     }
 
     @Test("Coloured shapes decode and carry both signals distinctly")
@@ -386,9 +386,9 @@ struct AnthropicDecodeTests {
     func effortLevelsDecoded() throws {
         let models = try decode()
         let sonnet = try #require(models.first { $0.modelID == "claude-sonnet-5" })
-        #expect(sonnet.validEffortLevels == ["low", "medium", "high", "xhigh", "max"])
+        #expect(sonnet.generalEffort == .levels(["low", "medium", "high", "xhigh", "max"]))
         let haiku = try #require(models.first { $0.modelID == "claude-haiku-4-5-20251001" })
-        #expect(haiku.validEffortLevels.isEmpty)
+        #expect(haiku.generalEffort == .unsupported, "a stated empty ladder is now representable")
     }
 
     /// The derivation that retires hand-listing: adaptive-only (enabled == false) implies BOTH
@@ -410,7 +410,7 @@ struct AnthropicDecodeTests {
         let models = try ModelFetchService().decodeAnthropicModelsForTesting(
             from: Data(bare.utf8), providerID: "p")
         #expect(models.count == 1)
-        #expect(models[0].validEffortLevels.isEmpty)
+        #expect(models[0].generalEffort == nil, "an absent effort block states nothing")
     }
 }
 
@@ -671,8 +671,9 @@ struct OpenRouterDecodeTests {
             "design_arena":[{"arena":"agents","category":"agenticgamedev","elo":1200,"rank":7,"win_rate":47.8}]}}]}
         """#
         let m = try #require(try ModelFetchService().decodeOpenRouterModelsForTesting(from: Data(body.utf8), providerID: "builtin.openrouter").first)
-        // supported_efforts → validEffortLevels, ordered shallow→deep.
-        #expect(m.validEffortLevels == ["low", "medium", "high"])
+        // supported_efforts is nested under `reasoning`, so it is REASONING effort. Ordered shallow→deep.
+        #expect(m.reasoningEffort == .levels(["low", "medium", "high"]))
+        #expect(m.generalEffort == nil)
         #expect(m.modelDescription == "A muse.")
         #expect(m.huggingFaceID == "meta/Muse")
         #expect(m.deprecatedOn == Date(timeIntervalSince1970: 1785196800))  // 2026-07-28 UTC
@@ -1693,23 +1694,23 @@ struct StoreSeededResweepTests {
     @Test("A prior probed finding replaces a decoded effort/context-bound seed value")
     func probedReplacesDecodedNonScalars() {
         var seed = ModelProfile(providerID: "p", modelID: "m")
-        seed.effortLevels["high"] = .decoded(true, "stated in /models")     // decoded presumption
+        seed.generalEffortLevels["high"] = .decoded(true, "stated in /models")     // decoded presumption
         seed.maxOutputBoundedByContext = nil
 
         var prior = ModelProfile(providerID: "p", modelID: "m")
-        prior.effortLevels["high"] = .established(false, "endpoint rejected reasoning_effort=high")  // probed
+        prior.generalEffortLevels["high"] = .established(false, "endpoint rejected reasoning_effort=high")  // probed
         prior.maxOutputBoundedByContext = .established(8192, "bounds by context")                    // probed
         seed.seedProbedFindings(from: prior)
 
-        #expect(seed.effortLevels["high"]?.value == false)          // probed won over decoded
-        #expect(seed.effortLevels["high"]?.source == .probed)
+        #expect(seed.generalEffortLevels["high"]?.value == false)          // probed won over decoded
+        #expect(seed.generalEffortLevels["high"]?.source == .probed)
         #expect(seed.maxOutputBoundedByContext?.value == 8192)
 
         // But an already-PROBED seed value is never clobbered.
         var probedSeed = ModelProfile(providerID: "p", modelID: "m")
-        probedSeed.effortLevels["high"] = .established(true, "freshly probed accepted")
+        probedSeed.generalEffortLevels["high"] = .established(true, "freshly probed accepted")
         probedSeed.seedProbedFindings(from: prior)
-        #expect(probedSeed.effortLevels["high"]?.evidence == "freshly probed accepted")
+        #expect(probedSeed.generalEffortLevels["high"]?.evidence == "freshly probed accepted")
     }
 
     @Test("Through the sweep: a fully-seeded profile makes zero calls")

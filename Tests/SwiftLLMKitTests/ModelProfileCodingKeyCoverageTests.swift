@@ -39,7 +39,8 @@ struct ModelProfileCodingKeyCoverageTests {
             maxOutputTokens: .established(64_000, "endpoint said so"),
             maxOutputBoundedByContext: .established(8_192, "context-bound"),
             trailingSystemMessage: .established(true, "echoed the nonce"),
-            effortLevels: ["low": .established(true, "accepted")],
+            generalEffortLevels: ["low": .established(true, "accepted")],
+            reasoningEffortLevels: ["high": .established(false, "rejected")],
             callCount: 12,
             duration: 34.5
         )
@@ -105,7 +106,8 @@ struct ModelProfileCodingKeyCoverageTests {
           "acceptsTemperature": {"status": "notAttempted"},
           "maxOutputTokens": {"status": "notAttempted"},
           "trailingSystemTurn": {"status": "established", "value": true, "evidence": "echoed the code carried by the trailing system turn", "source": "probed", "duration": 1.73},
-          "effortLevels": {},
+          "generalEffortLevels": {},
+          "reasoningEffortLevels": {},
           "callCount": 1,
           "duration": 1.73
         }

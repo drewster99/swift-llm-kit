@@ -11,7 +11,6 @@ public enum BehaviorFlag: String, CaseIterable, Sendable, Hashable {
     case replayReasoningContent
     case supportsDeveloperRole
     case requiresAdaptiveThinking
-    case supportsReasoningEffort
     case mustNeverSendTemperatureParam
     case supportsTrailingSystemMessage
 
@@ -24,7 +23,6 @@ public enum BehaviorFlag: String, CaseIterable, Sendable, Hashable {
         case .replayReasoningContent:        return "replay reasoning"
         case .supportsDeveloperRole:         return "developer role"
         case .requiresAdaptiveThinking:      return "adaptive thinking"
-        case .supportsReasoningEffort:       return "reasoning_effort"
         case .mustNeverSendTemperatureParam: return "no temperature"
         case .supportsTrailingSystemMessage: return "trailing system"
         }
@@ -39,7 +37,6 @@ public enum BehaviorFlag: String, CaseIterable, Sendable, Hashable {
         case .replayReasoningContent:        return "Replay reasoning content"
         case .supportsDeveloperRole:         return "Supports `developer` role"
         case .requiresAdaptiveThinking:      return "Requires adaptive thinking"
-        case .supportsReasoningEffort:       return "Supports `reasoning_effort`"
         case .mustNeverSendTemperatureParam: return "Never send temperature"
         case .supportsTrailingSystemMessage: return "Supports trailing system message"
         }
@@ -60,7 +57,6 @@ public enum BehaviorFlag: String, CaseIterable, Sendable, Hashable {
             return "Model accepts OpenAI's `developer` message role (o-series / GPT-5). When off, `developer` messages are downgraded to `system` — the safe default for non-OpenAI backends."
         case .requiresAdaptiveThinking:
             return "Anthropic models that require `thinking: {type: \"adaptive\"}` and reject the legacy manual budget format with HTTP 400 (Claude Opus 4.7 / 4.8). When on, the configured thinking budget is ignored."
-        case .supportsReasoningEffort:
             return "OpenAI-compatible models that accept a top-level `reasoning_effort` field (o-series, GPT-5). When on and an effort level is set, it's emitted; non-reasoning models 400 on the field, so it's gated."
         case .mustNeverSendTemperatureParam:
             return "Model rejects the `temperature` parameter entirely — any value (even 0) fails with HTTP 400 (OpenAI o-series / GPT-5 reasoning family). When on, temperature is omitted from every request."
@@ -162,8 +158,6 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
     /// GPT-3.5-turbo, etc.) reject the field with HTTP 400, so emission
     /// is gated. When true AND `ModelConfiguration.thinkingEffort` is
     /// set, `OpenAICompatibleProvider` emits `reasoning_effort: <value>`
-    /// at the top level of the request body. Default false.
-    public var supportsReasoningEffort: Bool = false
 
     /// Models that reject the `temperature` request parameter entirely — sending ANY value
     /// (including 0) fails with HTTP 400. OpenAI's o-series (o1, o3, o4-mini) and the GPT-5
@@ -197,7 +191,6 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         replayReasoningContent: Bool = false,
         supportsDeveloperRole: Bool = false,
         requiresAdaptiveThinking: Bool = false,
-        supportsReasoningEffort: Bool = false,
         mustNeverSendTemperatureParam: Bool = false,
         supportsTrailingSystemMessage: Bool = false,
         extras: [String: String] = [:]
@@ -208,7 +201,6 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         self.replayReasoningContent = replayReasoningContent
         self.supportsDeveloperRole = supportsDeveloperRole
         self.requiresAdaptiveThinking = requiresAdaptiveThinking
-        self.supportsReasoningEffort = supportsReasoningEffort
         self.mustNeverSendTemperatureParam = mustNeverSendTemperatureParam
         self.supportsTrailingSystemMessage = supportsTrailingSystemMessage
         self.extras = extras
@@ -225,7 +217,6 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
             case .replayReasoningContent:        return replayReasoningContent
             case .supportsDeveloperRole:         return supportsDeveloperRole
             case .requiresAdaptiveThinking:      return requiresAdaptiveThinking
-            case .supportsReasoningEffort:       return supportsReasoningEffort
             case .mustNeverSendTemperatureParam: return mustNeverSendTemperatureParam
             case .supportsTrailingSystemMessage: return supportsTrailingSystemMessage
             }
@@ -238,7 +229,6 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
             case .replayReasoningContent:        replayReasoningContent = newValue
             case .supportsDeveloperRole:         supportsDeveloperRole = newValue
             case .requiresAdaptiveThinking:      requiresAdaptiveThinking = newValue
-            case .supportsReasoningEffort:       supportsReasoningEffort = newValue
             case .mustNeverSendTemperatureParam: mustNeverSendTemperatureParam = newValue
             case .supportsTrailingSystemMessage: supportsTrailingSystemMessage = newValue
             }
@@ -265,7 +255,7 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
     // MARK: - Codable (backward-compatible)
 
     private enum CodingKeys: String, CodingKey {
-        case glmTemplateSalvage, useMaxCompletionTokens, disableParallelToolCalls, replayReasoningContent, supportsDeveloperRole, requiresAdaptiveThinking, supportsReasoningEffort, mustNeverSendTemperatureParam, supportsTrailingSystemMessage, extras
+        case glmTemplateSalvage, useMaxCompletionTokens, disableParallelToolCalls, replayReasoningContent, supportsDeveloperRole, requiresAdaptiveThinking, mustNeverSendTemperatureParam, supportsTrailingSystemMessage, extras
     }
 
     public init(from decoder: Decoder) throws {
@@ -276,7 +266,6 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         replayReasoningContent = try c.decodeIfPresent(Bool.self, forKey: .replayReasoningContent) ?? false
         supportsDeveloperRole = try c.decodeIfPresent(Bool.self, forKey: .supportsDeveloperRole) ?? false
         requiresAdaptiveThinking = try c.decodeIfPresent(Bool.self, forKey: .requiresAdaptiveThinking) ?? false
-        supportsReasoningEffort = try c.decodeIfPresent(Bool.self, forKey: .supportsReasoningEffort) ?? false
         mustNeverSendTemperatureParam = try c.decodeIfPresent(Bool.self, forKey: .mustNeverSendTemperatureParam) ?? false
         supportsTrailingSystemMessage = try c.decodeIfPresent(Bool.self, forKey: .supportsTrailingSystemMessage) ?? false
         extras = try c.decodeIfPresent([String: String].self, forKey: .extras) ?? [:]
@@ -292,7 +281,6 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
         if replayReasoningContent { try c.encode(replayReasoningContent, forKey: .replayReasoningContent) }
         if supportsDeveloperRole { try c.encode(supportsDeveloperRole, forKey: .supportsDeveloperRole) }
         if requiresAdaptiveThinking { try c.encode(requiresAdaptiveThinking, forKey: .requiresAdaptiveThinking) }
-        if supportsReasoningEffort { try c.encode(supportsReasoningEffort, forKey: .supportsReasoningEffort) }
         if mustNeverSendTemperatureParam { try c.encode(mustNeverSendTemperatureParam, forKey: .mustNeverSendTemperatureParam) }
         if supportsTrailingSystemMessage { try c.encode(supportsTrailingSystemMessage, forKey: .supportsTrailingSystemMessage) }
         if !extras.isEmpty { try c.encode(extras, forKey: .extras) }
@@ -314,7 +302,6 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
     public var replayReasoningContent: Bool?
     public var supportsDeveloperRole: Bool?
     public var requiresAdaptiveThinking: Bool?
-    public var supportsReasoningEffort: Bool?
     public var mustNeverSendTemperatureParam: Bool?
     public var supportsTrailingSystemMessage: Bool?
     public var extras: [String: String]?
@@ -326,7 +313,6 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
         replayReasoningContent: Bool? = nil,
         supportsDeveloperRole: Bool? = nil,
         requiresAdaptiveThinking: Bool? = nil,
-        supportsReasoningEffort: Bool? = nil,
         mustNeverSendTemperatureParam: Bool? = nil,
         supportsTrailingSystemMessage: Bool? = nil,
         extras: [String: String]? = nil
@@ -337,7 +323,6 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
         self.replayReasoningContent = replayReasoningContent
         self.supportsDeveloperRole = supportsDeveloperRole
         self.requiresAdaptiveThinking = requiresAdaptiveThinking
-        self.supportsReasoningEffort = supportsReasoningEffort
         self.mustNeverSendTemperatureParam = mustNeverSendTemperatureParam
         self.supportsTrailingSystemMessage = supportsTrailingSystemMessage
         self.extras = extras
@@ -353,7 +338,6 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
             case .replayReasoningContent:        return replayReasoningContent
             case .supportsDeveloperRole:         return supportsDeveloperRole
             case .requiresAdaptiveThinking:      return requiresAdaptiveThinking
-            case .supportsReasoningEffort:       return supportsReasoningEffort
             case .mustNeverSendTemperatureParam: return mustNeverSendTemperatureParam
             case .supportsTrailingSystemMessage: return supportsTrailingSystemMessage
             }
@@ -366,7 +350,6 @@ public struct BehaviorFlagsOverride: Codable, Sendable, Equatable {
             case .replayReasoningContent:        replayReasoningContent = newValue
             case .supportsDeveloperRole:         supportsDeveloperRole = newValue
             case .requiresAdaptiveThinking:      requiresAdaptiveThinking = newValue
-            case .supportsReasoningEffort:       supportsReasoningEffort = newValue
             case .mustNeverSendTemperatureParam: mustNeverSendTemperatureParam = newValue
             case .supportsTrailingSystemMessage: supportsTrailingSystemMessage = newValue
             }

@@ -102,8 +102,16 @@ public struct ModelProfile: Sendable, Codable, Equatable {
     /// already on disk cost real API calls to obtain.
     public var trailingSystemMessage: ProbeFinding<Bool>?
 
-    /// Per named effort level: accepted or rejected. Keys are the levels attempted.
-    public var effortLevels: [String: ProbeFinding<Bool>]
+    /// Per named GENERAL effort level (Anthropic `output_config.effort`): accepted or rejected.
+    /// Keys are the levels attempted.
+    ///
+    /// Split from a single `effortLevels` dict because the prober measures whichever parameter the
+    /// provider actually sends — `output_config.effort` on Anthropic, `reasoning_effort`
+    /// elsewhere — so one dict silently held two different measurements depending on the provider.
+    /// The writer knows which parameter it sent, so it picks the dict; nothing has to re-derive it.
+    public var generalEffortLevels: [String: ProbeFinding<Bool>]
+    /// Per named REASONING effort level (`reasoning_effort`): accepted or rejected.
+    public var reasoningEffortLevels: [String: ProbeFinding<Bool>]
 
     /// Total wall clock and call count, so the cost of a full run is visible rather than guessed.
     public var callCount: Int
@@ -143,7 +151,8 @@ public struct ModelProfile: Sendable, Codable, Equatable {
         case maxOutputTokens
         case maxOutputBoundedByContext
         case trailingSystemMessage = "trailingSystemTurn"
-        case effortLevels
+        case generalEffortLevels
+        case reasoningEffortLevels
         case callCount
         case duration
     }
@@ -172,7 +181,8 @@ public struct ModelProfile: Sendable, Codable, Equatable {
         maxOutputTokens: ProbeFinding<Int> = .notAttempted,
         maxOutputBoundedByContext: ProbeFinding<Int>? = nil,
         trailingSystemMessage: ProbeFinding<Bool>? = nil,
-        effortLevels: [String: ProbeFinding<Bool>] = [:],
+        generalEffortLevels: [String: ProbeFinding<Bool>] = [:],
+        reasoningEffortLevels: [String: ProbeFinding<Bool>] = [:],
         callCount: Int = 0,
         duration: TimeInterval = 0
     ) {
@@ -199,15 +209,25 @@ public struct ModelProfile: Sendable, Codable, Equatable {
         self.maxOutputTokens = maxOutputTokens
         self.maxOutputBoundedByContext = maxOutputBoundedByContext
         self.trailingSystemMessage = trailingSystemMessage
-        self.effortLevels = effortLevels
+        self.generalEffortLevels = generalEffortLevels
+        self.reasoningEffortLevels = reasoningEffortLevels
         self.callCount = callCount
         self.duration = duration
     }
 
     /// The effort levels this model accepted, ordered shallow → deep. Levels we never tried, or
     /// tried inconclusively, are absent rather than assumed unsupported.
-    public var establishedEffortLevels: [String] {
-        effortLevels
+    public var establishedGeneralEffortLevels: [String] {
+        Self.established(in: generalEffortLevels)
+    }
+
+    /// Reasoning-effort levels with an established `true`. Same rule as the general twin.
+    public var establishedReasoningEffortLevels: [String] {
+        Self.established(in: reasoningEffortLevels)
+    }
+
+    private static func established(in levels: [String: ProbeFinding<Bool>]) -> [String] {
+        levels
             .filter { $0.value.value == true }
             .map(\.key)
             .sorted { EffortRank.rank(of: $0) < EffortRank.rank(of: $1) }

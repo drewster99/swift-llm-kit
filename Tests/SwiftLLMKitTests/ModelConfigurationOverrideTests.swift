@@ -17,7 +17,7 @@ struct ModelConfigurationOverrideTests {
             maxInputTokens: maxInput, maxOutputTokens: maxOutput,
             maxTemperature: maxTemp,
             samplingDefaults: temp == nil ? nil : SamplingDefaults(temperature: temp)
-        ).with { $0.validEffortLevels = efforts }
+        ).with { $0.generalEffort = efforts.isEmpty ? nil : EffortSupport(levels: efforts) }
     }
 
     // MARK: resolve
@@ -86,13 +86,13 @@ struct ModelConfigurationOverrideTests {
     func temperatureAndEffortWarnings() {
         let m = model(maxTemp: 1.0, efforts: ["low", "medium", "high"])
         #expect(ModelConfigurationOverride(temperature: 1.5).warnings(against: m).map(\.field) == [.temperature])
-        #expect(ModelConfigurationOverride(thinkingEffort: "ultra").warnings(against: m).map(\.field) == [.thinkingEffort])
-        #expect(ModelConfigurationOverride(thinkingEffort: "high").warnings(against: m).isEmpty)
+        #expect(ModelConfigurationOverride(effort: "ultra").warnings(against: m).map(\.field) == [.effort])
+        #expect(ModelConfigurationOverride(effort: "high").warnings(against: m).isEmpty)
     }
 
     @Test("Effort warning is suppressed when the model reports no effort levels")
     func noEffortLevelsNoWarning() {
-        #expect(ModelConfigurationOverride(thinkingEffort: "high").warnings(against: model(efforts: [])).isEmpty)
+        #expect(ModelConfigurationOverride(effort: "high").warnings(against: model(efforts: [])).isEmpty)
     }
 
     // MARK: isEmpty + Codable
@@ -110,7 +110,7 @@ struct ModelConfigurationOverrideTests {
         let emptyObj = try #require(try JSONSerialization.jsonObject(with: emptyData) as? [String: Any])
         #expect(emptyObj.isEmpty)
 
-        let original = ModelConfigurationOverride(temperature: 0.3, maxOutputTokens: 16000, thinkingEffort: "max")
+        let original = ModelConfigurationOverride(temperature: 0.3, maxOutputTokens: 16000, effort: "max")
         let restored = try JSONDecoder().decode(ModelConfigurationOverride.self, from: JSONEncoder().encode(original))
         #expect(restored == original)
     }

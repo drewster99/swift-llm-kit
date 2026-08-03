@@ -214,11 +214,13 @@ public struct ModelFetchService: Sendable {
                     // The payload's own per-model level list, ordered by our rank table (the
                     // payload is a JSON object, so it carries no order itself). An effort block
                     // with supported == false is a STATEMENT: "no effort levels" → stated [].
+                    // GENERAL effort: Anthropic sends this as top-level `output_config.effort`,
+                    // which applies even with thinking off. `supported == false` is a STATEMENT,
+                    // and now a representable one.
                     if let effort = capabilities.effort, let supported = effort.supported {
-                        facts.validEffortLevels = supported
-                            ? effort.levels.filter { $0.value }.map(\.key)
-                                .sorted { EffortRank.rank(of: $0) < EffortRank.rank(of: $1) }
-                            : []
+                        facts.generalEffort = supported
+                            ? EffortSupport(levels: effort.levels.filter { $0.value }.map(\.key))
+                            : .unsupported
                     }
 
                     // DERIVED, not hand-listed: a thinking model whose budget_tokens form is
@@ -280,21 +282,14 @@ public struct ModelFetchService: Sendable {
                 // yet certainly call tools), and no behavior flag means "thinking is mandatory".
                 // Under authoritative-wins a wrong statement here would mask probed truth
                 // permanently — the same reason the Anthropic decoder never writes tool use.
+                // REASONING effort. `support: true` with no ladder is not silence — it is exactly
+                // `supportedLevelsUnknown`: the parameter works, the values are unknown. That
+                // state had no representation before and was the reason a ladder and a flag had to
+                // be carried separately.
                 if let efforts = model.reasoningEfforts, let supported = efforts.support {
-                    // This flag gates whether `reasoning_effort` is sent at all, so the vendor
-                    // saying no is as actionable as saying yes.
-                    facts.behaviorFlags.supportsReasoningEffort = supported
-                    if supported {
-                        // Only a non-empty ladder is a statement about WHICH levels. `support:
-                        // true` with no list said nothing, and `[]` is documented to mean "no
-                        // effort levels" — recording that here would contradict the same payload.
-                        if let levels = efforts.validEfforts, !levels.isEmpty {
-                            facts.validEffortLevels = levels
-                                .sorted { EffortRank.rank(of: $0) < EffortRank.rank(of: $1) }
-                        }
-                    } else {
-                        facts.validEffortLevels = []
-                    }
+                    facts.reasoningEffort = supported
+                        ? (efforts.validEfforts.map { EffortSupport(levels: $0) } ?? .supportedLevelsUnknown)
+                        : .unsupported
                 }
                 return DecodedModelFacts(modelID: model.id, facts: facts)
             }
@@ -450,7 +445,9 @@ public struct ModelFetchService: Sendable {
                 // one non-Anthropic provider that does. An absent reasoning block says nothing (nil),
                 // it is NOT a statement of "no efforts".
                 if let efforts = model.reasoning?.supportedEfforts {
-                    facts.validEffortLevels = efforts.sorted { EffortRank.rank(of: $0) < EffortRank.rank(of: $1) }
+                    // Nested under `reasoning`, so it describes REASONING effort, not the general
+                    // construct — the distinction the single shared field used to erase.
+                    facts.reasoningEffort = EffortSupport(levels: efforts)
                 }
 
                 let dp = model.defaultParameters

@@ -21,7 +21,10 @@ public struct ModelConfigurationOverride: Codable, Sendable, Equatable {
     /// Extended-thinking token budget (Anthropic / Alibaba). `nil` inherits (off / model default).
     public var thinkingBudget: Int?
     /// Adaptive-thinking effort hint. `nil` inherits the model/provider default.
-    public var thinkingEffort: String?
+    /// GENERAL effort override (Anthropic `output_config.effort`).
+    public var effort: String?
+    /// REASONING effort override (`reasoning_effort`).
+    public var reasoningEffort: String?
     /// 1-hour prompt-cache TTL (Anthropic). `nil` inherits the default (false).
     public var extendedCacheTTL: Bool?
     /// Whether to stream. `nil` inherits the default (true).
@@ -34,7 +37,8 @@ public struct ModelConfigurationOverride: Codable, Sendable, Equatable {
         maxOutputTokens: Int? = nil,
         maxContextTokens: Int? = nil,
         thinkingBudget: Int? = nil,
-        thinkingEffort: String? = nil,
+        effort: String? = nil,
+        reasoningEffort: String? = nil,
         extendedCacheTTL: Bool? = nil,
         streaming: Bool? = nil,
         extraJSONOverrides: [String: AnyCodable]? = nil
@@ -43,7 +47,8 @@ public struct ModelConfigurationOverride: Codable, Sendable, Equatable {
         self.maxOutputTokens = maxOutputTokens
         self.maxContextTokens = maxContextTokens
         self.thinkingBudget = thinkingBudget
-        self.thinkingEffort = thinkingEffort
+        self.effort = effort
+        self.reasoningEffort = reasoningEffort
         self.extendedCacheTTL = extendedCacheTTL
         self.streaming = streaming
         self.extraJSONOverrides = extraJSONOverrides
@@ -53,8 +58,9 @@ public struct ModelConfigurationOverride: Codable, Sendable, Equatable {
     /// override should not be persisted (it is indistinguishable from having no entry at all).
     public var isEmpty: Bool {
         temperature == nil && maxOutputTokens == nil && maxContextTokens == nil
-            && thinkingBudget == nil && thinkingEffort == nil && extendedCacheTTL == nil
-            && streaming == nil && (extraJSONOverrides?.isEmpty ?? true)
+            && thinkingBudget == nil && effort == nil && reasoningEffort == nil
+            && extendedCacheTTL == nil && streaming == nil
+            && (extraJSONOverrides?.isEmpty ?? true)
     }
 
     /// The effective ``ModelConfiguration`` = the model's resolved defaults with this delta overlaid.
@@ -73,7 +79,8 @@ public struct ModelConfigurationOverride: Codable, Sendable, Equatable {
             maxOutputTokens: maxOutputTokens ?? modelInfo.maxOutputTokens ?? 4096,
             maxContextTokens: maxContextTokens ?? modelInfo.maxInputTokens ?? 128_000,
             thinkingBudget: thinkingBudget,
-            thinkingEffort: thinkingEffort,
+            effort: effort,
+            reasoningEffort: reasoningEffort,
             extendedCacheTTL: extendedCacheTTL ?? false,
             streaming: streaming ?? true,
             extraJSONOverrides: extraJSONOverrides
@@ -98,10 +105,17 @@ public struct ModelConfigurationOverride: Codable, Sendable, Equatable {
             out.append(OverrideWarning(field: .temperature,
                 message: "Above the model's reported maximum temperature (\(maxT.formatted()))."))
         }
-        if let v = thinkingEffort, !modelInfo.validEffortLevels.isEmpty,
-           !modelInfo.validEffortLevels.contains(v) {
-            out.append(OverrideWarning(field: .thinkingEffort,
-                message: "Not among the model's reported effort levels (\(modelInfo.validEffortLevels.joined(separator: ", ")))."))
+        // Per construct, against that construct's own record. `rejects` fails safe, so an
+        // unknown ladder never produces a warning.
+        let effortChecks: [(OverrideWarning.Field, String?, EffortSupport?)] = [
+            (.effort, effort, modelInfo.generalEffort),
+            (.reasoningEffort, reasoningEffort, modelInfo.reasoningEffort)
+        ]
+        for (field, value, support) in effortChecks {
+            guard let value, let support, support.rejects(value) else { continue }
+            let detail = support.knownLevels.map { "reported levels (\($0.joined(separator: ", ")))" }
+                ?? "this parameter, which the model does not support"
+            out.append(OverrideWarning(field: field, message: "Not among the model's \(detail)."))
         }
         return out
     }
@@ -110,7 +124,7 @@ public struct ModelConfigurationOverride: Codable, Sendable, Equatable {
 /// A non-blocking advisory that one overridden field is outside the model's known/expected range.
 public struct OverrideWarning: Sendable, Equatable, Identifiable {
     public enum Field: String, Sendable, CaseIterable {
-        case temperature, maxOutputTokens, maxContextTokens, thinkingEffort
+        case temperature, maxOutputTokens, maxContextTokens, effort, reasoningEffort
     }
     public let field: Field
     public let message: String

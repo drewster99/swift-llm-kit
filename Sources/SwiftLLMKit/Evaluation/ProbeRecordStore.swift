@@ -58,7 +58,10 @@ public struct ProbeRecordKey: Codable, Sendable, Equatable, Hashable {
 /// at the store boundary.)
 public struct ProbeRecord: Codable, Sendable, Equatable {
     /// Bump when the record's serialized shape changes incompatibly.
-    public static let currentSchemaVersion = 1
+    /// v2: `effortLevels` split into `generalEffortLevels` + `reasoningEffortLevels`. The shapes
+    /// are incompatible — the old key is gone and both new ones are required — so records must be
+    /// migrated (scripts/migrate_effort_split.py), not merely re-read.
+    public static let currentSchemaVersion = 2
 
     public var schemaVersion: Int
     /// The prober that produced this run — findings from an older prober are suspect once the
@@ -238,11 +241,15 @@ extension ModelProfile {
             let alreadyProbed = current?.status == .established && current?.source == .probed
             if !alreadyProbed { trailingSystemMessage = trailing }
         }
-        for (level, finding) in prior.effortLevels
-        where finding.status == .established && finding.source == .probed {
-            let current = effortLevels[level]
-            let alreadyProbed = current?.status == .established && current?.source == .probed
-            if !alreadyProbed { effortLevels[level] = finding }
+        // Both effort ladders carry forward by the same rule. Written over a keypath rather than
+        // duplicated so a third construct can't be added to one and forgotten in the other.
+        for ladder in [\ModelProfile.generalEffortLevels, \ModelProfile.reasoningEffortLevels] {
+            for (level, finding) in prior[keyPath: ladder]
+            where finding.status == .established && finding.source == .probed {
+                let current = self[keyPath: ladder][level]
+                let alreadyProbed = current?.status == .established && current?.source == .probed
+                if !alreadyProbed { self[keyPath: ladder][level] = finding }
+            }
         }
     }
 
@@ -262,7 +269,8 @@ extension ModelProfile {
             || probed(maxOutputTokens) || probed(maxContextTokens)
             || (maxOutputBoundedByContext.map(probed) ?? false)
             || (trailingSystemMessage.map(probed) ?? false)
-            || effortLevels.values.contains { probed($0) }
+            || generalEffortLevels.values.contains { probed($0) }
+            || reasoningEffortLevels.values.contains { probed($0) }
     }
 
     /// The vendor's own /models payload states this is not a chat model (chat decoded false) — a
@@ -326,15 +334,26 @@ extension ModelProfile {
             facts.isAccessDenied = probed(isAccessDenied)
             // Complete-ladder gate: every known level must have an established probed answer
             // (accepted or rejected) before the set of accepted levels can claim to BE the ladder.
-            let established = effortLevels.filter { $0.value.status == .established && $0.value.source == .probed }
-            if Set(established.keys).isSuperset(of: EffortRank.table.keys) {
-                facts.validEffortLevels = established
-                    .filter { $0.value.value == true }
-                    .map(\.key)
-                    .sorted { EffortRank.rank(of: $0) < EffortRank.rank(of: $1) }
-            }
+            facts.generalEffort = Self.projectedEffort(from: generalEffortLevels)
+            facts.reasoningEffort = Self.projectedEffort(from: reasoningEffortLevels)
         }
         return facts
+    }
+
+    /// Projects one effort dict into an ``EffortSupport``, or `nil` when the run cannot claim to
+    /// have measured the ladder.
+    ///
+    /// COMPLETE-LADDER GATE: every level in ``EffortRank/table`` must carry an established, probed
+    /// answer before the accepted set can claim to BE the ladder. A partial run understates it, and
+    /// an understated ladder is worse than silence — it would reject levels the model accepts.
+    ///
+    /// A complete run where NOTHING was accepted is a real finding, not an absence: it projects
+    /// ``EffortSupport/unsupported`` (via `init(levels:)` normalizing the empty set), which is
+    /// precisely the evidence the previous empty-array representation threw away.
+    private static func projectedEffort(from levels: [String: ProbeFinding<Bool>]) -> EffortSupport? {
+        let established = levels.filter { $0.value.status == .established && $0.value.source == .probed }
+        guard Set(established.keys).isSuperset(of: EffortRank.table.keys) else { return nil }
+        return EffortSupport(levels: established.filter { $0.value.value == true }.map(\.key))
     }
 }
 
@@ -349,7 +368,8 @@ extension ProbeRecord {
     public var strippedForExport: ProbeRecord {
         var stripped = self
         stripped.profile.isAccessDenied = .notAttempted
-        stripped.profile.effortLevels = [:]
+        stripped.profile.generalEffortLevels = [:]
+        stripped.profile.reasoningEffortLevels = [:]
         stripped.profile.stripEvidenceTraceRefs()
         return stripped
     }
@@ -371,9 +391,12 @@ extension ModelProfile {
         strip(&isAvailable); strip(&isAccessDenied)
         if var bound = maxOutputBoundedByContext { strip(&bound); maxOutputBoundedByContext = bound }
         if var trailing = trailingSystemMessage { strip(&trailing); trailingSystemMessage = trailing }
-        effortLevels = effortLevels.mapValues {
-            var f = $0; f.evidence = ModelProfile.strippingTraceRefs(f.evidence); return f
+        func stripLadder(_ ladder: inout [String: ProbeFinding<Bool>]) {
+            ladder = ladder.mapValues {
+                var f = $0; f.evidence = ModelProfile.strippingTraceRefs(f.evidence); return f
+            }
         }
+        stripLadder(&generalEffortLevels); stripLadder(&reasoningEffortLevels)
     }
 
     /// Strips ` (ref: <uuid>)` trace-ID suffixes from a provider error-evidence string.

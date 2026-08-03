@@ -40,30 +40,31 @@ struct ProbeProjectionTests {
         profile.isAvailable = .established(false, "404 no longer available")
         profile.toolResultRoundTrip = .established(false, "no identifier")
         profile.isAccessDenied = .established(true, "Model.AccessDenied")
-        profile.effortLevels = ["high": .established(true, "accepted")]   // PARTIAL ladder
+        profile.reasoningEffortLevels = ["high": .established(true, "accepted")]   // PARTIAL ladder
 
         // Model-scoped: always. Account-scoped: excluded without the gate.
         let modelScoped = profile.asEmpiricalFacts(includeAccountScoped: false)
         #expect(modelScoped.isAvailable == false)
         #expect(modelScoped.capabilities.toolResultRoundTrip == false)
         #expect(modelScoped.isAccessDenied == nil)
-        #expect(modelScoped.validEffortLevels == nil)
+        #expect(modelScoped.reasoningEffort == nil)
 
         // Account-scoped gate on: isAccessDenied projects; the PARTIAL effort ladder still
-        // must not (it would understate validEffortLevels).
+        // must not (it would understate the ladder).
         let accountScoped = profile.asEmpiricalFacts(includeAccountScoped: true)
         #expect(accountScoped.isAccessDenied == true)
-        #expect(accountScoped.validEffortLevels == nil, "a partial ladder must never project")
+        #expect(accountScoped.reasoningEffort == nil, "a partial ladder must never project")
     }
 
     @Test("Effort levels project only from a COMPLETE-ladder probe")
     func completeLadderProjection() {
         var profile = ModelProfile(providerID: "p", modelID: "m")
         for level in EffortRank.allKnown {
-            profile.effortLevels[level] = .established(["low", "medium", "high"].contains(level), "probed")
+            profile.reasoningEffortLevels[level] = .established(["low", "medium", "high"].contains(level), "probed")
         }
         let facts = profile.asEmpiricalFacts(includeAccountScoped: true)
-        #expect(facts.validEffortLevels == ["low", "medium", "high"])
+        #expect(facts.reasoningEffort == .levels(["low", "medium", "high"]))
+        #expect(facts.generalEffort == nil, "the untouched construct stays silent")
     }
 
     @Test("The completeness gate: decoded-only or inconclusive-only profiles are not persistable")
@@ -268,7 +269,7 @@ struct ProbeRecordExportTests {
         var profile = ModelProfile(providerID: "builtin.alibaba", modelID: "qwen-max")
         profile.toolCalling = .established(true, "round trip")
         profile.isAccessDenied = .established(true, "Model.AccessDenied — THIS account's key")
-        profile.effortLevels = ["high": .established(true, "tier-gated acceptance")]
+        profile.reasoningEffortLevels = ["high": .established(true, "tier-gated acceptance")]
         let record = ProbeRecord(
             proberVersion: 1, recordedAt: Date(timeIntervalSince1970: 0),
             key: ProbeRecordKey(apiType: "alibabaCloud", host: "dashscope.aliyuncs.com", modelID: "qwen-max"),
@@ -276,7 +277,8 @@ struct ProbeRecordExportTests {
         )
         let exported = record.strippedForExport
         #expect(exported.profile.isAccessDenied.status == .notAttempted)
-        #expect(exported.profile.effortLevels.isEmpty)
+        #expect(exported.profile.reasoningEffortLevels.isEmpty)
+        #expect(exported.profile.generalEffortLevels.isEmpty)
         #expect(exported.profile.toolCalling.value == true, "model-scoped evidence survives export")
         // The original is untouched (value semantics).
         #expect(record.profile.isAccessDenied.value == true)
@@ -357,7 +359,8 @@ struct FactsSeedTests {
         // Rewrite the record claiming a future schema; it must be skipped by both readers.
         let url = store.directory.appendingPathComponent(key.fileName)
         var text = try String(contentsOf: url, encoding: .utf8)
-        text = text.replacingOccurrences(of: "\"schemaVersion\" : 1", with: "\"schemaVersion\" : 99")
+        text = text.replacingOccurrences(
+            of: "\"schemaVersion\" : \(ProbeRecord.currentSchemaVersion)", with: "\"schemaVersion\" : 99")
         try text.write(to: url, atomically: true, encoding: .utf8)
         #expect(store.record(forKey: key) == nil)
         #expect(store.loadAll().isEmpty)

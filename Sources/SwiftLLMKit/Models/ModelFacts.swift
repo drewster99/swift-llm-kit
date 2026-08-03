@@ -32,8 +32,12 @@ public struct ModelFacts: Codable, Sendable, Equatable {
     public var pricing: ModelPricing?
     // Chat support is now `capabilities.chat` — a capability like every other, no standalone field.
     public var mode: String?
-    /// `nil` = source said nothing about effort. An explicit `[]` is a statement: "no effort levels".
-    public var validEffortLevels: [String]?
+    /// General effort — Anthropic's `output_config.effort`, which applies even when reasoning is
+    /// disabled. `nil` = this source said nothing. See ``EffortSupport``.
+    public var generalEffort: EffortSupport?
+    /// Reasoning effort — OpenAI's / Moonshot's `reasoning_effort`, which exists only for reasoning
+    /// models. `nil` = this source said nothing. See ``EffortSupport``.
+    public var reasoningEffort: EffortSupport?
     /// Per-flag tri-state, same container reasoning as `capabilities`.
     public var behaviorFlags: BehaviorFlagsOverride
     public var deprecatedOn: Date?
@@ -97,7 +101,8 @@ public struct ModelFacts: Codable, Sendable, Equatable {
             quantizationLabel: quantizationLabel,
             pricing: pricing,
             mode: mode,
-            validEffortLevels: validEffortLevels ?? [],
+            generalEffort: generalEffort,
+            reasoningEffort: reasoningEffort,
             behaviorFlags: flags,
             deprecatedOn: deprecatedOn,
             deprecationReplacement: deprecationReplacement,
@@ -140,6 +145,8 @@ extension ModelMetadataOverride {
         if let capabilities { facts.capabilities = capabilities }   // chat rides inside capabilities
         facts.pricing = pricing
         if let behaviorFlags { facts.behaviorFlags = behaviorFlags }
+        facts.generalEffort = generalEffort
+        facts.reasoningEffort = reasoningEffort
         facts.hidden = hidden
         facts.isAvailable = isAvailable
         facts.isAccessDenied = isAccessDenied

@@ -12,7 +12,7 @@ import Testing
 /// `BehaviorFlags.requiresAdaptiveThinking` flag (auto-set in the bundled
 /// metadata registry for known model IDs) and emits the correct wire shape.
 ///
-/// New `ModelConfiguration.thinkingEffort: String?` field gives users
+/// New `ModelConfiguration.effort: String?` field gives users
 /// effort control. Emitted as top-level `output_config.effort` whenever
 /// non-nil — independent of the thinking mode.
 @Suite("0.0.27: adaptive thinking + output_config.effort")
@@ -22,7 +22,7 @@ struct V0_0_27_Tests {
 
     private func anthropic(
         thinkingBudget: Int? = nil,
-        thinkingEffort: String? = nil,
+        effort: String? = nil,
         flags: BehaviorFlags = BehaviorFlags()
     ) throws -> AnthropicProvider {
         try AnthropicProvider(
@@ -31,7 +31,7 @@ struct V0_0_27_Tests {
                 providerID: "p",
                 modelID: "m",
                 thinkingBudget: thinkingBudget,
-                thinkingEffort: thinkingEffort
+                effort: effort
             ),
             provider: ModelProvider(
                 id: "p", name: "p", apiType: .anthropic,
@@ -95,17 +95,17 @@ struct V0_0_27_Tests {
 
     // MARK: - output_config.effort
 
-    @Test("output_config.effort emitted when thinkingEffort is set")
+    @Test("output_config.effort emitted when effort is set")
     func effortEmittedWhenSet() throws {
-        let provider = try anthropic(thinkingEffort: "xhigh")
+        let provider = try anthropic(effort: "xhigh")
         let body = try provider.buildRequestBody(messages: [.user("hi")], tools: [])
         let oc = try #require(body["output_config"] as? [String: Any])
         #expect(oc["effort"] as? String == "xhigh")
     }
 
-    @Test("output_config NOT emitted when thinkingEffort is nil")
+    @Test("output_config NOT emitted when effort is nil")
     func noEffortNoOutputConfig() throws {
-        let provider = try anthropic(thinkingEffort: nil)
+        let provider = try anthropic(effort: nil)
         let body = try provider.buildRequestBody(messages: [.user("hi")], tools: [])
         #expect(body["output_config"] == nil)
     }
@@ -119,7 +119,7 @@ struct V0_0_27_Tests {
         // affects all tokens, not just thinking — see the Anthropic
         // effort docs.
         let flags = BehaviorFlags(requiresAdaptiveThinking: true)
-        let provider = try anthropic(thinkingBudget: 0, thinkingEffort: "medium", flags: flags)
+        let provider = try anthropic(thinkingBudget: 0, effort: "medium", flags: flags)
         let body = try provider.buildRequestBody(messages: [.user("hi")], tools: [])
         #expect(body["thinking"] == nil,
                 "no thinking when budget is 0 even on adaptive-required models")
@@ -131,7 +131,7 @@ struct V0_0_27_Tests {
     @Test("output_config.effort + adaptive thinking work together")
     func effortPlusAdaptive() throws {
         let flags = BehaviorFlags(requiresAdaptiveThinking: true)
-        let provider = try anthropic(thinkingBudget: 4096, thinkingEffort: "high", flags: flags)
+        let provider = try anthropic(thinkingBudget: 4096, effort: "high", flags: flags)
         let body = try provider.buildRequestBody(messages: [.user("hi")], tools: [])
         let thinking = try #require(body["thinking"] as? [String: Any])
         #expect(thinking["type"] as? String == "adaptive")
@@ -142,7 +142,7 @@ struct V0_0_27_Tests {
     @Test("output_config.effort + legacy manual thinking work together (Opus 4.5 case)")
     func effortPlusManualThinking() throws {
         // No adaptive flag → manual thinking. Opus 4.5 supports effort alongside.
-        let provider = try anthropic(thinkingBudget: 4096, thinkingEffort: "medium")
+        let provider = try anthropic(thinkingBudget: 4096, effort: "medium")
         let body = try provider.buildRequestBody(messages: [.user("hi")], tools: [])
         let thinking = try #require(body["thinking"] as? [String: Any])
         #expect(thinking["type"] as? String == "enabled",
@@ -198,20 +198,20 @@ struct V0_0_27_Tests {
                 "default value must be omitted from JSON")
     }
 
-    @Test("ModelConfiguration Codable round-trips thinkingEffort")
+    @Test("ModelConfiguration Codable round-trips general effort")
     func configCodableRoundTripsEffort() throws {
         let config = ModelConfiguration(
             name: "t", providerID: "p", modelID: "m",
-            thinkingEffort: "xhigh"
+            effort: "xhigh"
         )
         let data = try JSONEncoder().encode(config)
         let decoded = try JSONDecoder().decode(ModelConfiguration.self, from: data)
-        #expect(decoded.thinkingEffort == "xhigh")
+        #expect(decoded.effort == "xhigh")
     }
 
-    @Test("Legacy ModelConfiguration JSON without thinkingEffort decodes cleanly")
+    @Test("Legacy ModelConfiguration JSON without effort decodes cleanly")
     func legacyConfigDecodes() throws {
-        // Pre-0.0.27 saved configs have no thinkingEffort key — must round-trip
+        // Pre-0.0.27 saved configs have no effort key — must round-trip
         // through `decodeIfPresent` and leave the field nil.
         let legacy = """
         {
@@ -229,7 +229,7 @@ struct V0_0_27_Tests {
         }
         """
         let decoded = try JSONDecoder().decode(ModelConfiguration.self, from: Data(legacy.utf8))
-        #expect(decoded.thinkingEffort == nil)
+        #expect(decoded.effort == nil)
         #expect(decoded.thinkingBudget == 4096)
     }
 
