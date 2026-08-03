@@ -152,7 +152,7 @@ struct AnthropicProvider: LLMProvider {
         let effectiveMaxTokens: Int = {
             guard let override = maxOutputTokensOverride else { return configuration.maxTokens }
             if thinkingEnabled, !usesAdaptiveThinking, let budget = configuration.thinkingBudget {
-                return max(override, max(budget, 1024) + 1)
+                return max(override, ThinkingBudget.effective(budget) + 1)
             }
             return override
         }()
@@ -229,7 +229,7 @@ struct AnthropicProvider: LLMProvider {
             } else if let budget = configuration.thinkingBudget {
                 body["thinking"] = [
                     "type": "enabled",
-                    "budget_tokens": max(budget, 1024)
+                    "budget_tokens": ThinkingBudget.effective(budget)
                 ] as [String: Any]
             }
         }

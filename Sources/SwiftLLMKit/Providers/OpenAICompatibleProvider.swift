@@ -215,7 +215,7 @@ struct OpenAICompatibleProvider: LLMProvider {
         if provider.apiType == .alibabaCloud,
            let budget = configuration.thinkingBudget, budget > 0 {
             body["enable_thinking"] = true
-            body["thinking_budget"] = max(budget, 1024)
+            body["thinking_budget"] = ThinkingBudget.effective(budget)
         }
 
         // OpenAI `reasoning_effort` — depth control for reasoning models

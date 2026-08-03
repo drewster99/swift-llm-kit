@@ -187,6 +187,128 @@ struct DecoderStatedFactsTests {
         #expect(factsSilent.validEffortLevels == nil)       // said nothing
     }
 
+    /// Moonshot AI extends the OpenAI `/models` shape with explicit capability leaves and an effort
+    /// ladder. The decode is shared by every `openAICompatible` endpoint — it keys on the FIELDS,
+    /// never on a provider ID — so these also pin that a payload without them (plain OpenAI,
+    /// DeepSeek, any custom endpoint) is unchanged.
+    @Test("OpenAI-compatible: Moonshot's capability leaves are stated both directions")
+    func moonshotCapabilityLeaves() throws {
+        // Trimmed from a real api.moonshot.ai/v1/models response (kimi-k3).
+        let body = #"""
+        {"object":"list","data":[{"id":"kimi-k3","object":"model","owned_by":"moonshot",
+          "context_length":1048576,"supports_image_in":true,"supports_reasoning":true,
+          "supports_video_in":true,"supports_dynamic_tools":true,"supports_thinking_type":"only",
+          "reasoning_efforts":{"default_effort":"max","support":true,"valid_efforts":["max","low","high"]},
+          "think_efforts":{"default_effort":"max","support":true,"valid_efforts":["low","high","max"]}}]}
+        """#
+        let facts = try #require(try service.decodeModelFactsForTesting(from: Data(body.utf8), apiType: .openAICompatible).first).facts
+        #expect(facts.maxInputTokens == 1_048_576)
+        #expect(facts.capabilities.vision == true)
+        #expect(facts.capabilities.reasoning == true)
+        #expect(facts.capabilities.videoInput == true)
+        #expect(facts.validEffortLevels == ["low", "high", "max"])   // rank order, not payload order
+        #expect(facts.behaviorFlags.supportsReasoningEffort == true)
+        // Undocumented value spaces: guessing a home would mask probed truth under authoritative-wins.
+        #expect(facts.capabilities.toolUse == nil)
+    }
+
+    @Test("OpenAI-compatible: a stated NO is believed; an absent leaf stays unknown")
+    func moonshotStatedNoAndSilence() throws {
+        let stated = #"""
+        {"data":[{"id":"m-no","supports_image_in":false,"supports_reasoning":false,
+          "supports_video_in":false,"reasoning_efforts":{"support":false}}]}
+        """#
+        let no = try #require(try service.decodeModelFactsForTesting(from: Data(stated.utf8), apiType: .openAICompatible).first).facts
+        #expect(no.capabilities.vision == false)        // stated NO — believed, not "unknown"
+        #expect(no.capabilities.reasoning == false)
+        #expect(no.capabilities.videoInput == false)
+        #expect(no.validEffortLevels == [])             // support:false is a STATEMENT: no ladder
+        #expect(no.behaviorFlags.supportsReasoningEffort == false)
+
+        // Plain OpenAI / DeepSeek shape: none of the keys present.
+        let bare = #"{"data":[{"id":"deepseek-v4-pro","object":"model","owned_by":"deepseek"}]}"#
+        let silent = try #require(try service.decodeModelFactsForTesting(from: Data(bare.utf8), apiType: .openAICompatible).first).facts
+        #expect(silent.capabilities.vision == nil)
+        #expect(silent.capabilities.reasoning == nil)
+        #expect(silent.capabilities.videoInput == nil)
+        #expect(silent.validEffortLevels == nil)
+        #expect(silent.behaviorFlags.supportsReasoningEffort == nil)
+    }
+
+    /// The image-token-price inference and the explicit leaf both target `capabilities.vision`.
+    /// Writing the optional straight through would push a `nil` over the inferred `true`.
+    @Test("OpenAI-compatible: an absent supports_image_in does not erase price-inferred vision")
+    func absentImageLeafPreservesPriceInference() throws {
+        let body = #"{"data":[{"id":"priced","prompt_image_token_price":50,"supports_reasoning":true}]}"#
+        let facts = try #require(try service.decodeModelFactsForTesting(from: Data(body.utf8), apiType: .openAICompatible).first).facts
+        #expect(facts.capabilities.vision == true)      // survives the sibling leaf's nil
+        #expect(facts.capabilities.reasoning == true)
+
+        // And an explicit NO alongside a positive price: the vendor's statement is authoritative.
+        let conflict = #"{"data":[{"id":"conflict","prompt_image_token_price":50,"supports_image_in":false}]}"#
+        let resolved = try #require(try service.decodeModelFactsForTesting(from: Data(conflict.utf8), apiType: .openAICompatible).first).facts
+        #expect(resolved.capabilities.vision == false)
+    }
+
+    /// `support: true` with no ladder says nothing about WHICH levels. Recording `[]` there would
+    /// mean "no effort levels" — contradicting the same payload's `support: true`.
+    @Test("OpenAI-compatible: support:true without valid_efforts leaves the ladder unknown")
+    func effortSupportedWithoutLadder() throws {
+        let body = #"{"data":[{"id":"m","reasoning_efforts":{"support":true}}]}"#
+        let facts = try #require(try service.decodeModelFactsForTesting(from: Data(body.utf8), apiType: .openAICompatible).first).facts
+        #expect(facts.behaviorFlags.supportsReasoningEffort == true)
+        #expect(facts.validEffortLevels == nil)         // NOT [] — that would forbid every value
+    }
+
+    /// `data` is an array, so a throw from ONE entry fails the enclosing decode and the provider's
+    /// entire model list vanishes — and this decoder is shared by five apiTypes (openAICompatible,
+    /// lmStudio, zAI, metaModel, alibabaCloud). Verified before the fix: an array-valued
+    /// `reasoning_efforts` took both well-formed siblings down with it. Same shape as the
+    /// 2026-07-19 "all providers vanished" incident.
+    @Test("OpenAI-compatible: one mistyped extension field cannot destroy the whole listing")
+    func mistypedExtensionFieldIsSurvivable() throws {
+        let body = #"""
+        {"data":[{"id":"good-1","context_length":4096},
+                 {"id":"bad-block","reasoning_efforts":["low","high"]},
+                 {"id":"bad-bool","supports_image_in":1,"context_length":"lots"},
+                 {"id":"good-2","supports_reasoning":true}]}
+        """#
+        let decoded = try service.decodeModelFactsForTesting(from: Data(body.utf8), apiType: .openAICompatible)
+        #expect(decoded.count == 4, "a malformed sibling dropped models from the listing")
+        #expect(try #require(decoded.first { $0.modelID == "good-1" }).facts.maxInputTokens == 4096)
+        #expect(try #require(decoded.first { $0.modelID == "good-2" }).facts.capabilities.reasoning == true)
+        // The malformed entries survive as models; only the unreadable FIELDS degrade to unknown.
+        let badBlock = try #require(decoded.first { $0.modelID == "bad-block" }).facts
+        #expect(badBlock.validEffortLevels == nil)
+        #expect(badBlock.behaviorFlags.supportsReasoningEffort == nil)
+        let badBool = try #require(decoded.first { $0.modelID == "bad-bool" }).facts
+        #expect(badBool.capabilities.vision == nil)
+        #expect(badBool.maxInputTokens == nil)
+    }
+
+    /// `id` is the model identifier — an entry without one names nothing selectable, so it is the
+    /// single field that stays strict. That entry is dropped; the listing is not.
+    @Test("OpenAI-compatible: an entry with no id is skipped, not fatal to the listing")
+    func entryWithoutIDIsSkipped() throws {
+        let body = #"""
+        {"data":[{"id":"keeper-1","context_length":8192},
+                 {"object":"model","owned_by":"someone"},
+                 {"id":"keeper-2"}]}
+        """#
+        let decoded = try service.decodeModelFactsForTesting(from: Data(body.utf8), apiType: .openAICompatible)
+        #expect(decoded.map(\.modelID) == ["keeper-1", "keeper-2"])
+        #expect(try #require(decoded.first { $0.modelID == "keeper-1" }).facts.maxInputTokens == 8192)
+    }
+
+    /// A malformed `valid_efforts` must not also cost us the `support` flag beside it.
+    @Test("OpenAI-compatible: a broken effort ladder still yields the support flag")
+    func brokenLadderKeepsSupportFlag() throws {
+        let body = #"{"data":[{"id":"m","reasoning_efforts":{"support":false,"valid_efforts":{"oops":true}}}]}"#
+        let facts = try #require(try service.decodeModelFactsForTesting(from: Data(body.utf8), apiType: .openAICompatible).first).facts
+        #expect(facts.behaviorFlags.supportsReasoningEffort == false)
+        #expect(facts.validEffortLevels == [])
+    }
+
     @Test("Mistral: a present leaf is stated both directions; an absent leaf is unknown")
     func mistralTriState() throws {
         let body = #"""

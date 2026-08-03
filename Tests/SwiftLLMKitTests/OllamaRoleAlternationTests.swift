@@ -136,3 +136,59 @@ private func syntheticAssistantToolCalls(_ calls: [LLMToolCall]) -> LLMMessage {
 private func syntheticAssistantMixed(text: String, toolCalls: [LLMToolCall]) -> LLMMessage {
     LLMMessage(_role: .assistant, _content: .mixed(text: text, toolCalls: toolCalls))
 }
+
+// MARK: - Documents are refused, not dropped
+
+/// Ollama's chat API carries `images` and nothing else. `encodeMessage` has no `documents`
+/// branch and `normalizeMessages`' merge path rebuilds messages with images only, so before the
+/// guard a caller passing `documents:` got a 200 and an answer about a file the model was never
+/// shown. The other three providers all encode documents; this one silently discarded them.
+@Suite("Ollama refuses document attachments")
+struct OllamaDocumentRefusalTests {
+
+    private func makeProvider() -> OllamaProvider {
+        OllamaProvider(
+            configuration: ModelConfiguration(name: "gemma", providerID: "p", modelID: "gemma3:27b"),
+            provider: ModelProvider(id: "p", name: "p", apiType: .ollama,
+                                    endpoint: URL(string: "http://example.invalid/api")!),
+            readAPIKey: { "" }
+        )
+    }
+
+    @Test("A message carrying a document throws instead of silently dropping it")
+    func documentThrows() async throws {
+        let pdf = LLMDocumentContent(data: Data("%PDF-1.4".utf8), mimeType: "application/pdf")
+        let message = LLMMessage.user("Summarize this", images: [], documents: [pdf])
+        await #expect(throws: LLMProviderError.self) {
+            _ = try await makeProvider().send(messages: [message], tools: [])
+        }
+    }
+
+    /// The endpoint is unreachable by construction, so a message WITHOUT documents must fail for
+    /// a transport reason — proving the guard above fired on the documents, not on the URL.
+    @Test("The refusal names documents, and a document-free message gets past it")
+    func refusalIsAboutDocumentsNotTransport() async throws {
+        let pdf = LLMDocumentContent(data: Data("%PDF-1.4".utf8), mimeType: "application/pdf")
+        do {
+            _ = try await makeProvider().send(messages: [.user("hi", images: [], documents: [pdf])], tools: [])
+            Issue.record("expected a refusal")
+        } catch let error as LLMProviderError {
+            guard case .invalidRequest(let detail) = error else {
+                Issue.record("expected .invalidRequest, got \(error)"); return
+            }
+            #expect(detail.lowercased().contains("document"))
+        }
+
+        // Same call, no documents: must NOT be .invalidRequest (it dies at the network instead).
+        do {
+            _ = try await makeProvider().send(messages: [.user("hi")], tools: [])
+            Issue.record("unreachable endpoint should have failed")
+        } catch let error as LLMProviderError {
+            if case .invalidRequest = error {
+                Issue.record("document guard fired on a message with no documents")
+            }
+        } catch {
+            // A transport error is the expected outcome here.
+        }
+    }
+}

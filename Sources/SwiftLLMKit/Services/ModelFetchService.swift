@@ -262,6 +262,40 @@ public struct ModelFetchService: Sendable {
                     facts.capabilities.vision = true
                 }
                 facts.maxInputTokens = model.contextLength
+
+                // Moonshot AI states these leaves explicitly in BOTH directions, so a present one
+                // becomes a stated true/false and an absent one stays silent — the same standing
+                // the Anthropic decoder gives a vendor describing its own models.
+                //
+                // Assigned only when present, and this `if let` is load-bearing: the target is
+                // `Bool?`, so writing the optional straight through would push a `nil` over the
+                // vision the image-token price just inferred and erase it.
+                if let imageIn = model.supportsImageIn { facts.capabilities.vision = imageIn }
+                if let reasoning = model.supportsReasoning { facts.capabilities.reasoning = reasoning }
+                if let videoIn = model.supportsVideoIn { facts.capabilities.videoInput = videoIn }
+
+                // `supports_dynamic_tools` and `supports_thinking_type` are deliberately NOT
+                // decoded. Neither has a documented value space, and the nearest homes would be
+                // guesses: "dynamic tools" is not plainly `toolUse` (Kimi K2 models omit the key
+                // yet certainly call tools), and no behavior flag means "thinking is mandatory".
+                // Under authoritative-wins a wrong statement here would mask probed truth
+                // permanently — the same reason the Anthropic decoder never writes tool use.
+                if let efforts = model.reasoningEfforts, let supported = efforts.support {
+                    // This flag gates whether `reasoning_effort` is sent at all, so the vendor
+                    // saying no is as actionable as saying yes.
+                    facts.behaviorFlags.supportsReasoningEffort = supported
+                    if supported {
+                        // Only a non-empty ladder is a statement about WHICH levels. `support:
+                        // true` with no list said nothing, and `[]` is documented to mean "no
+                        // effort levels" — recording that here would contradict the same payload.
+                        if let levels = efforts.validEfforts, !levels.isEmpty {
+                            facts.validEffortLevels = levels
+                                .sorted { EffortRank.rank(of: $0) < EffortRank.rank(of: $1) }
+                        }
+                    } else {
+                        facts.validEffortLevels = []
+                    }
+                }
                 return DecodedModelFacts(modelID: model.id, facts: facts)
             }
             .sorted { $0.modelID < $1.modelID }
@@ -815,6 +849,26 @@ private struct AnthropicModelsResponse: Decodable {
 }
 
 private struct OpenAIModelsResponse: Decodable {
+    /// An effort ladder as Moonshot AI states it: whether the parameter is accepted at all, and
+    /// which values. `default_effort` is deliberately not decoded — no layer models a DEFAULT
+    /// effort, and inventing a home for it would be a field only this decoder ever writes.
+    struct EffortBlock: Decodable {
+        let support: Bool?
+        let validEfforts: [String]?
+        enum CodingKeys: String, CodingKey {
+            case support
+            case validEfforts = "valid_efforts"
+        }
+
+        /// Lenient for the same reason as ``ModelEntry``, one level finer: a malformed
+        /// `valid_efforts` shouldn't also cost us the `support` flag sitting beside it.
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            support = try? container.decodeIfPresent(Bool.self, forKey: .support)
+            validEfforts = try? container.decodeIfPresent([String].self, forKey: .validEfforts)
+        }
+    }
+
     struct ModelEntry: Decodable {
         let id: String
         let created: Int?
@@ -822,14 +876,77 @@ private struct OpenAIModelsResponse: Decodable {
         // Common OpenAI-compatible extensions; nil for endpoints (incl. plain OpenAI) that omit them.
         let contextLength: Int?
         let promptImageTokenPrice: Int?
+        // Moonshot AI's per-model capability leaves. Stated in both directions, so a present leaf
+        // is a real yes/no; absent stays unknown. Any OpenAI-compatible endpoint emitting the same
+        // keys gets the same treatment — this is not keyed on provider ID.
+        let supportsImageIn: Bool?
+        let supportsReasoning: Bool?
+        let supportsVideoIn: Bool?
+        let reasoningEfforts: EffortBlock?
         enum CodingKeys: String, CodingKey {
             case id, created
             case ownedBy = "owned_by"
             case contextLength = "context_length"
             case promptImageTokenPrice = "prompt_image_token_price"
+            case supportsImageIn = "supports_image_in"
+            case supportsReasoning = "supports_reasoning"
+            case supportsVideoIn = "supports_video_in"
+            case reasoningEfforts = "reasoning_efforts"
+        }
+
+        /// Hand-written so ONE mistyped extension field cannot destroy the whole listing.
+        ///
+        /// `data` is an ARRAY of these, so a throw from any single entry fails the enclosing
+        /// `decode(OpenAIModelsResponse.self)` outright and the provider's ENTIRE model list
+        /// disappears — verified: an entry whose `reasoning_efforts` is an array instead of an
+        /// object takes its two well-formed siblings down with it. That is the same shape as the
+        /// 2026-07-19 "all providers vanished" incident one level up (see `ProviderAPIType`'s
+        /// forgiving decode), and this decoder is shared by FIVE apiTypes — openAICompatible,
+        /// lmStudio, zAI, metaModel and alibabaCloud — so the blast radius is every non-native
+        /// endpoint at once.
+        ///
+        /// Only `id` is required: an entry without one names no model and is genuinely undecodable.
+        /// Every other field degrades to nil on a type mismatch, which is exactly what nil already
+        /// means here — "this source did not say".
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(String.self, forKey: .id)
+            created = try? container.decodeIfPresent(Int.self, forKey: .created)
+            ownedBy = try? container.decodeIfPresent(String.self, forKey: .ownedBy)
+            contextLength = try? container.decodeIfPresent(Int.self, forKey: .contextLength)
+            promptImageTokenPrice = try? container.decodeIfPresent(Int.self, forKey: .promptImageTokenPrice)
+            supportsImageIn = try? container.decodeIfPresent(Bool.self, forKey: .supportsImageIn)
+            supportsReasoning = try? container.decodeIfPresent(Bool.self, forKey: .supportsReasoning)
+            supportsVideoIn = try? container.decodeIfPresent(Bool.self, forKey: .supportsVideoIn)
+            reasoningEfforts = try? container.decodeIfPresent(EffortBlock.self, forKey: .reasoningEfforts)
         }
     }
     let data: [ModelEntry]
+
+    enum CodingKeys: String, CodingKey { case data }
+
+    /// Undecodable entries are SKIPPED, not fatal.
+    ///
+    /// ``ModelEntry`` is lenient about every field except `id` — the model identifier, without
+    /// which an entry names nothing we could select or send to. But "this one row is unusable"
+    /// must not mean "this provider has no models": the array IS the listing, and one malformed
+    /// row taking the other 89 with it is the failure mode this decoder is hardened against.
+    ///
+    /// Decoded through a wrapper whose own init always succeeds, which is what guarantees the
+    /// unkeyed container advances exactly one element past a bad row — catching the error
+    /// mid-iteration does not reliably advance the index.
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        data = try container.decode([Skippable<ModelEntry>].self, forKey: .data).compactMap(\.value)
+    }
+}
+
+/// Decodes `T`, or nothing at all, while always consuming exactly one element.
+private struct Skippable<T: Decodable>: Decodable {
+    let value: T?
+    init(from decoder: any Decoder) throws {
+        value = try? T(from: decoder)
+    }
 }
 
 /// xAI's `/models` extends the OpenAI shape with a context length, an image-token price (which

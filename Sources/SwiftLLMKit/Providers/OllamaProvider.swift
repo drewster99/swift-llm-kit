@@ -77,6 +77,23 @@ struct OllamaProvider: LLMProvider {
         // Ollama doesn't have an effort enum and its chat options don't
         // expose frequency_penalty / presence_penalty. Those fields on
         // `overrides` are silently discarded.
+
+        // Documents are REFUSED, not dropped. Ollama's chat API carries `images` and nothing
+        // else — there is no document/PDF field — and `encodeMessage` accordingly has no
+        // `documents` branch, as does the merge path in `normalizeMessages`. Until this guard,
+        // a caller passing `documents:` got a 200 and an answer about a file the model was
+        // never shown: the request succeeded, the evidence vanished, and nothing said so.
+        // A refusal the caller can see beats a silent success that answers the wrong question.
+        if let offender = messages.first(where: { !($0.documents ?? []).isEmpty }) {
+            let count = messages.reduce(0) { $0 + ($1.documents?.count ?? 0) }
+            throw LLMProviderError.invalidRequest(detail: """
+                Ollama cannot accept document attachments: \(count) document\(count == 1 ? "" : "s") \
+                on a \(offender.role.rawValue) message would be discarded. Ollama's chat API \
+                supports images only. Send the document as an image, extract its text into the \
+                message, or use a provider that accepts documents.
+                """)
+        }
+
         let url = provider.endpoint.appendingPathComponent("chat")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"

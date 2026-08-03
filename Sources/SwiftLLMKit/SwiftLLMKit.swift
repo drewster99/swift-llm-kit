@@ -1167,7 +1167,7 @@ public final class LLMKitManager {
                 } else if let budget = config.thinkingBudget {
                     body["thinking"] = [
                         "type": "enabled",
-                        "budget_tokens": max(budget, 1024)
+                        "budget_tokens": ThinkingBudget.effective(budget)
                     ] as [String: Any]
                 }
             }
