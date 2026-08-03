@@ -67,6 +67,99 @@ The 12-case enum that drives every per-provider branch. Carries `temperatureRang
 
 Refresh is gated by a YYYYMMDD key in `UserDefaults` *plus* a "straggler" pass: after the daily refresh, providers whose cache slice is empty *and* are refreshable (have a key in Keychain, or are local no-auth like ollama/lmStudio) get refetched anyway. Without the straggler pass, providers added in a later app version would stay empty forever.
 
+### Effort: two constructs, never one (2026-08-03)
+
+"Effort" is two different wire parameters, and conflating them was a live bug:
+
+- **General effort** — Anthropic's top-level `output_config.effort`. Steers overall work and
+  applies **even when reasoning is disabled**. Not a thinking knob.
+- **Reasoning effort** — `reasoning_effort` on OpenAI-compatible endpoints (OpenAI o-series/GPT-5,
+  Moonshot). Exists only for reasoning models; everything else rejects it with HTTP 400.
+
+Both are `EffortSupport?` on `ModelFacts`/`ModelInfo` (`generalEffort`, `reasoningEffort`), and both
+are separate on the config (`ModelConfiguration.effort` / `.reasoningEffort`, same on
+`LLMCallOverrides` and `ModelConfigurationOverride`).
+
+**`EffortSupport` is one value, not a ladder plus a flag.** Four states are genuinely needed —
+`nil` (nothing known), `.unsupported`, `.supportedLevelsUnknown`, `.levels([...])` — and a
+ladder+flag pair could also represent CONTRADICTIONS. One was live: a probe that attempted the
+complete ladder and had every level rejected wrote `[]`, a forced override set the flag `true`, the
+provider emitted `reasoning_effort` on every request, and validation couldn't pre-flight it because
+it keyed on `!isEmpty`. `init(levels:)` normalizes `[]` to `.unsupported` so the contradiction is
+unconstructable. `.supportedLevelsUnknown` is not a placeholder — it is OpenAI's normal state, since
+OpenAI publishes no ladder at all.
+
+**Emission is asymmetric on purpose.** General effort fails OPEN (sent unless the model is KNOWN not
+to take it — a clear API error beats a silently dropped knob). Reasoning effort fails CLOSED (sent
+only when known-supported, because a non-reasoning model 400s). Both read per-model catalog data
+injected at provider construction, the same path `behaviorFlags` travels — never an `apiType` branch.
+
+`BehaviorFlags.supportsReasoningEffort` is RETIRED; its 18 bundled entries migrated to
+`reasoningEffort: .supportedLevelsUnknown`, which is what the flag actually meant.
+
+### `ReasoningControl`: how reasoning is switched, as data
+
+`provider.apiType == .alibabaCloud` stopped working the moment Moonshot and DeepSeek arrived: both
+are `openAICompatible` alongside OpenAI, and all three want different keys. `ReasoningControl` makes
+the mechanism per-model data (`unsupported` / `reasoningEffortOnly` / `thinkingBlock` /
+`enableThinkingFlag` / `anthropicThinking` / `geminiThinkingConfig`).
+
+An enum because the mechanisms are mutually exclusive — as booleans,
+`usesThinkingBlock && usesEnableThinkingFlag` would describe a model that cannot exist. The "no
+control" case is spelled **`unsupported`, never `none`**: the type is nearly always
+`ReasoningControl?`, where `.none` binds to `Optional.none`, so "has no reasoning knob" and "nobody
+has said" would be written identically and mean opposite things.
+
+**`nil` keeps the legacy `apiType` behaviour rather than emitting nothing.** Silently disabling
+reasoning on every not-yet-recorded model is a regression dressed up as caution.
+
+Whether reasoning can be turned on and whether it can be turned OFF are SEPARATE capabilities
+(`reasoningEnableable` / `reasoningDisableable`) — Kimi documents models supporting only one
+direction.
+
+### Capabilities are vendor facts; every new one needs five edits and a UI slot
+
+`ModelCapabilities` describes **what the model can do**, not what SwiftLLMKit can send. Several
+capabilities have no typed send path (`audioInput`, `videoInput`, `computerUse`, …) and that is
+deliberate — it is a catalog library, and discarding a stated vendor fact means re-fetching it later.
+
+Adding a capability is NOT free. Each needs: a `ModelCapability` case, its three exhaustive switch
+arms (`editorTitle`, short label, `editorDescription`), a `ModelCapabilities` accessor, a
+`ModelCapabilitiesOverride` field + subscript arms + `apply`, and a `ModelFactsFieldTable` row. The
+field-table completeness test fails if the last one is missed.
+
+**Anything added to `ModelMetadataOverride` must be reachable from a UI editor**, or users cannot
+correct a wrong value. The override sheets start from the EXISTING override and mutate only what
+they own — rebuilding field-by-field made every field a given sheet didn't know about vanish on save.
+
+### Probes: force the parameter, and grade the right thing
+
+Probes never need production emission code. They force the raw field through
+`ModelConfiguration.extraJSONOverrides` (or `LLMCallOverrides`) and grade with
+`probeParameterAcceptance`; `mergeJSONOverrides` deep-merges dicts and replaces arrays wholesale, so
+even `strict` inside `tools` is reachable by supplying a full replacement array.
+
+**Acceptance is not always the right grade.** `probeParameterAcceptance` discards the response body,
+so for `response_format` it would record every endpoint that IGNORES the field as supporting it —
+`probeStructuredOutput` parses the response instead. `tool_choice` stays acceptance-graded on
+purpose: grading "did it really force a call" produces false negatives on well-behaved models.
+
+**A probe that measures a flag-gated parameter must say so.** `probeEffortLevel` sends the config's
+general effort, which a gated endpoint silently drops — turning "no error" into a false positive.
+`probe(...)` refuses to run it unless the caller passes
+`supportsUnconditionalGeneralEffortEmission`. That guard used to live in the single caller, where it
+could be forgotten.
+
+### Probe records are schema-versioned and migrated, never soft-decoded
+
+`ProbeRecord.currentSchemaVersion` is **2** (`effortLevels` → `generalEffortLevels` +
+`reasoningEffortLevels`). The store decodes with `try?` and SKIPS failures silently, so an
+unmigrated record does not error — it VANISHES, taking every other finding in it with it. Migrations
+must therefore rewrite **every** record, not just the ones with interesting data.
+`scripts/migrate_effort_split.py` is the pattern: refuses to run while the host app is live, backs
+up first, verifies after. The rule it applies (Anthropic → general, everyone else → reasoning) is
+exhaustive because those are the only providers that ever recorded a ladder.
+
 ### Persistence layout
 
 `StorageManager` writes to `~/Library/Application Support/SwiftLLMKit/<appBundleID>/`:
