@@ -1,5 +1,69 @@
 # SwiftLLMKit — Roadmap
 
+## Completed
+
+### ~~Effort split, reasoning control, and the model capability contract~~ ✅ Completed 2026-08-03 (0.0.139 – 0.0.143)
+
+The 2026-07-17 investigation above asked "what does each vendor actually publish, and what shape
+holds it?". This is the answer landed, plus one thing that investigation did not catch.
+
+**"Effort" was two wire parameters sharing a name.** General effort (Anthropic `output_config.effort`,
+applies even with reasoning OFF) and reasoning effort (`reasoning_effort`, reasoning models only)
+were one `validEffortLevels` field with three writers describing two different things, and one
+`thinkingEffort` config field feeding both. Now two `EffortSupport?` fields and two config fields.
+
+`EffortSupport` is ONE value rather than a ladder plus a flag, because the pair could represent
+contradictions and one was live: a complete-ladder probe that rejected everything wrote `[]`, a
+forced override set the flag true, and the provider then emitted `reasoning_effort` on every request
+(HTTP 400) with validation unable to pre-flight it. `init(levels:)` normalizes `[]` to
+`.unsupported`, so the contradiction is now unconstructable.
+
+**`ReasoningControl` replaced the `apiType` branch.** `provider.apiType == .alibabaCloud` stopped
+working when Moonshot and DeepSeek arrived — both `openAICompatible` alongside OpenAI, all three
+wanting different keys. The mechanism is per-model data now. Its "no control" case is spelled
+`unsupported`, never `none`, because the type is nearly always optional and `.none` would collide
+with `Optional.none`.
+
+**Nine capabilities added**, each an independent fact: reasoning enable and disable are separate
+(Kimi documents models supporting only one direction), as are `json_object` and `json_schema`
+(DeepSeek documents the former with the latter unconfirmed). `responseSchema` was REUSED for schema
+mode rather than duplicated.
+
+**Capabilities that cannot be exercised are not worth recording**, so the request surface grew to
+match: `LLMCallOverrides` gained reasoning on/off, budget, `keep` and a typed `LLMResponseFormat`;
+`LLMToolDefinition` gained `strict`. Every new knob fails CLOSED — emitted only on a KNOWN-true
+capability — because each is an HTTP 400 on a model that does not take it. The one exception is an
+UNKNOWN reasoning mechanism, which keeps the legacy behaviour: emitting nothing there would silently
+disable reasoning on every not-yet-recorded model.
+
+**The thinking budget is measured, not guessed.** `ThinkingBudgetAccounting` records whose allowance
+the tokens come from (Anthropic draws from `max_tokens` and enforces `max_tokens > budget_tokens`;
+the others are unverified, hence probed rather than tabulated). `probeThinkingBudgetRange` derives
+its ceiling from that rather than a constant, and declines outright when neither limit is known.
+
+**Probes force the raw field and grade the right thing.** Structured output is graded on the RESPONSE
+because `probeParameterAcceptance` discards the body — every endpoint that IGNORES `response_format`
+would otherwise record as supporting it. `tool_choice` stays acceptance-graded deliberately.
+`probeEffortLevel`'s flag-gated hazard moved from the caller into the API.
+
+**Also fixed along the way**, neither on the original plan:
+
+- Every model-override sheet rebuilt `ModelMetadataOverride` field-by-field, silently dropping any
+  field it did not know about — so a field added to the library was wiped by whichever editor the
+  user opened next. All three now preserve by default.
+- The shared OpenAI-compatible decoder (FIVE apiTypes) died entirely on one mistyped field or one
+  entry missing an `id`, taking the provider's whole model list with it.
+
+**Migrations**: probe records at schema v3, all 1,414 local and 1,408 bundled rewritten by
+`scripts/migrate_effort_split.py`; 18 bundled metadata entries moved off the retired
+`supportsReasoningEffort` flag. Partial migration was never an option — the store decodes with
+`try?` and SKIPS failures, so an unmigrated record does not error, it vanishes with every finding in
+it.
+
+**Still open**: `videoInput` has no probe (there is no video send path to probe it through, and the
+capability comes from the vendor's own `/models` statement); the eval runner's new probes have not
+yet been run against the live corpus.
+
 ## Planned
 
 ### Model metadata: what each vendor actually publishes, and the shape that holds it (agreed design, 2026-07-17)
