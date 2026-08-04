@@ -1775,19 +1775,29 @@ public enum ModelProber {
             return .established(false, "reasoning continued essentially unchanged — \(counts) — so "
                                      + "the endpoint accepted the switch and then ignored it")
         }
-        if ratio <= collapsedThinkingRatio {
-            return .established(true, "thinking collapsed when disabled — \(counts)")
-        }
-        return .inconclusive("thinking was reduced but not stopped — \(counts) — which a working "
-                           + "switch and a partly-honoured one produce alike")
+        // Anything short of that is a switch that WORKED, including a partial reduction, and the
+        // distinction is only in the evidence. Deliberately not a third `inconclusive` band, which
+        // is what this returned until the verdict was traced into production: an unestablished
+        // capability does not project, `OpenAICompatibleProvider` gates emission on a KNOWN true,
+        // and the field would then not be sent at all — so a model whose thinking the switch
+        // measurably reduced would have gone back to thinking in full. Of the two errors that is
+        // plainly the worse one, and it lands on the user who explicitly asked for reasoning off.
+        //
+        // Sending it is also known-safe here rather than assumed: this very probe just sent it and
+        // the endpoint took it. The `false` band is the one that matters, and it is unchanged.
+        let effect = ratio <= collapsedThinkingRatio
+            ? "thinking collapsed when disabled"
+            : "thinking was measurably reduced but not eliminated"
+        return .established(true, "\(effect) — \(counts)")
     }
 
     /// At or above this share of the enabled-baseline, the switch changed nothing worth calling a
     /// change. Deliberately high: `false` here is the verdict production acts on.
     private static let comparableThinkingRatio = 0.5
-    /// At or below this share, the thinking stopped. Deliberately low, and NOT zero — providers
-    /// report residual counts (kimi-k2.6: 1 token against a 32-token baseline) for a reply that
-    /// plainly did not think.
+    /// At or below this share the thinking stopped outright rather than merely shrinking. Only the
+    /// EVIDENCE WORDING turns on this — both sides are an established `true` — so it is a
+    /// description, not a verdict. Deliberately not zero: providers report residual counts
+    /// (kimi-k2.6: 1 token against a 32-token baseline) for a reply that plainly did not think.
     private static let collapsedThinkingRatio = 0.1
 
     /// Whether `thinking.keep: "all"` is accepted — retaining reasoning content across turns.

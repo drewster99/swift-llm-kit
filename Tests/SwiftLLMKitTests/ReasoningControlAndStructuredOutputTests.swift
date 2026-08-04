@@ -828,15 +828,33 @@ struct ReasoningConclusionTests {
         #expect(c.canBeDisabled.evidence?.contains("collapsed") == true)
     }
 
-    /// Between the bands the evidence genuinely does not say, and answering either way invents a
-    /// fact. `false` in particular is the verdict production acts on, so it is not guessed at.
-    @Test("A switch that only reduced the thinking is inconclusive, not a verdict")
-    func partialReductionIsInconclusive() {
+    /// A partial reduction is a switch that WORKED. It reads as `inconclusive` only until the
+    /// verdict is traced into production: an unestablished capability does not project, the
+    /// provider gates emission on a known true, and the field would then not be sent at all — so a
+    /// model whose thinking the switch measurably reduced would go back to thinking in full, for
+    /// the user who explicitly asked for reasoning off. That is the worse of the two errors.
+    @Test("A switch that only reduced the thinking still counts as working")
+    func partialReductionStillCountsAsWorking() {
         let c = ModelProber.concludeReasoning(
             on: observation(accepted: true, emitted: true, tokens: 100),
             off: observation(accepted: true, emitted: true, tokens: 30))
-        #expect(c.canBeDisabled.status == .inconclusive)
-        #expect(c.canBeDisabled.evidence?.contains("reduced but not stopped") == true)
+        #expect(c.canBeDisabled.value == true)
+        #expect(c.canBeDisabled.evidence?.contains("reduced but not eliminated") == true,
+                "the ambiguity belongs in the evidence, not in the verdict")
+    }
+
+    /// The boundary itself, both sides — the one number that decides ignored-versus-worked.
+    @Test("Half the baseline is the line between worked and ignored")
+    func theThresholdHoldsOnBothSides() {
+        let atHalf = ModelProber.concludeReasoning(
+            on: observation(accepted: true, emitted: true, tokens: 100),
+            off: observation(accepted: true, emitted: true, tokens: 50))
+        #expect(atHalf.canBeDisabled.value == false, "at the line, the switch changed nothing worth counting")
+
+        let justUnder = ModelProber.concludeReasoning(
+            on: observation(accepted: true, emitted: true, tokens: 100),
+            off: observation(accepted: true, emitted: true, tokens: 49))
+        #expect(justUnder.canBeDisabled.value == true)
     }
 
     /// Anthropic reports `reasoningTokens` as 0 by design (thinking is folded into outputTokens),
