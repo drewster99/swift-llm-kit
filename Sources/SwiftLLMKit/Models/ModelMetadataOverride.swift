@@ -363,6 +363,8 @@ extension ModelMetadataOverride {
         case displayName, maxInputTokens, maxOutputTokens, sizeLabel, capabilities, pricing
         case supportsChatCompletions
         case behaviorFlags, hidden, isAvailable, isAccessDenied
+        case generalEffort, reasoningEffort, reasoningControl
+        case thinkingBudgetAccounting, maxThinkingBudgetTokens
     }
 
     public init(from decoder: Decoder) throws {
@@ -377,6 +379,11 @@ extension ModelMetadataOverride {
         hidden = try c.decodeIfPresent(Bool.self, forKey: .hidden)
         isAvailable = try c.decodeIfPresent(Bool.self, forKey: .isAvailable)
         isAccessDenied = try c.decodeIfPresent(Bool.self, forKey: .isAccessDenied)
+        generalEffort = try c.decodeIfPresent(EffortSupport.self, forKey: .generalEffort)
+        reasoningEffort = try c.decodeIfPresent(EffortSupport.self, forKey: .reasoningEffort)
+        reasoningControl = try c.decodeIfPresent(ReasoningControl.self, forKey: .reasoningControl)
+        thinkingBudgetAccounting = try c.decodeIfPresent(ThinkingBudgetAccounting.self, forKey: .thinkingBudgetAccounting)
+        maxThinkingBudgetTokens = try c.decodeIfPresent(Int.self, forKey: .maxThinkingBudgetTokens)
         // Migrate the legacy standalone chat flag into capabilities.chat — new-format capabilities win.
         if capabilities?[.chat] == nil,
            let legacyChat = try c.decodeIfPresent(Bool.self, forKey: .supportsChatCompletions) {
@@ -397,5 +404,10 @@ extension ModelMetadataOverride {
         try c.encodeIfPresent(hidden, forKey: .hidden)
         try c.encodeIfPresent(isAvailable, forKey: .isAvailable)
         try c.encodeIfPresent(isAccessDenied, forKey: .isAccessDenied)
+        try c.encodeIfPresent(generalEffort, forKey: .generalEffort)
+        try c.encodeIfPresent(reasoningEffort, forKey: .reasoningEffort)
+        try c.encodeIfPresent(reasoningControl, forKey: .reasoningControl)
+        try c.encodeIfPresent(thinkingBudgetAccounting, forKey: .thinkingBudgetAccounting)
+        try c.encodeIfPresent(maxThinkingBudgetTokens, forKey: .maxThinkingBudgetTokens)
     }
 }

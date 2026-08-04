@@ -156,3 +156,77 @@ struct ReasoningControlEmissionTests {
         #expect(plainFn["name"] as? String == "t", "the tool itself still goes")
     }
 }
+
+/// The `supportsReasoningEffort` flag was retired and its 18 bundled entries rewritten as
+/// `reasoningEffort: .supportedLevelsUnknown`. Those entries are the ONLY record that OpenAI's
+/// reasoning models accept the parameter — OpenAI's `/models` publishes nothing — and reasoning
+/// effort now fails CLOSED, so losing them silently stops sending `reasoning_effort` to every
+/// o-series and GPT-5 model with no error anywhere.
+@Suite("Bundled reasoning-effort entries survive the flag retirement")
+struct BundledReasoningEffortMigrationTests {
+
+    @Test("The bundled registry still states reasoning-effort support for OpenAI models")
+    func bundledEntriesStillStateSupport() throws {
+        let registry = BundledModelMetadataRegistry.load()
+        // A model from each keying axis the migration touched.
+        let byAPIType = try #require(registry.override(providerAPIType: "openAICompatible", modelID: "gpt-5"))
+        #expect(byAPIType.reasoningEffort == EffortSupport.supportedLevelsUnknown)
+
+        let byProvider = try #require(
+            registry.override(providerID: "builtin.openrouter", modelID: "openai/gpt-5"))
+        #expect(byProvider.reasoningEffort == EffortSupport.supportedLevelsUnknown)
+    }
+
+    /// Reaching `ModelFacts` is the part that matters — an override field the merge never reads is
+    /// the same as no override at all.
+    @Test("The stated support reaches ModelFacts, so the merge can act on it")
+    func supportReachesFacts() throws {
+        let registry = BundledModelMetadataRegistry.load()
+        let entry = try #require(registry.override(providerAPIType: "openAICompatible", modelID: "o3"))
+        #expect(entry.asFacts.reasoningEffort == EffortSupport.supportedLevelsUnknown)
+    }
+}
+
+/// `ModelMetadataOverride` hand-writes its `Codable`, so a stored property added without a matching
+/// CodingKeys case is silently never persisted AND never decoded. That is not hypothetical: five
+/// fields shipped that way and the bundled `reasoningEffort` entries stopped decoding, which under
+/// fail-closed emission silently stopped sending `reasoning_effort` to every OpenAI reasoning model
+/// — no error anywhere. `ModelProfile` has had this guard for exactly the same reason.
+@Suite("ModelMetadataOverride CodingKeys coverage")
+struct ModelMetadataOverrideCodingKeyCoverageTests {
+
+    /// Reflection, not a round trip: an uncovered property decodes back to its default and compares
+    /// equal to any fixture that also left it defaulted, so a round-trip test stays green.
+    @Test("Every stored property is encoded")
+    func everyStoredPropertyIsEncoded() throws {
+        let populated = ModelMetadataOverride(
+            displayName: "M", maxInputTokens: 1000, maxOutputTokens: 100, sizeLabel: "7B",
+            capabilities: ModelCapabilitiesOverride(vision: true),
+            pricing: ModelPricing(base: PricingTier(input: 1, output: 2)),
+            behaviorFlags: BehaviorFlagsOverride(requiresAdaptiveThinking: true),
+            generalEffort: .levels(["low"]), reasoningEffort: .supportedLevelsUnknown,
+            reasoningControl: .thinkingBlock, thinkingBudgetAccounting: .separate,
+            maxThinkingBudgetTokens: 32_000,
+            hidden: true, isAvailable: true, isAccessDenied: false)
+        let object = try #require(
+            try JSONSerialization.jsonObject(with: JSONEncoder().encode(populated)) as? [String: Any])
+        // `supportsChatCompletions` is computed (it rides inside capabilities), so it is not stored.
+        let expected = Set(Mirror(reflecting: populated).children.compactMap(\.label))
+        let missing = expected.subtracting(object.keys).sorted()
+        #expect(missing.isEmpty, """
+            \(missing.joined(separator: ", ")) has no CodingKeys case, so it is silently never \
+            persisted or decoded. Add it to ModelMetadataOverride.CodingKeys.
+            """)
+    }
+
+    @Test("A full round trip preserves every field")
+    func roundTrips() throws {
+        let original = ModelMetadataOverride(
+            generalEffort: .levels(["low", "max"]), reasoningEffort: .unsupported,
+            reasoningControl: .enableThinkingFlag, thinkingBudgetAccounting: .drawnFromMaxOutputTokens,
+            maxThinkingBudgetTokens: 8192)
+        let restored = try JSONDecoder().decode(
+            ModelMetadataOverride.self, from: JSONEncoder().encode(original))
+        #expect(restored == original)
+    }
+}
