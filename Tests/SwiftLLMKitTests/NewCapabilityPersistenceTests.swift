@@ -68,18 +68,19 @@ struct ModelCapabilityWireStringTests {
         .videoInput: "videoInput", .parallelToolCalls: "parallelToolCalls", .pdfInput: "pdfInput",
         .webSearch: "webSearch", .systemMessages: "systemMessages",
         .assistantPrefill: "assistantPrefill", .toolResultRoundTrip: "toolResultRoundTrip",
-        // Renamed for clarity; wire strings deliberately UNCHANGED so no record is orphaned.
-        .toolChoiceSupported: "toolChoice",
-        .toolChoiceSupportsValueRequired: "toolChoiceRequired",
-        .toolChoiceSupportsValueNone: "toolChoiceNone",
-        .toolChoiceSupportsNamedFunction: "toolChoiceSpecificFunction",
-        .structuredOutputSupportsJSONObject: "structuredOutputJSONObject",
-        .structuredOutputSupportsJSONSchema: "responseSchema",
-        .thinkingSupportsKeepAll: "thinkingKeepAll",
-        .thinkingSupportsTokenBudget: "thinkingBudgetTokens",
-        .toolDefinitionsSupportStrict: "strictToolDefinitions",
-        .reasoningCanBeEnabled: "reasoningEnableable",
-        .reasoningCanBeDisabled: "reasoningDisableable"
+        // Migrated to match the case names by scripts/migrate_capability_wire_names.py, a
+        // one-time pass over the probe records and the model catalog.
+        .toolChoiceSupported: "toolChoiceSupported",
+        .toolChoiceSupportsValueRequired: "toolChoiceSupportsValueRequired",
+        .toolChoiceSupportsValueNone: "toolChoiceSupportsValueNone",
+        .toolChoiceSupportsNamedFunction: "toolChoiceSupportsNamedFunction",
+        .structuredOutputSupportsJSONObject: "structuredOutputSupportsJSONObject",
+        .structuredOutputSupportsJSONSchema: "structuredOutputSupportsJSONSchema",
+        .thinkingSupportsKeepAll: "thinkingSupportsKeepAll",
+        .thinkingSupportsTokenBudget: "thinkingSupportsTokenBudget",
+        .toolDefinitionsSupportStrict: "toolDefinitionsSupportStrict",
+        .reasoningCanBeEnabled: "reasoningCanBeEnabled",
+        .reasoningCanBeDisabled: "reasoningCanBeDisabled"
     ]
 
     @Test("Every case's wire string matches the pinned table")
@@ -99,14 +100,25 @@ struct ModelCapabilityWireStringTests {
         #expect(pinned.subtracting(all).isEmpty)
     }
 
-    /// The rename must not have changed what already sits on disk.
-    @Test("Records written before the rename still decode")
-    func legacyRecordsStillDecode() throws {
-        let legacy = #"{"vision": true, "toolChoiceRequired": false, "responseSchema": true, "thinkingBudgetTokens": true}"#
-        let caps = try JSONDecoder().decode(ModelCapabilities.self, from: Data(legacy.utf8))
+    /// Unrenamed capabilities must still decode exactly as before — the migration touched only
+    /// the eleven that moved.
+    @Test("Untouched capabilities keep their original wire strings")
+    func untouchedCapabilitiesUnchanged() throws {
+        let json = #"{"vision": true, "toolUse": false, "pdfInput": true}"#
+        let caps = try JSONDecoder().decode(ModelCapabilities.self, from: Data(json.utf8))
         #expect(caps[.vision] == true)
-        #expect(caps[.toolChoiceSupportsValueRequired] == false)
-        #expect(caps[.structuredOutputSupportsJSONSchema] == true)
-        #expect(caps[.thinkingSupportsTokenBudget] == true)
+        #expect(caps[.toolUse] == false)
+        #expect(caps[.pdfInput] == true)
+    }
+
+    /// A record still carrying a legacy spelling decodes with that capability ABSENT, not wrong —
+    /// `init(rawValue:)` returns nil for an unknown key and the decoder skips it. That is the
+    /// failure mode the one-time migration exists to prevent, and why it verifies zero survivors.
+    @Test("A legacy spelling is dropped, never silently mapped to something else")
+    func legacySpellingIsDroppedNotMisread() throws {
+        let stale = #"{"vision": true, "toolChoiceRequired": false}"#
+        let caps = try JSONDecoder().decode(ModelCapabilities.self, from: Data(stale.utf8))
+        #expect(caps[.vision] == true)
+        #expect(caps[.toolChoiceSupportsValueRequired] == nil, "unknown key skipped, not misread")
     }
 }
