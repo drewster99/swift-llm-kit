@@ -21,7 +21,13 @@ public enum ThinkingBudget {
     ///
     /// Callers must use this rather than flooring inline, so the value they reason about is the
     /// value that goes on the wire.
-    public static func effective(_ requested: Int) -> Int {
-        max(requested, minimumTokens)
+    ///
+    /// `measuredMaximum` is the model's own probed ceiling when one exists. Passing it clamps from
+    /// ABOVE as well as below, which is the difference between a request that is merely large and
+    /// one the endpoint refuses outright.
+    public static func effective(_ requested: Int, measuredMaximum: Int? = nil) -> Int {
+        let floored = max(requested, minimumTokens)
+        guard let measuredMaximum, measuredMaximum >= minimumTokens else { return floored }
+        return min(floored, measuredMaximum)
     }
 }

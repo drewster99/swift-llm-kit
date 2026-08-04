@@ -43,6 +43,9 @@ public struct ModelFacts: Codable, Sendable, Equatable {
     public var reasoningControl: ReasoningControl?
     /// Whose allowance a reasoning budget is spent from. `nil` = no source has said.
     public var thinkingBudgetAccounting: ThinkingBudgetAccounting?
+    /// The largest reasoning token budget this model accepts, when measured. `nil` = unknown, and
+    /// callers fall back to ``ThinkingBudget/minimumTokens``.
+    public var maxThinkingBudgetTokens: Int?
     /// Per-flag tri-state, same container reasoning as `capabilities`.
     public var behaviorFlags: BehaviorFlagsOverride
     public var deprecatedOn: Date?
@@ -110,6 +113,7 @@ public struct ModelFacts: Codable, Sendable, Equatable {
             reasoningEffort: reasoningEffort,
             reasoningControl: reasoningControl,
             thinkingBudgetAccounting: thinkingBudgetAccounting,
+            maxThinkingBudgetTokens: maxThinkingBudgetTokens,
             behaviorFlags: flags,
             deprecatedOn: deprecatedOn,
             deprecationReplacement: deprecationReplacement,
@@ -156,6 +160,7 @@ extension ModelMetadataOverride {
         facts.reasoningEffort = reasoningEffort
         facts.reasoningControl = reasoningControl
         facts.thinkingBudgetAccounting = thinkingBudgetAccounting
+        facts.maxThinkingBudgetTokens = maxThinkingBudgetTokens
         facts.hidden = hidden
         facts.isAvailable = isAvailable
         facts.isAccessDenied = isAccessDenied

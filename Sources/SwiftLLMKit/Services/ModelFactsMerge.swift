@@ -66,6 +66,7 @@ public enum ModelFactsFieldTable {
         .field("reasoningEffort", \ModelFacts.reasoningEffort),
         .field("reasoningControl", \ModelFacts.reasoningControl),
         .field("thinkingBudgetAccounting", \ModelFacts.thinkingBudgetAccounting),
+        .field("maxThinkingBudgetTokens", \ModelFacts.maxThinkingBudgetTokens),
         .field("deprecatedOn", \ModelFacts.deprecatedOn),
         .field("deprecationReplacement", \ModelFacts.deprecationReplacement),
         .field("maxTemperature", \ModelFacts.maxTemperature),

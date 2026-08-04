@@ -254,6 +254,8 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
     /// Override the thinking-budget accounting. Overridable because it is unverified for most
     /// providers and a wrong value silently truncates replies rather than erroring.
     public var thinkingBudgetAccounting: ThinkingBudgetAccounting?
+    /// Override the measured maximum thinking budget.
+    public var maxThinkingBudgetTokens: Int?
     /// Hide this model from pickers. Hiding is presentation, never deletion — every record
     /// underneath survives, and un-hiding is removing this one field.
     public var hidden: Bool?
@@ -275,6 +277,7 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
         reasoningEffort: EffortSupport? = nil,
         reasoningControl: ReasoningControl? = nil,
         thinkingBudgetAccounting: ThinkingBudgetAccounting? = nil,
+        maxThinkingBudgetTokens: Int? = nil,
         hidden: Bool? = nil,
         isAvailable: Bool? = nil,
         isAccessDenied: Bool? = nil
@@ -290,6 +293,7 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
         self.reasoningEffort = reasoningEffort
         self.reasoningControl = reasoningControl
         self.thinkingBudgetAccounting = thinkingBudgetAccounting
+        self.maxThinkingBudgetTokens = maxThinkingBudgetTokens
         self.hidden = hidden
         self.isAvailable = isAvailable
         self.isAccessDenied = isAccessDenied
