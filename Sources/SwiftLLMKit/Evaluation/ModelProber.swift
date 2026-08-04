@@ -1223,7 +1223,10 @@ public enum ModelProber {
 
     /// The largest reasoning token budget the endpoint accepts.
     ///
-    /// Replaces the hardcoded 1024 floor (see ``ThinkingBudget``) with a measured per-model fact.
+    /// Replaces the hardcoded 1024 ceiling assumption (see ``ThinkingBudget``) with a measured
+    /// per-model fact. The **minimum is not searched for** — ``ThinkingBudget/minimumTokens`` is
+    /// asserted as the floor, and is merely CHECKED (one call, recorded in the evidence string) so
+    /// a model that rejects it is visible rather than silently mis-served.
     ///
     /// **The ceiling is derived, never a constant.** When the budget is drawn from the output
     /// allowance (Anthropic: `max_tokens` must EXCEED `budget_tokens`) a value above that allowance
@@ -1286,7 +1289,26 @@ public enum ModelProber {
         // If the whole allowance is accepted there is no ceiling to find inside it.
         switch await accepts(ceiling) {
         case true:
-            return .established(ceiling, "accepted a budget at the model's full \(ceiling)-token allowance",
+            // One more call to check the floor we ASSUME. `ThinkingBudget.minimumTokens` is a
+            // constant applied to every model by `ThinkingBudget.effective`, and this probe
+            // otherwise never tests it: the binary search below reaches it only when the ceiling is
+            // REJECTED, so on the common path (ceiling accepted first try) the floor is asserted and
+            // never observed — a model whose real minimum sits above 1024 would take a rejected
+            // budget from production with nothing here contradicting it.
+            //
+            // Evidence-only, deliberately. A measured minimum is a second number and this finding
+            // holds one; giving it a field means a new `ModelProfile` property, a schema bump and a
+            // migration, which is not worth doing before a model is actually found that needs it.
+            // Nothing reads this string — it is here to be read by a person.
+            let floorNote: String
+            switch await accepts(ThinkingBudget.minimumTokens) {
+            case true:  floorNote = "; the assumed \(ThinkingBudget.minimumTokens)-token floor was also accepted"
+            case false: floorNote = "; NOTE the assumed \(ThinkingBudget.minimumTokens)-token floor was REJECTED — "
+                                  + "this model's minimum is higher and production would send a rejected budget"
+            case nil:   floorNote = "; the \(ThinkingBudget.minimumTokens)-token floor went untested (no usable answer)"
+            }
+            return .established(ceiling,
+                                "accepted a budget at the model's full \(ceiling)-token allowance" + floorNote,
                                 duration: Date().timeIntervalSince(started))
         case nil:
             return .inconclusive("the endpoint gave no usable answer at \(ceiling)",
@@ -1355,12 +1377,25 @@ public enum ModelProber {
     /// Acceptance-graded, so an endpoint that merely ignores unknown body keys would record
     /// `true` — a false vendor fact written into the catalog and the shipped seed corpus. `keep`
     /// is a key of the `thinking` object, so only ``ReasoningControl/thinkingBlock`` can answer.
+    ///
+    /// Which is why `acceptedThinkingBlock` exists and is not optional. A DECLARED
+    /// ``ReasoningControl`` is authoritative when present, but nothing infers one: no `/models`
+    /// decoder writes the field, so it is nil for every freshly fetched model and only ever
+    /// arrives from a stored override or the catalog file. Gating on it alone left this probe
+    /// unreachable in practice — it recorded `nil` for all six models of the 2026-08-03 run and
+    /// could not have recorded anything else. The measured fallback is the `thinking.type=enabled`
+    /// finding from ``probeReasoningToggle``, which establishes BY ACCEPTANCE that this endpoint
+    /// has a thinking block: the same fact, observed rather than declared.
     public static func probeThinkingKeep(
         reasoningControl: ReasoningControl?,
+        acceptedThinkingBlock: Bool,
         makeProviderForcing: @Sendable ([String: AnyCodable]) async -> any LLMProvider,
         calls: ProbeCallCounter? = nil
     ) async -> ProbeFinding<Bool>? {
-        guard reasoningControl == .thinkingBlock else { return nil }
+        // A declaration wins in BOTH directions: it states the mechanism, so `.reasoningEffortOnly`
+        // vetoes even where the endpoint accepted the block. Only an absent one defers to measurement.
+        let hasThinkingBlock = reasoningControl.map { $0 == .thinkingBlock } ?? acceptedThinkingBlock
+        guard hasThinkingBlock else { return nil }
         return await probeForcedField(
             ["thinking": .dictionary(["type": .string("enabled"), "keep": .string("all")])],
             description: "thinking.keep=all",

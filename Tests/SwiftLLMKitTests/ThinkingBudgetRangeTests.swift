@@ -63,7 +63,8 @@ struct ThinkingBudgetRangeTests {
         let expectedCeiling = 64_000 - ThinkingBudget.minimumTokens
         let (finding, attempts) = await probe(maxOutput: 64_000) { _ in true }
         #expect(finding.value == expectedCeiling)
-        #expect(attempts == [expectedCeiling], "one call settles it — nothing higher is reachable")
+        #expect(attempts == [expectedCeiling, ThinkingBudget.minimumTokens],
+                "the ceiling settles the maximum; the second call checks the floor we ASSUME")
     }
 
     @Test("A separate allowance is NOT reduced — nothing has to be paired with it")
@@ -71,7 +72,26 @@ struct ThinkingBudgetRangeTests {
         let (finding, attempts) = await probe(
             maxOutput: nil, maxContext: 200_000, accounting: .separate) { _ in true }
         #expect(finding.value == 200_000)
-        #expect(attempts == [200_000])
+        #expect(attempts == [200_000, ThinkingBudget.minimumTokens])
+    }
+
+    /// The floor is ASSERTED by `ThinkingBudget.effective`, not searched for, so the one thing this
+    /// probe owes is noticing when the assertion is wrong for a model. Nothing reads the evidence
+    /// string — this pins that a rejected floor is at least SAID, since it silently would not be
+    /// otherwise: the accepted-ceiling path returns before the binary search ever reaches the floor.
+    @Test("A rejected floor is reported in the evidence, and does not change the ceiling")
+    func rejectedFloorIsSurfaced() async {
+        let expectedCeiling = 64_000 - ThinkingBudget.minimumTokens
+        let (finding, attempts) = await probe(maxOutput: 64_000) { $0 != ThinkingBudget.minimumTokens }
+        #expect(finding.value == expectedCeiling, "a bad floor is not evidence about the ceiling")
+        #expect(attempts == [expectedCeiling, ThinkingBudget.minimumTokens])
+        #expect(finding.evidence?.contains("REJECTED") == true)
+    }
+
+    @Test("An accepted floor is recorded too, so silence never has to be interpreted")
+    func acceptedFloorIsSurfaced() async {
+        let (finding, _) = await probe(maxOutput: 64_000) { _ in true }
+        #expect(finding.evidence?.contains("floor was also accepted") == true)
     }
 
     @Test("Converges on the real boundary, within the floor's precision")
