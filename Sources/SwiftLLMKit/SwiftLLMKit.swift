@@ -1385,7 +1385,8 @@ public final class LLMKitManager {
                 behaviorFlags: flags,
                 generalEffortSupport: generalEffortSupport,
                 measuredMaxThinkingBudget: measuredMaxThinkingBudget,
-                modelMaxOutputTokens: modelMaxOutputTokens
+                modelMaxOutputTokens: modelMaxOutputTokens,
+                modelCapabilities: modelCapabilities
             )
         case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaModel, .alibabaCloud, .openRouter:
             // `parallel_tool_calls: true` is sent by default for every OpenAI-compatible
@@ -1444,6 +1445,7 @@ public final class LLMKitManager {
                 configuration: config, provider: modelProvider,
                 readAPIKey: readAPIKey, verboseLogging: verbose,
                 behaviorFlags: flags,
+                modelCapabilities: modelCapabilities,
                 session: session
             )
         case .gemini:

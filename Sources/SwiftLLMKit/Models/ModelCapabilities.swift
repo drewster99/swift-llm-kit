@@ -329,3 +329,22 @@ extension ModelCapabilities: Codable {
         }
     }
 }
+
+public extension ModelCapabilities {
+    /// Whether a `tool_choice` carrying this option would actually be emitted.
+    ///
+    /// Two facts, because the decoders write two: ``ModelCapability/toolChoice`` is "this endpoint
+    /// accepts the PARAMETER at all" (LiteLLM's `supportsToolChoice`, OpenRouter's
+    /// `supported_parameters`), and the per-option capability is that option's own veto.
+    ///
+    /// Fails OPEN on unknown — `tool_choice` predates this gating, and silently dropping a
+    /// caller's explicit choice on every model no source has described would be a behaviour
+    /// change rather than a safety measure.
+    ///
+    /// Shared with `CapabilityProbe`, which must not claim it FORCED a tool call through a field
+    /// the provider then suppressed. A second copy of this rule is how the probe's record and the
+    /// wire drift apart.
+    func permitsToolChoice(_ choice: LLMToolChoice) -> Bool {
+        state(of: .toolChoice) != false && state(of: choice.requiredCapability) != false
+    }
+}

@@ -375,9 +375,7 @@ struct OpenAICompatibleProvider: LLMProvider {
             // over every option — reading it as "accepts `auto`" meant the strongest available
             // negative suppressed nothing for required/none/specific. The per-option capability is
             // then that option's own veto.
-            if let toolChoice,
-               modelCapabilities.state(of: .toolChoice) != false,
-               modelCapabilities.state(of: toolChoice.requiredCapability) != false {
+            if let toolChoice, modelCapabilities.permitsToolChoice(toolChoice) {
                 body["tool_choice"] = toolChoice.openAIWireValue.rawValue
             }
         }

@@ -132,10 +132,14 @@ public enum CapabilityProbe {
     ///   - llm: a provider already bound to the model under test. It exposes no capability data,
     ///     which is what keeps catalog claims out of a measurement of the truth.
     ///   - providerID/modelID: recorded on the result; not consulted.
+    /// - Parameter capabilities: the model's record, so `toolChoiceForced` reflects whether the
+    ///   provider will actually EMIT `tool_choice` rather than assuming it did. Defaults to an
+    ///   all-unknown set, which permits the field — the same fail-open the providers apply.
     public static func probeToolCalling(
         llm: any LLMProvider,
         providerID: String,
         modelID: String,
+        capabilities: ModelCapabilities = ModelCapabilities(),
         calls: ProbeCallCounter? = nil
     ) async -> ToolCallResult {
         let started = Date()
@@ -170,12 +174,16 @@ public enum CapabilityProbe {
         // won't take on faith, so: try forced, and fall back to a free choice only if the
         // endpoint rejects the parameter. A model that calls the tool unforced is just as much
         // proof; a model that doesn't is weaker evidence, which `toolChoiceForced` records.
-        var forced = true
+        // Not simply `true`: the provider suppresses `tool_choice` when the model's record denies
+        // the option, and the request then succeeds having never carried it. Claiming `forced`
+        // there records that the model had to be compelled when in fact it chose freely — which
+        // the field's own doc calls the STRONGER evidence, so the record understated itself.
+        var forced = capabilities.permitsToolChoice(.required)
         var first: LLMResponse
         do {
             calls?.increment()
             first = try await llm.send(messages: messages, tools: [tool],
-                                       overrides: LLMCallOverrides(toolChoice: .required))
+                                       overrides: LLMCallOverrides(toolChoice: forced ? .required : nil))
         } catch {
             let detail = Self.rejectionDetail(error)
             // A body that SAYS "tools is not supported in this model" is the endpoint answering

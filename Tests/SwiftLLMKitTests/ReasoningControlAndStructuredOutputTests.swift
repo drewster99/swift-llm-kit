@@ -546,3 +546,91 @@ struct WireShapeConsolidationTests {
         #expect(body["tool_choice"] == nil)
     }
 }
+
+/// Anthropic and Ollama took no `modelCapabilities` at all, so four gates the rest of the library
+/// applies were structurally unreachable on those routes — a fail-closed doctrine with two holes.
+@Suite("Every provider route applies the capability gates")
+struct UniformGatingTests {
+
+    private func anthropic(_ caps: ModelCapabilities, thinkingBudget: Int? = nil) throws -> AnthropicProvider {
+        AnthropicProvider(
+            configuration: ModelConfiguration(name: "t", providerID: "p", modelID: "m",
+                                              thinkingBudget: thinkingBudget),
+            provider: ModelProvider(id: "p", name: "p", apiType: .anthropic,
+                                    endpoint: try #require(URL(string: "https://api.anthropic.com"))),
+            readAPIKey: { "" }, modelCapabilities: caps)
+    }
+
+    private func ollama(_ caps: ModelCapabilities) throws -> OllamaProvider {
+        OllamaProvider(
+            configuration: ModelConfiguration(name: "t", providerID: "p", modelID: "m"),
+            provider: ModelProvider(id: "p", name: "p", apiType: .ollama,
+                                    endpoint: try #require(URL(string: "http://localhost:11434/api"))),
+            readAPIKey: { "" }, modelCapabilities: caps)
+    }
+
+    private func denying(_ capability: ModelCapability) -> ModelCapabilities {
+        var caps = ModelCapabilities(); caps[capability] = false; return caps
+    }
+
+    @Test("Anthropic honours a stated NO on a tool_choice option")
+    func anthropicGatesToolChoice() throws {
+        let tool = CapabilityProbe.makeProbeTool()
+        let denied = try anthropic(denying(.toolChoiceRequired)).buildRequestBody(
+            messages: [.user("hi")], tools: [tool], toolChoice: .required)
+        #expect(denied["tool_choice"] == nil)
+
+        // Unknown still emits — the gate fails open, as it does everywhere else.
+        let unknown = try anthropic(ModelCapabilities()).buildRequestBody(
+            messages: [.user("hi")], tools: [tool], toolChoice: .required)
+        let shape = try #require(unknown["tool_choice"] as? [String: Any])
+        #expect(shape["type"] as? String == "any", "and in Anthropic's own shape")
+    }
+
+    @Test("Ollama honours a stated NO on a tool_choice option")
+    func ollamaGatesToolChoice() throws {
+        let tool = CapabilityProbe.makeProbeTool()
+        let denied = try ollama(denying(.toolChoiceRequired)).buildRequestBody(
+            messages: [.user("hi")], tools: [tool], toolChoice: .required)
+        #expect(denied["tool_choice"] == nil)
+
+        let unknown = try ollama(ModelCapabilities()).buildRequestBody(
+            messages: [.user("hi")], tools: [tool], toolChoice: .required)
+        #expect(unknown["tool_choice"] as? String == "required")
+    }
+
+    @Test("Anthropic honours a stated NO on the thinking budget")
+    func anthropicGatesThinkingBudget() throws {
+        let denied = try anthropic(denying(.thinkingBudgetTokens), thinkingBudget: 4096)
+            .buildRequestBody(messages: [.user("hi")], tools: [])
+        #expect(denied["thinking"] == nil)
+
+        // Unknown keeps emitting: no Anthropic model has this recorded, so requiring known-true
+        // would switch manual thinking off everywhere.
+        let unknown = try anthropic(ModelCapabilities(), thinkingBudget: 4096)
+            .buildRequestBody(messages: [.user("hi")], tools: [])
+        #expect((unknown["thinking"] as? [String: Any])?["budget_tokens"] as? Int == 4096)
+    }
+
+    /// The parameter-level NO is a precondition over every option, on every route.
+    @Test("A stated NO on the parameter suppresses all four options everywhere")
+    func parameterLevelNoIsUniform() throws {
+        let caps = denying(.toolChoice)
+        let tool = CapabilityProbe.makeProbeTool()
+        for choice: LLMToolChoice in [.auto, .required, .textOnly, .specific(name: "x")] {
+            #expect(!caps.permitsToolChoice(choice), "\(choice) should be suppressed")
+        }
+        #expect(try anthropic(caps).buildRequestBody(messages: [.user("hi")], tools: [tool],
+                                                     toolChoice: .required)["tool_choice"] == nil)
+        #expect(try ollama(caps).buildRequestBody(messages: [.user("hi")], tools: [tool],
+                                                  toolChoice: .required)["tool_choice"] == nil)
+    }
+
+    /// The probe must not claim it FORCED a call through a field the provider suppressed.
+    @Test("permitsToolChoice is the one rule the probe and the providers share")
+    func probeAndProvidersShareTheRule() {
+        #expect(ModelCapabilities().permitsToolChoice(.required), "unknown permits")
+        #expect(!denying(.toolChoiceRequired).permitsToolChoice(.required))
+        #expect(!denying(.toolChoice).permitsToolChoice(.required), "the parameter-level veto wins")
+    }
+}

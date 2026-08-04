@@ -22,6 +22,9 @@ struct AnthropicProvider: LLMProvider {
     /// while it is being raised to clear a thinking budget — the configured value is only a
     /// preference (and defaults to 4096 whatever the model can do).
     private let modelMaxOutputTokens: Int?
+    /// The model's capabilities. This provider had none, so four of the gates the rest of the
+    /// library applies were structurally unreachable on the Anthropic route.
+    private let modelCapabilities: ModelCapabilities
 
     public init(
         configuration: ModelConfiguration,
@@ -32,7 +35,8 @@ struct AnthropicProvider: LLMProvider {
         behaviorFlags: BehaviorFlags = BehaviorFlags(),
         generalEffortSupport: EffortSupport? = nil,
         measuredMaxThinkingBudget: Int? = nil,
-        modelMaxOutputTokens: Int? = nil
+        modelMaxOutputTokens: Int? = nil,
+        modelCapabilities: ModelCapabilities = ModelCapabilities()
     ) {
         self.configuration = configuration
         self.provider = provider
@@ -43,6 +47,7 @@ struct AnthropicProvider: LLMProvider {
         self.generalEffortSupport = generalEffortSupport
         self.measuredMaxThinkingBudget = measuredMaxThinkingBudget
         self.modelMaxOutputTokens = modelMaxOutputTokens
+        self.modelCapabilities = modelCapabilities
     }
 
     public func send(
@@ -255,7 +260,11 @@ struct AnthropicProvider: LLMProvider {
                 // Already clamped against both the measured ceiling and the room under
                 // `max_tokens`; `nil` means no legal budget exists, so emit no thinking block
                 // rather than one the endpoint will reject.
-                if let sent = emittableThinkingBudget {
+                // Fails OPEN on unknown for the same reason: manual thinking has always been
+                // emitted from `thinkingBudget`, and no Anthropic model has this capability
+                // recorded, so requiring known-true would switch thinking off everywhere.
+                if let sent = emittableThinkingBudget,
+                   modelCapabilities.state(of: .thinkingBudgetTokens) != false {
                     body["thinking"] = ["type": "enabled", "budget_tokens": sent] as [String: Any]
                 }
             }
@@ -303,7 +312,12 @@ struct AnthropicProvider: LLMProvider {
             // Only emit when caller explicitly set it — otherwise Anthropic's
             // default ("auto" when tools are present) applies.
             if let toolChoice {
-                body["tool_choice"] = Self.encodeAnthropicToolChoice(toolChoice)
+                // Gated like every other route. Fails OPEN on unknown: `tool_choice` predates the
+                // gating, so dropping a caller's explicit choice on an undescribed model would be
+                // a behaviour change, not a safety measure.
+                if modelCapabilities.permitsToolChoice(toolChoice) {
+                    body["tool_choice"] = toolChoice.anthropicWireValue.rawValue
+                }
             }
         }
 

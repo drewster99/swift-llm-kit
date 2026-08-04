@@ -19,6 +19,8 @@ struct OllamaProvider: LLMProvider {
     private let readAPIKey: @Sendable () -> String
     private let verboseLogging: Bool
     private let behaviorFlags: BehaviorFlags
+    /// The model's capabilities, so `tool_choice` is gated here as it is on every other route.
+    private let modelCapabilities: ModelCapabilities
     private let session: URLSession
 
     // MARK: - Static regex patterns (compiled once)
@@ -59,6 +61,7 @@ struct OllamaProvider: LLMProvider {
         readAPIKey: @Sendable @escaping () -> String,
         verboseLogging: Bool = false,
         behaviorFlags: BehaviorFlags = BehaviorFlags(),
+        modelCapabilities: ModelCapabilities = ModelCapabilities(),
         session: URLSession = llmURLSession
     ) {
         self.configuration = configuration
@@ -66,6 +69,7 @@ struct OllamaProvider: LLMProvider {
         self.readAPIKey = readAPIKey
         self.verboseLogging = verboseLogging
         self.behaviorFlags = behaviorFlags
+        self.modelCapabilities = modelCapabilities
         self.session = session
     }
 
@@ -215,7 +219,9 @@ struct OllamaProvider: LLMProvider {
             // models that don't are unaffected. No flag gating — emission
             // is benign even when ignored.
             if let toolChoice {
-                body["tool_choice"] = toolChoice.openAIWireValue.rawValue
+                if modelCapabilities.permitsToolChoice(toolChoice) {
+                    body["tool_choice"] = toolChoice.openAIWireValue.rawValue
+                }
             }
         }
 
