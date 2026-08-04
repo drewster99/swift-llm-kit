@@ -74,6 +74,20 @@ public enum ModelProber {
         if let value = facts.capabilities.pdfInput { profile.pdfInput = .decoded(value, evidence) }
         seedEffort(facts.generalEffort, into: &profile.generalEffortLevels, evidence: evidence)
         seedEffort(facts.reasoningEffort, into: &profile.reasoningEffortLevels, evidence: evidence)
+        // A vendor-stated `reasoning: false` settles the REASONING ladder without stating it: a
+        // model with no reasoning has no reasoning-effort levels. Seeded so the ladder is not
+        // re-asked seven times per model — 405 of this catalog's 1,667 models are in exactly this
+        // position, which is 2,835 calls asking a non-reasoning model how hard to think.
+        //
+        // Only the reasoning ladder. GENERAL effort applies even with reasoning off — that is the
+        // distinction the two constructs exist to keep, and folding them here would erase it.
+        // `.decoded`, like every other seeded fact, so `--no-seed` can still overturn it.
+        if facts.capabilities.reasoning == false, profile.reasoningEffortLevels.isEmpty {
+            for level in EffortRank.table.keys {
+                profile.reasoningEffortLevels[level] =
+                    .decoded(false, evidence + " (the model states it does not reason)")
+            }
+        }
         // Listed in /models ⇒ presumed reachable, but only presumed — a live probe can overturn it.
         profile.isAvailable = .decoded(true, "present in provider /models listing")
         return profile

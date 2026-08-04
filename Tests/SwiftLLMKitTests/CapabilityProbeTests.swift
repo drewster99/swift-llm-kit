@@ -1849,3 +1849,67 @@ struct ZAIMaxOutputTests {
         #expect(LLMProviderError.reportedMaxOutputTokenLimit(inBody: context) == nil)
     }
 }
+
+/// What the vendor's `/models` payload settles must not be re-asked. These pin the two rules that
+/// decide whether an effort level costs a live call.
+@Suite("Effort ladders seed from the payload rather than being re-probed")
+struct EffortLadderSeedingTests {
+
+    private func seeded(_ facts: ModelFacts) -> ModelProfile {
+        ModelProber.seedProfile(fromDecodedFacts: DecodedModelFacts(modelID: "m", facts: facts),
+                                providerID: "p")
+    }
+
+    /// A KNOWN ladder is the vendor enumerating THE valid set, so every level it omits is a stated
+    /// "no" — otherwise a vendor denial is indistinguishable from "nobody asked" and gets re-probed.
+    @Test("A stated ladder answers every level, accepted and omitted alike")
+    func statedLadderAnswersEveryLevel() {
+        var facts = ModelFacts()
+        facts.reasoningEffort = .levels(["low", "high"])
+        let profile = seeded(facts)
+        #expect(profile.reasoningEffortLevels.count == EffortRank.table.count,
+                "an unanswered level is a level the probe will pay for")
+        #expect(profile.reasoningEffortLevels["low"]?.value == true)
+        #expect(profile.reasoningEffortLevels["medium"]?.value == false, "omitted from a known set is a stated no")
+        #expect(profile.reasoningEffortLevels.values.allSatisfy { $0.source == .decoded })
+    }
+
+    /// The rule this suite exists for: a model that states it does not reason has no reasoning-effort
+    /// ladder, and asking it seven times measures nothing.
+    @Test("reasoning=false settles the reasoning ladder without a ladder being stated")
+    func nonReasoningModelNeedsNoReasoningLadder() {
+        var facts = ModelFacts()
+        facts.capabilities[.reasoning] = false
+        let profile = seeded(facts)
+        #expect(profile.reasoningEffortLevels.count == EffortRank.table.count)
+        #expect(profile.reasoningEffortLevels.values.allSatisfy { $0.value == false })
+    }
+
+    /// General effort is Anthropic's `output_config.effort`, which applies even with reasoning OFF.
+    /// Folding the two here would erase the distinction they were split apart to keep.
+    @Test("reasoning=false does NOT settle the general ladder")
+    func generalLadderSurvivesANonReasoningModel() {
+        var facts = ModelFacts()
+        facts.capabilities[.reasoning] = false
+        #expect(seeded(facts).generalEffortLevels.isEmpty, "still open for the probe to measure")
+    }
+
+    /// An explicitly stated ladder wins over the inference. Only an EMPTY ladder is filled in, so a
+    /// model that both says it does not reason and enumerates efforts keeps what it actually said.
+    @Test("A stated ladder is not overwritten by the reasoning=false inference")
+    func statedLadderBeatsTheInference() {
+        var facts = ModelFacts()
+        facts.capabilities[.reasoning] = false
+        facts.reasoningEffort = .levels(["high"])
+        #expect(seeded(facts).reasoningEffortLevels["high"]?.value == true)
+    }
+
+    /// `supportedLevelsUnknown` states the parameter works but not which values — the whole ladder
+    /// stays open, which is the state that had no representation before `EffortSupport`.
+    @Test("Levels-unknown leaves the ladder entirely to the probe")
+    func levelsUnknownSeedsNothing() {
+        var facts = ModelFacts()
+        facts.reasoningEffort = .supportedLevelsUnknown
+        #expect(seeded(facts).reasoningEffortLevels.isEmpty)
+    }
+}
