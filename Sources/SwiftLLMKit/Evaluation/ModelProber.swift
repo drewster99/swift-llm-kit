@@ -1630,11 +1630,118 @@ public enum ModelProber {
         makeProviderForcing: @Sendable ([String: AnyCodable]) async -> any LLMProvider,
         calls: ProbeCallCounter? = nil
     ) async -> ProbeFinding<Bool> {
-        await probeForcedField(
+        await observeReasoningToggle(enabled: enabled, makeProviderForcing: makeProviderForcing,
+                                     calls: calls).finding
+    }
+
+    /// One direction of the reasoning switch, plus what the model actually DID about it.
+    public struct ReasoningToggleObservation: Sendable {
+        /// Whether the endpoint accepted the switch — the capability finding as before.
+        public let finding: ProbeFinding<Bool>
+        /// Whether the reply carried reasoning: thinking tokens billed, or reasoning text returned.
+        ///
+        /// `nil` when there was no reply to look at (the call was refused, or gave no answer), which
+        /// is NOT the same as a reply that carried none.
+        public let reasoningEmitted: Bool?
+        /// Thinking tokens the reply was billed for. 0 covers both "did not think" and "the provider
+        /// does not report it", which is why a zero is never read on its own.
+        public let reasoningTokens: Int
+
+        public init(finding: ProbeFinding<Bool>, reasoningEmitted: Bool?, reasoningTokens: Int) {
+            self.finding = finding
+            self.reasoningEmitted = reasoningEmitted
+            self.reasoningTokens = reasoningTokens
+        }
+    }
+
+    /// Switches reasoning to `enabled` and reports both the endpoint's answer and the reply's own
+    /// evidence of having reasoned.
+    ///
+    /// Acceptance alone is a weak grade for this field in particular. `thinking` is an unknown key
+    /// to most OpenAI-compatible endpoints, and unknown keys are ignored rather than refused — so
+    /// "accepted `thinking.type=disabled`" was being recorded as "reasoning can be turned off" for
+    /// models that carried right on thinking. The reply settles it.
+    public static func observeReasoningToggle(
+        enabled: Bool,
+        makeProviderForcing: @Sendable ([String: AnyCodable]) async -> any LLMProvider,
+        calls: ProbeCallCounter? = nil
+    ) async -> ReasoningToggleObservation {
+        let (finding, response) = await probeForcedFieldObserving(
             ["thinking": .dictionary(["type": .string(enabled ? "enabled" : "disabled")])],
             description: "thinking.type=\(enabled ? "enabled" : "disabled")",
             rejectionKeywords: ["thinking", "reasoning"],
             makeProviderForcing: makeProviderForcing, calls: calls)
+        guard let response else {
+            return ReasoningToggleObservation(finding: finding, reasoningEmitted: nil, reasoningTokens: 0)
+        }
+        // TWO signals, because neither covers every provider. Anthropic folds thinking into
+        // `outputTokens` and leaves `reasoningTokens` at 0 by design, so the token count alone
+        // would read every Anthropic model as not reasoning; the returned thinking text carries
+        // those. Conversely OpenAI's o-series bills reasoning tokens without returning any text.
+        let tokens = response.usage?.reasoningTokens ?? 0
+        let hasText = response.reasoning?.isEmpty == false
+        return ReasoningToggleObservation(finding: finding,
+                                          reasoningEmitted: tokens > 0 || hasText,
+                                          reasoningTokens: tokens)
+    }
+
+    /// What the two switch directions, taken together, establish about the model.
+    public struct ReasoningConclusions: Sendable {
+        /// Whether the model reasons AT ALL (``ModelCapability/reasoning``).
+        public let reasons: ProbeFinding<Bool>
+        /// ``ModelCapability/reasoningCanBeDisabled``, corrected for a switch that was accepted and
+        /// then ignored.
+        public let canBeDisabled: ProbeFinding<Bool>
+    }
+
+    /// Combines the ON and OFF observations. Pure — no I/O — so the reasoning here is testable
+    /// without a network, which matters because it is the part that can get an answer wrong.
+    ///
+    /// Three rules, and each refuses to overreach in a specific way:
+    ///
+    /// - **Reasoning is established `true` only by observing it.** Thinking tokens billed, or
+    ///   reasoning text returned, in EITHER direction — a model that thinks even when told not to
+    ///   still demonstrably thinks. Accepting the `thinking` field proves nothing, because unknown
+    ///   keys are ignored rather than refused.
+    /// - **Reasoning is never established `false` here.** Not emitting reasoning could be a model
+    ///   that does not reason, a provider that does not report thinking tokens, or a model that
+    ///   simply had nothing to think about on a one-word prompt. Only the vendor's own `/models`
+    ///   statement can say no.
+    /// - **"Can be disabled" is overturned by evidence, never invented.** If reasoning was
+    ///   observable when ON and is still there when OFF, the switch did not work — an established
+    ///   `false` that acceptance-grading recorded backwards as `true`. If reasoning was never
+    ///   observable at all, the comparison has no baseline and the acceptance answer stands.
+    public static func concludeReasoning(on: ReasoningToggleObservation,
+                                         off: ReasoningToggleObservation) -> ReasoningConclusions {
+        let emitted = [on, off].first { $0.reasoningEmitted == true }
+        let reasons: ProbeFinding<Bool>
+        if let emitted {
+            let how = emitted.reasoningTokens > 0
+                ? "\(emitted.reasoningTokens) thinking tokens billed"
+                : "reasoning content returned"     // Anthropic: thinking is folded into outputTokens
+            reasons = .established(true, "the model demonstrably reasons — \(how)")
+        } else {
+            reasons = .inconclusive("no reasoning was returned, which a non-reasoning model, a "
+                                  + "provider that does not report thinking tokens, and a trivial "
+                                  + "prompt all produce alike")
+        }
+
+        // Only meaningful when reasoning was OBSERVABLE with the switch on: otherwise its absence
+        // with the switch off says nothing about the switch.
+        let canBeDisabled: ProbeFinding<Bool>
+        if on.reasoningEmitted == true, off.reasoningEmitted == true {
+            let seen = off.reasoningTokens > 0 ? "\(off.reasoningTokens) thinking tokens" : "reasoning content"
+            canBeDisabled = .established(false, "reasoning continued with thinking.type=disabled "
+                                              + "(\(seen)) — the endpoint accepted the switch and "
+                                              + "then ignored it")
+        } else if on.reasoningEmitted == true, off.reasoningEmitted == false,
+                  off.finding.status == .established, off.finding.value == true {
+            canBeDisabled = .established(true, "reasoning stopped with thinking.type=disabled, "
+                                             + "having been present with it enabled")
+        } else {
+            canBeDisabled = off.finding
+        }
+        return ReasoningConclusions(reasons: reasons, canBeDisabled: canBeDisabled)
     }
 
     /// Whether `thinking.keep: "all"` is accepted — retaining reasoning content across turns.
@@ -1713,20 +1820,38 @@ public enum ModelProber {
         makeProviderForcing: @Sendable ([String: AnyCodable]) async -> any LLMProvider,
         calls: ProbeCallCounter?
     ) async -> ProbeFinding<Bool> {
+        await probeForcedFieldObserving(forced, description: description,
+                                        rejectionKeywords: rejectionKeywords,
+                                        makeProviderForcing: makeProviderForcing, calls: calls).finding
+    }
+
+    /// `probeForcedField`, but hands back the RESPONSE as well as the verdict.
+    ///
+    /// Acceptance answers "did the endpoint take this field". For most fields that is all there is
+    /// to see. For the reasoning switches it is not: the response says whether the switch actually
+    /// DID anything, and a switch that is accepted and ignored is the failure worth catching.
+    private static func probeForcedFieldObserving(
+        _ forced: [String: AnyCodable],
+        description: String,
+        rejectionKeywords: [String],
+        makeProviderForcing: @Sendable ([String: AnyCodable]) async -> any LLMProvider,
+        calls: ProbeCallCounter?
+    ) async -> (finding: ProbeFinding<Bool>, response: LLMResponse?) {
         let started = Date()
         calls?.increment()
         do {
-            _ = try await makeProviderForcing(forced)
+            let response = try await makeProviderForcing(forced)
                 .send(messages: [.user("Reply with the single word: ok")], tools: [])
-            return .established(true, "accepted \(description)", duration: Date().timeIntervalSince(started))
+            return (.established(true, "accepted \(description)", duration: Date().timeIntervalSince(started)),
+                    response)
         } catch {
             let detail = CapabilityProbe.rejectionDetail(error)
             let lowered = detail.lowercased()
             if !CapabilityProbe.classifyFailure(error).meansNoAnswer,
                rejectionKeywords.contains(where: { lowered.contains($0) }) {
-                return .established(false, detail, duration: Date().timeIntervalSince(started))
+                return (.established(false, detail, duration: Date().timeIntervalSince(started)), nil)
             }
-            return .inconclusive(detail, duration: Date().timeIntervalSince(started))
+            return (.inconclusive(detail, duration: Date().timeIntervalSince(started)), nil)
         }
     }
 

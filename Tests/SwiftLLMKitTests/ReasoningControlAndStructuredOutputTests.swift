@@ -738,3 +738,107 @@ struct MeasuredMinimumBudgetTests {
         #expect(pair.maxTokens > 4096, "max_tokens must still exceed the budget actually sent")
     }
 }
+
+/// The two reasoning switches are probed separately and neither implies the other; this is what
+/// they establish TOGETHER. Pure inference, so every branch is reachable without a network — which
+/// matters because this is the part that can record a wrong answer about a model.
+@Suite("What the two reasoning switch directions conclude")
+struct ReasoningConclusionTests {
+
+    private func observation(accepted: Bool?, emitted: Bool?, tokens: Int = 0)
+        -> ModelProber.ReasoningToggleObservation {
+        let finding: ProbeFinding<Bool>
+        switch accepted {
+        case true?:  finding = .established(true, "accepted")
+        case false?: finding = .established(false, "refused")
+        case nil:    finding = .inconclusive("no answer")
+        }
+        return .init(finding: finding, reasoningEmitted: emitted, reasoningTokens: tokens)
+    }
+
+    @Test("Observing reasoning establishes that the model reasons")
+    func observedReasoningEstablishesIt() {
+        let c = ModelProber.concludeReasoning(
+            on: observation(accepted: true, emitted: true, tokens: 240),
+            off: observation(accepted: true, emitted: false))
+        #expect(c.reasons.value == true)
+        #expect(c.reasons.evidence?.contains("240 thinking tokens") == true)
+    }
+
+    /// Anthropic folds thinking into `outputTokens` and reports `reasoningTokens` as 0 by design.
+    /// Reading the token count alone would record every Anthropic model as not reasoning.
+    @Test("Reasoning TEXT with zero billed tokens still establishes it")
+    func reasoningTextCountsWithoutTokens() {
+        let c = ModelProber.concludeReasoning(
+            on: observation(accepted: true, emitted: true, tokens: 0),
+            off: observation(accepted: true, emitted: false))
+        #expect(c.reasons.value == true)
+        #expect(c.reasons.evidence?.contains("reasoning content returned") == true,
+                "must not claim 0 thinking tokens as the evidence")
+    }
+
+    /// A model that thinks even when told not to still demonstrably thinks.
+    @Test("Reasoning seen in EITHER direction establishes it")
+    func eitherDirectionCounts() {
+        let c = ModelProber.concludeReasoning(
+            on: observation(accepted: false, emitted: nil),
+            off: observation(accepted: true, emitted: true, tokens: 10))
+        #expect(c.reasons.value == true)
+    }
+
+    /// Silence has three causes and this probe cannot tell them apart, so it must not pick one.
+    @Test("Never establishes that a model does NOT reason")
+    func absenceIsNeverAProof() {
+        let c = ModelProber.concludeReasoning(
+            on: observation(accepted: true, emitted: false),
+            off: observation(accepted: true, emitted: false))
+        #expect(c.reasons.status == .inconclusive)
+        #expect(c.reasons.value == nil)
+    }
+
+    /// The defect this work exists to catch: `thinking` is an unknown key to most OpenAI-compatible
+    /// endpoints, and unknown keys are IGNORED rather than refused — so acceptance-grading recorded
+    /// "reasoning can be turned off" for a model that carried right on thinking.
+    @Test("A switch that is accepted and then ignored is established FALSE")
+    func acceptedButIgnoredIsFalse() {
+        let c = ModelProber.concludeReasoning(
+            on: observation(accepted: true, emitted: true, tokens: 500),
+            off: observation(accepted: true, emitted: true, tokens: 480))
+        #expect(c.canBeDisabled.value == false)
+        #expect(c.canBeDisabled.evidence?.contains("ignored") == true)
+    }
+
+    @Test("A switch that demonstrably stopped the reasoning is established TRUE")
+    func reasoningStoppedIsTrue() {
+        let c = ModelProber.concludeReasoning(
+            on: observation(accepted: true, emitted: true, tokens: 500),
+            off: observation(accepted: true, emitted: false))
+        #expect(c.canBeDisabled.value == true)
+        #expect(c.canBeDisabled.evidence?.contains("stopped") == true)
+    }
+
+    /// With no reasoning visible when ON there is no baseline, so its absence when OFF says nothing
+    /// about the switch. The acceptance answer has to stand rather than be upgraded on no evidence.
+    @Test("Without a baseline the acceptance answer is passed through untouched")
+    func noBaselineKeepsTheAcceptanceAnswer() {
+        let refused = observation(accepted: false, emitted: nil)
+        let c = ModelProber.concludeReasoning(on: observation(accepted: true, emitted: false), off: refused)
+        #expect(c.canBeDisabled.value == false)
+        #expect(c.canBeDisabled.evidence == "refused", "passed through, not re-derived")
+
+        let unanswered = observation(accepted: nil, emitted: nil)
+        let c2 = ModelProber.concludeReasoning(on: observation(accepted: true, emitted: false), off: unanswered)
+        #expect(c2.canBeDisabled.status == .inconclusive)
+    }
+
+    /// An OFF direction that was never accepted cannot be upgraded to a true by the absence of
+    /// reasoning — nothing was disabled, the call was refused.
+    @Test("A refused OFF switch is not upgraded by a quiet reply")
+    func refusedSwitchIsNotUpgraded() {
+        let c = ModelProber.concludeReasoning(
+            on: observation(accepted: true, emitted: true, tokens: 100),
+            off: observation(accepted: false, emitted: nil))
+        #expect(c.canBeDisabled.value == false)
+        #expect(c.canBeDisabled.evidence == "refused")
+    }
+}

@@ -17,10 +17,15 @@ public enum ModelCapability: String, CaseIterable, Sendable, Codable, Hashable {
     case batch = "batch"
     case toolUse = "toolUse"
     case vision = "vision"
-    /// NOT PROBED — vendor-declared only. Whether the model reasons AT ALL. What IS probed is whether
-    /// reasoning can be switched (``reasoningCanBeEnabled`` / ``reasoningCanBeDisabled``), which is
-    /// a different question: a thinking-only model reasons but cannot be turned off, and a model
-    /// that rejects both switches may still reason by default.
+    /// Whether the model reasons AT ALL — a different question from whether reasoning can be
+    /// SWITCHED (``reasoningCanBeEnabled`` / ``reasoningCanBeDisabled``): a thinking-only model
+    /// reasons but cannot be turned off, and a model that rejects both switches may still reason
+    /// by default.
+    ///
+    /// Established only by OBSERVING reasoning — thinking tokens billed, or reasoning content
+    /// returned — while probing either switch direction. Never established false: a quiet reply is
+    /// produced alike by a model that does not reason, a provider that does not report thinking
+    /// tokens, and a prompt with nothing to think about. Only the vendor can say no.
     case reasoning = "reasoning"
     /// NOT PROBED — vendor-declared only. A server-side tool with a per-vendor request shape
     /// (Anthropic `code_execution`, Gemini `codeExecution`), so a probe is per-provider work rather
@@ -157,9 +162,9 @@ public enum ModelCapability: String, CaseIterable, Sendable, Codable, Hashable {
              .toolChoiceSupportsNamedFunction, .toolDefinitionsSupportStrict,
              .reasoningCanBeEnabled, .reasoningCanBeDisabled,
              .thinkingSupportsKeepAll, .thinkingSupportsTokenBudget,
-             .systemMessages, .assistantPrefill, .parallelToolCalls:
+             .systemMessages, .assistantPrefill, .parallelToolCalls, .reasoning:
             return true
-        case .reasoning, .batch, .codeExecution, .promptCaching, .computerUse,
+        case .batch, .codeExecution, .promptCaching, .computerUse,
              .audioInput, .audioOutput, .videoInput, .webSearch, .toolChoiceSupported:
             return false
         }
