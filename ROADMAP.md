@@ -60,11 +60,43 @@ would otherwise record as supporting it. `tool_choice` stays acceptance-graded d
 `try?` and SKIPS failures, so an unmigrated record does not error, it vanishes with every finding in
 it.
 
-**Still open**: `videoInput` has no probe (there is no video send path to probe it through, and the
-capability comes from the vendor's own `/models` statement); the eval runner's new probes have not
-yet been run against the live corpus.
+**Still open**: `videoInput` has no probe — see "Video input: a send path, then a probe" under
+Planned, which is blocked on there being any way to send a video at all. The eval runner's new
+probes have also not yet been run against the live corpus.
 
 ## Planned
+
+### Video input: a send path, then a probe
+
+`ModelCapability.videoInput` arrives from four sources — Moonshot's `supports_video_in`
+(`ModelFetchService:277`), OpenRouter's and HuggingFace's modality arrays (`:393`, `:557`), and
+LiteLLM enrichment (`ModelMetadataService:509`) — and is the one capability with **no probe**. That is not
+an oversight to close on its own: there is nothing to probe *through*. `LLMMessage` carries `images`
+and `documents` and no video, so the library cannot send a video at all, and a probe cannot
+establish a capability the request layer has no way to exercise.
+
+So this is two pieces of work in order, and the second is small:
+
+**1. A video send path.** Moonshot's is a three-step lifecycle, not a message-encoding tweak:
+upload via a files endpoint (`purpose: "video"`), reference the returned id as `ms://<id>`, delete
+it afterwards. That implies a file-upload/delete API surface the library does not have, plus
+cleanup on every error path — an orphaned upload is a resource leak on the user's account, so the
+delete has to survive a failed request rather than ride the happy path. Gemini and OpenRouter each
+express video differently again, so `ReasoningControl`'s lesson applies: the mechanism belongs in
+per-model data, not a `switch` on `apiType`.
+
+**2. The probe.** Once a video can be sent, this is the cheap part and follows the pattern the other
+probes settled on: force the field, and grade the thing that distinguishes support from
+instruction-following. As with `probeStructuredOutput`, the prompt must NOT ask for what the grader
+checks — ask something only a model that actually received the video could answer, so an endpoint
+that ignored the attachment fails rather than guesses. A tiny generated clip (a few solid-colour
+frames) keeps the fixture in-repo and the correct answer unambiguous.
+
+Until both land, `videoInput` stays a **recorded vendor fact that the library cannot exercise** —
+which is the honest state and is documented as such in CLAUDE.md, alongside the five other
+capabilities in the same position (`audioInput`, `audioOutput`, `computerUse`, `webSearch`,
+`codeExecution`). Recording facts ahead of the wire layer is deliberate: discarding a stated vendor
+fact means re-fetching it the day the send path lands.
 
 ### Model metadata: what each vendor actually publishes, and the shape that holds it (agreed design, 2026-07-17)
 
