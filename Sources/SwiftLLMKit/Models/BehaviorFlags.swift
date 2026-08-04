@@ -57,7 +57,6 @@ public enum BehaviorFlag: String, CaseIterable, Sendable, Hashable {
             return "Model accepts OpenAI's `developer` message role (o-series / GPT-5). When off, `developer` messages are downgraded to `system` — the safe default for non-OpenAI backends."
         case .requiresAdaptiveThinking:
             return "Anthropic models that require `thinking: {type: \"adaptive\"}` and reject the legacy manual budget format with HTTP 400 (Claude Opus 4.7 / 4.8). When on, the configured thinking budget is ignored."
-            return "OpenAI-compatible models that accept a top-level `reasoning_effort` field (o-series, GPT-5). When on and an effort level is set, it's emitted; non-reasoning models 400 on the field, so it's gated."
         case .mustNeverSendTemperatureParam:
             return "Model rejects the `temperature` parameter entirely — any value (even 0) fails with HTTP 400 (OpenAI o-series / GPT-5 reasoning family). When on, temperature is omitted from every request."
         case .supportsTrailingSystemMessage:
@@ -151,13 +150,10 @@ public struct BehaviorFlags: Codable, Sendable, Equatable {
     /// where manual still works) keep the legacy path.
     public var requiresAdaptiveThinking: Bool = false
 
-    /// OpenAI-compatible models that accept a top-level `reasoning_effort`
-    /// field for reasoning depth control. Set on the OpenAI o-series (o1,
-    /// o1-preview, o1-mini, o3, o3-mini, o4-mini) and the GPT-5 family
-    /// (gpt-5, gpt-5-mini, gpt-5-pro). Non-reasoning models (GPT-4o,
-    /// GPT-3.5-turbo, etc.) reject the field with HTTP 400, so emission
-    /// is gated. When true AND `ModelConfiguration.thinkingEffort` is
-    /// set, `OpenAICompatibleProvider` emits `reasoning_effort: <value>`
+    // The `supportsReasoningEffort` flag that stood here is RETIRED. What it recorded — "this
+    // model accepts a top-level `reasoning_effort`" — is now `ModelInfo.reasoningEffort`, an
+    // `EffortSupport` that also carries WHICH values are legal. The 18 bundled entries that set
+    // this flag were migrated to `.supportedLevelsUnknown`, which is exactly what it meant.
 
     /// Models that reject the `temperature` request parameter entirely — sending ANY value
     /// (including 0) fails with HTTP 400. OpenAI's o-series (o1, o3, o4-mini) and the GPT-5
