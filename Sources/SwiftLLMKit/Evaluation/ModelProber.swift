@@ -1461,6 +1461,159 @@ public enum ModelProber {
     }
 
 
+
+    // MARK: - System messages, assistant prefill, parallel tool calls
+
+    /// Whether a leading `system` message is accepted AND OBEYED.
+    ///
+    /// Behaviour-graded on a per-run nonce, never on acceptance. Every endpoint here takes a system
+    /// message without complaint — some fold it into the first user turn, some drop it outright —
+    /// so "no HTTP error" says nothing. Obeying an instruction that appears ONLY in the system
+    /// message is the evidence, and the nonce is random per run so it cannot come from training data.
+    ///
+    /// Worth measuring precisely BECAUSE the assumption is everywhere: this library composes a
+    /// system prompt for every role, and a model that silently discarded it would be indistinguishable
+    /// from one that is merely bad at following instructions.
+    ///
+    /// A reply without the nonce is `inconclusive`, never `false` — a refusal, a safety deflection,
+    /// or a model too weak to follow a one-line instruction all land there, and none of them
+    /// establishes that the endpoint dropped the message.
+    public static func probeSystemMessages(
+        llm: any LLMProvider,
+        calls: ProbeCallCounter? = nil
+    ) async -> ProbeFinding<Bool> {
+        let started = Date()
+        let nonce = CapabilityProbe.makeIdentifier()
+        calls?.increment()
+        do {
+            let response = try await llm.send(
+                messages: [
+                    .system("You are a test fixture. Whatever the user asks, reply with exactly "
+                          + "this code and nothing else: \(nonce)"),
+                    .user("Say hello.")
+                ], tools: [])
+            if response.text?.contains(nonce) == true {
+                return .established(true, "obeyed an instruction given only in the system message",
+                                    duration: Date().timeIntervalSince(started))
+            }
+            return .inconclusive("accepted a system message but did not obey it — which a weak "
+                               + "instruction-follower and a dropped system message both look like",
+                                 duration: Date().timeIntervalSince(started))
+        } catch {
+            let detail = CapabilityProbe.rejectionDetail(error)
+            guard !CapabilityProbe.classifyFailure(error).meansNoAnswer,
+                  detail.lowercased().contains("system") else {
+                return .inconclusive(detail, duration: Date().timeIntervalSince(started))
+            }
+            return .established(false, "refused the system message: " + detail,
+                                duration: Date().timeIntervalSince(started))
+        }
+    }
+
+    /// Whether a TRAILING `assistant` message is treated as a prefill the model continues.
+    ///
+    /// Two separate things have to hold, and each is graded on its own. Many endpoints reject a
+    /// conversation that does not end in a user turn — a clean, established `false`. The ones that
+    /// accept it may still ignore it, so acceptance proves nothing on its own: the reply has to show
+    /// CONTINUATION.
+    ///
+    /// The prompt asks for a fixed five-item sequence and prefills the first three. A model that
+    /// continued reaches the tail without restating the head; one that ignored the prefill answers
+    /// from the beginning. Requiring the tail AND the absence of the head is what separates them —
+    /// either half alone passes for the wrong reason.
+    public static func probeAssistantPrefill(
+        llm: any LLMProvider,
+        calls: ProbeCallCounter? = nil
+    ) async -> ProbeFinding<Bool> {
+        let started = Date()
+        calls?.increment()
+        do {
+            let response = try await llm.send(
+                messages: [
+                    .user("List exactly the first five letters of the alphabet, uppercase, "
+                        + "separated by ', '. Reply with only the list."),
+                    .assistant(text: "A, B, C,")
+                ], tools: [])
+            // A nil body (a tool call, an empty completion) continued nothing, so it falls to
+            // the neither-continued-nor-restated branch rather than being read as a refusal.
+            let reply = (response.text ?? "").uppercased()
+            let restatedHead = reply.contains("A, B") || reply.contains("A,B")
+            let reachedTail = reply.contains("E")
+            switch (restatedHead, reachedTail) {
+            case (false, true):
+                return .established(true, "continued the prefilled turn — reached E without restating A, B",
+                                    duration: Date().timeIntervalSince(started))
+            case (true, _):
+                return .established(false, "accepted a trailing assistant turn but answered from the "
+                                         + "start, so it was not treated as a prefill",
+                                    duration: Date().timeIntervalSince(started))
+            case (false, false):
+                return .inconclusive("the reply neither continued the prefill nor restated it: "
+                                   + String((response.text ?? "<empty>").prefix(120)),
+                                     duration: Date().timeIntervalSince(started))
+            }
+        } catch {
+            let detail = CapabilityProbe.rejectionDetail(error)
+            let lowered = detail.lowercased()
+            // Only a MESSAGE-ORDERING complaint is an answer about prefill. An unrelated 400 (bad
+            // key, unknown model) says nothing, and grading it `false` would write a vendor "no"
+            // out of an error that never mentioned the shape being tested.
+            let orderingComplaint = ["assistant", "last message", "must end", "role", "alternat"]
+            guard !CapabilityProbe.classifyFailure(error).meansNoAnswer,
+                  orderingComplaint.contains(where: { lowered.contains($0) }) else {
+                return .inconclusive(detail, duration: Date().timeIntervalSince(started))
+            }
+            return .established(false, "refused a conversation ending in an assistant turn: " + detail,
+                                duration: Date().timeIntervalSince(started))
+        }
+    }
+
+    /// Whether the model emits MORE THAN ONE tool call in a single turn.
+    ///
+    /// **Establishes `true` only; it can never establish `false`** — an asymmetry that is intrinsic,
+    /// not a gap to close later. Two calls in one response prove the shape is producible. One call
+    /// proves only that the model chose to make one, which a model perfectly capable of parallel
+    /// calls is free to do, so grading that `false` would mint a vendor "no" out of a stylistic
+    /// preference. It is `inconclusive` instead.
+    ///
+    /// Deliberately NOT graded on whether `parallel_tool_calls` is accepted as a parameter: nearly
+    /// every OpenAI-compatible endpoint ignores unknown body keys, so acceptance would record `true`
+    /// for every model that has never heard of it.
+    public static func probeParallelToolCalls(
+        llm: any LLMProvider,
+        calls: ProbeCallCounter? = nil
+    ) async -> ProbeFinding<Bool> {
+        let started = Date()
+        // Two DISTINCT parameterless tools: neither depends on the other's result, so emitting both
+        // at once is the natural response, and nothing has to be constructed to call either.
+        func temperatureTool(_ name: String, _ city: String) -> LLMToolDefinition {
+            LLMToolDefinition(
+                name: name,
+                description: "Returns the current temperature in \(city). Takes no arguments.",
+                parameters: ["type": .string("object"),
+                             "properties": .dictionary([:]),
+                             "required": .array([])])
+        }
+        calls?.increment()
+        do {
+            let response = try await llm.send(
+                messages: [.user("I need both temperatures at once. Call BOTH tools in this single "
+                               + "turn — do not wait for one before calling the other.")],
+                tools: [temperatureTool("get_paris_temperature", "Paris"),
+                        temperatureTool("get_tokyo_temperature", "Tokyo")])
+            if response.toolCalls.count > 1 {
+                return .established(true, "emitted \(response.toolCalls.count) tool calls in one turn",
+                                    duration: Date().timeIntervalSince(started))
+            }
+            return .inconclusive("emitted \(response.toolCalls.count) tool call(s) — one call is a "
+                               + "model's choice, not evidence that it cannot make two",
+                                 duration: Date().timeIntervalSince(started))
+        } catch {
+            return .inconclusive(CapabilityProbe.rejectionDetail(error),
+                                 duration: Date().timeIntervalSince(started))
+        }
+    }
+
     // MARK: - Reasoning toggling, keep, strict tools
 
     /// Whether reasoning can be switched to a given state.

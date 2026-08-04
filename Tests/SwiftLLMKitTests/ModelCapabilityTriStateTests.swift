@@ -267,3 +267,57 @@ struct ModelCapabilityTriStateTests {
         #expect(a == b)
     }
 }
+
+/// Keeps `isEmpiricallyProbed` and the "NOT PROBED" doc comments telling the same story.
+///
+/// Two independent statements of the same fact, deliberately: the property is what code reads, the
+/// comment is what a person reads at the definition when deciding whether a capability can be
+/// trusted. Either drifting alone is the failure mode — a probe gets written and the comment still
+/// warns it does not exist, or a capability is added and neither is filled in.
+@Suite("Which capabilities a probe can establish")
+struct EmpiricallyProbedCapabilityTests {
+
+    /// The unprobed set, restated independently of the property so a change to either has to be
+    /// deliberate. Same reasoning as the wire-string table in `ChannelMessageKindTests`.
+    private static let expectedUnprobed: Set<ModelCapability> = [
+        .reasoning, .batch, .codeExecution, .promptCaching, .computerUse,
+        .audioInput, .audioOutput, .videoInput, .webSearch, .toolChoiceSupported
+    ]
+
+    @Test("The property matches the independently-stated set")
+    func propertyMatchesTheTable() {
+        let unprobed = Set(ModelCapability.allCases.filter { !$0.isEmpiricallyProbed })
+        #expect(unprobed == Self.expectedUnprobed)
+    }
+
+    /// Every unprobed capability says so where it is DEFINED — the question is asked while reading
+    /// the enum, not while reading the prober.
+    @Test("Every unprobed capability is annotated at its definition, and no probed one is")
+    func annotationsMatchTheProperty() throws {
+        let source = try String(contentsOf: Self.capabilitiesSourceURL, encoding: .utf8)
+        for capability in ModelCapability.allCases {
+            // The doc comment block immediately preceding `case x = "x"`.
+            guard let caseRange = source.range(of: "case \(capability.rawValue) = \"") else {
+                Issue.record("no case declaration found for \(capability.rawValue)"); continue
+            }
+            let preceding = source[source.startIndex..<caseRange.lowerBound]
+            // `dropFirst` on the reversed lines discards the partial line the range cuts through —
+            // the indentation before `case`, which is not a doc line and would end the walk
+            // immediately, making every doc block read as empty.
+            let docBlock = preceding.split(separator: "\n", omittingEmptySubsequences: false)
+                .reversed().dropFirst()
+                .prefix { $0.trimmingCharacters(in: .whitespaces).hasPrefix("///") }
+                .joined(separator: "\n")
+            let annotated = docBlock.contains("NOT PROBED")
+            let detail = "\(capability.rawValue): annotated=\(annotated) but "
+                       + "isEmpiricallyProbed=\(capability.isEmpiricallyProbed)"
+            #expect(annotated == !capability.isEmpiricallyProbed, "\(detail)")
+        }
+    }
+
+    private static var capabilitiesSourceURL: URL {
+        URL(fileURLWithPath: #filePath)                       // …/Tests/SwiftLLMKitTests/<this>.swift
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/SwiftLLMKit/Models/ModelCapabilities.swift")
+    }
+}

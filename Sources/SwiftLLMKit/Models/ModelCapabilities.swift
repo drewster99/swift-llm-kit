@@ -11,22 +11,52 @@ public enum ModelCapability: String, CaseIterable, Sendable, Codable, Hashable {
     /// The model is a BATCH-only variant (async batch-submission API, e.g. OpenRouter's `:batch`
     /// slug), so it cannot back an interactive agent. Present so a role can forbid it via
     /// `mustNotBePresent: [.batch]`; it is never a thing to REQUIRE.
+    /// NOT PROBED — vendor-declared only. A `/models` slug convention, not a request-shape behaviour:
+    /// there is nothing to send a chat endpoint that would reveal it, since a batch-only model
+    /// refuses interactive calls for reasons indistinguishable from being unavailable.
     case batch = "batch"
     case toolUse = "toolUse"
     case vision = "vision"
+    /// NOT PROBED — vendor-declared only. Whether the model reasons AT ALL. What IS probed is whether
+    /// reasoning can be switched (``reasoningCanBeEnabled`` / ``reasoningCanBeDisabled``), which is
+    /// a different question: a thinking-only model reasons but cannot be turned off, and a model
+    /// that rejects both switches may still reason by default.
     case reasoning = "reasoning"
+    /// NOT PROBED — vendor-declared only. A server-side tool with a per-vendor request shape
+    /// (Anthropic `code_execution`, Gemini `codeExecution`), so a probe is per-provider work rather
+    /// than one call. Nothing in this library emits it yet.
     case codeExecution = "codeExecution"
+    /// NOT PROBED — vendor-declared only. Would need two calls and a reading of `cache_read`
+    /// token counts to establish, since the request never fails without caching — it just costs
+    /// more. Acceptance of `cache_control` proves nothing; most endpoints ignore unknown keys.
     case promptCaching = "promptCaching"
+    /// NOT PROBED — vendor-declared only. A vendor-specific tool type requiring a screenshot round
+    /// trip. Not reachable from a text-only probe.
     case computerUse = "computerUse"
+    /// NOT PROBED — vendor-declared only. Needs an audio payload and a per-vendor content-part
+    /// shape. Same blocker as `videoInput`.
     case audioInput = "audioInput"
+    /// NOT PROBED — vendor-declared only. Needs a modality request and a binary response the probe
+    /// framework has no way to grade.
     case audioOutput = "audioOutput"
+    /// NOT PROBED — vendor-declared only. Needs a video send path this library does not have; the
+    /// probe is roadmapped behind it. Moonshot declares it true for kimi-k2.7-code and kimi-k3, so
+    /// there are real targets waiting.
     case videoInput = "videoInput"
     case structuredOutputSupportsJSONSchema = "structuredOutputSupportsJSONSchema"
     case parallelToolCalls = "parallelToolCalls"
     case pdfInput = "pdfInput"
+    /// NOT PROBED — vendor-declared only. A server-side tool with a per-vendor shape, and a positive
+    /// result would depend on the model CHOOSING to search — the same asymmetry that keeps
+    /// `parallelToolCalls` from ever establishing a negative.
     case webSearch = "webSearch"
     case systemMessages = "systemMessages"
     case assistantPrefill = "assistantPrefill"
+    /// NOT PROBED — vendor-declared only. The umbrella flag. The three SPECIFIC values ARE
+    /// probed (``toolChoiceSupportsValueRequired`` / ``toolChoiceSupportsValueNone`` /
+    /// ``toolChoiceSupportsNamedFunction``); this one is deliberately not derived from them,
+    /// because `permitsToolChoice` reads it as an independent veto and a derived value would make
+    /// that veto argue with its own inputs.
     case toolChoiceSupported = "toolChoiceSupported"
     /// Empirical-only: the model called a tool AND consumed the tool result (returned the probe's
     /// identifier). The half an agent actually depends on; no vendor publishes it.
@@ -106,6 +136,32 @@ public enum ModelCapability: String, CaseIterable, Sendable, Codable, Hashable {
         case .toolChoiceSupportsNamedFunction: return "tool_choice fn"
         case .toolDefinitionsSupportStrict: return "strict tools"
         case .toolResultRoundTrip: return "Tool result round-trip"
+        }
+    }
+
+    /// Whether `ModelProber` can establish this capability by asking the endpoint.
+    ///
+    /// Exhaustive on purpose — a new case cannot compile without someone answering the question,
+    /// which is the point. A `false` here means the ONLY source for this capability is what the
+    /// vendor's `/models` payload happens to say: where the vendor is silent the capability is
+    /// simply unknown, and no amount of probing will fill it in. Each such case carries a doc
+    /// comment at its definition saying why.
+    ///
+    /// This is the machine-readable half of that documentation, so a display can mark an unprobed
+    /// capability instead of showing a blank that reads like "we asked and got nothing".
+    public var isEmpiricallyProbed: Bool {
+        switch self {
+        case .chat, .toolUse, .vision, .pdfInput, .toolResultRoundTrip,
+             .structuredOutputSupportsJSONObject, .structuredOutputSupportsJSONSchema,
+             .toolChoiceSupportsValueRequired, .toolChoiceSupportsValueNone,
+             .toolChoiceSupportsNamedFunction, .toolDefinitionsSupportStrict,
+             .reasoningCanBeEnabled, .reasoningCanBeDisabled,
+             .thinkingSupportsKeepAll, .thinkingSupportsTokenBudget,
+             .systemMessages, .assistantPrefill, .parallelToolCalls:
+            return true
+        case .reasoning, .batch, .codeExecution, .promptCaching, .computerUse,
+             .audioInput, .audioOutput, .videoInput, .webSearch, .toolChoiceSupported:
+            return false
         }
     }
 
