@@ -22,6 +22,10 @@ struct OpenAICompatibleProvider: LLMProvider {
     /// The model's measured thinking-budget ceiling, so a request is clamped to something the
     /// endpoint will actually accept rather than merely floored.
     private let measuredMaxThinkingBudget: Int?
+    /// Whose allowance this model's thinking budget is spent from, and the model's output cap —
+    /// together they decide whether a budget has to be paired against `max_tokens`.
+    private let thinkingBudgetAccounting: ThinkingBudgetAccounting?
+    private let modelMaxOutputTokens: Int?
     private let session: URLSession
     /// Stable conversation ID for xAI prompt caching. Generated once per provider instance.
     private let conversationID: String
@@ -37,6 +41,8 @@ struct OpenAICompatibleProvider: LLMProvider {
         reasoningControl: ReasoningControl? = nil,
         modelCapabilities: ModelCapabilities = ModelCapabilities(),
         measuredMaxThinkingBudget: Int? = nil,
+        thinkingBudgetAccounting: ThinkingBudgetAccounting? = nil,
+        modelMaxOutputTokens: Int? = nil,
         session: URLSession = llmURLSession
     ) {
         self.configuration = configuration
@@ -49,6 +55,8 @@ struct OpenAICompatibleProvider: LLMProvider {
         self.reasoningControl = reasoningControl
         self.modelCapabilities = modelCapabilities
         self.measuredMaxThinkingBudget = measuredMaxThinkingBudget
+        self.thinkingBudgetAccounting = thinkingBudgetAccounting
+        self.modelMaxOutputTokens = modelMaxOutputTokens
         self.session = session
         self.conversationID = UUID().uuidString
     }
@@ -281,9 +289,18 @@ struct OpenAICompatibleProvider: LLMProvider {
                 thinking["keep"] = "all"
             }
             if let budget = requestedBudget, budget > 0,
-               modelCapabilities.state(of: .thinkingBudgetTokens) == true,
-               let sent = ThinkingBudget.effective(budget, measuredMaximum: measuredMaxThinkingBudget) {
-                thinking["budget_tokens"] = sent
+               modelCapabilities.state(of: .thinkingBudgetTokens) == true {
+                // Pair against the output cap when this model spends its thinking from that
+                // allowance. Emitting a budget with no `max_tokens` relationship is precisely the
+                // silent truncation `ThinkingBudgetAccounting` describes — a budget equal to the
+                // cap leaves nothing for the answer, and nothing errors.
+                let pair = ThinkingBudget.pairing(
+                    requestedBudget: budget,
+                    requestedMax: overrides.maxOutputTokens ?? configuration.maxTokens,
+                    modelMaxOutputTokens: thinkingBudgetAccounting == .drawnFromMaxOutputTokens
+                        ? (modelMaxOutputTokens ?? configuration.maxTokens) : nil,
+                    measuredMaximum: measuredMaxThinkingBudget)
+                if let sent = pair.budget { thinking["budget_tokens"] = sent }
             }
             if !thinking.isEmpty { body["thinking"] = thinking }
         case .unsupported, .reasoningEffortOnly, .anthropicThinking, .geminiThinkingConfig, nil:
@@ -352,8 +369,16 @@ struct OpenAICompatibleProvider: LLMProvider {
             // unlike the newer knobs — tool_choice predates this gating and silently dropping a
             // caller's explicit choice would change long-standing behaviour on every model no
             // source has described.
-            if let toolChoice, modelCapabilities.state(of: Self.capability(for: toolChoice)) != false {
-                body["tool_choice"] = Self.encodeOpenAIToolChoice(toolChoice)
+            // Two gates, because there are two different facts. `.toolChoice` is written by the
+            // decoders as "this endpoint accepts the PARAMETER at all" (LiteLLM's
+            // `supportsToolChoice`, OpenRouter's `supported_parameters`), so it is a precondition
+            // over every option — reading it as "accepts `auto`" meant the strongest available
+            // negative suppressed nothing for required/none/specific. The per-option capability is
+            // then that option's own veto.
+            if let toolChoice,
+               modelCapabilities.state(of: .toolChoice) != false,
+               modelCapabilities.state(of: toolChoice.requiredCapability) != false {
+                body["tool_choice"] = toolChoice.openAIWireValue.rawValue
             }
         }
 
@@ -657,31 +682,5 @@ struct OpenAICompatibleProvider: LLMProvider {
     /// Translates the unified `LLMToolChoice` to OpenAI's `tool_choice` wire
     /// shape. The auto/required/none cases are plain enum strings; the
     /// specific case is a nested function-object.
-    /// Which capability governs one tool_choice option. `.auto` is the endpoint's own default
-    /// whenever tools are present, so it rides the general `toolChoice` capability rather than one
-    /// of its own.
-    static func capability(for choice: LLMToolChoice) -> ModelCapability {
-        switch choice {
-        case .auto: return .toolChoice
-        case .required: return .toolChoiceRequired
-        case .textOnly: return .toolChoiceNone
-        case .specific: return .toolChoiceSpecificFunction
-        }
-    }
 
-    private static func encodeOpenAIToolChoice(_ choice: LLMToolChoice) -> Any {
-        switch choice {
-        case .auto:
-            return "auto"
-        case .required:
-            return "required"
-        case .textOnly:
-            return "none"
-        case .specific(let name):
-            return [
-                "type": "function",
-                "function": ["name": name]
-            ] as [String: Any]
-        }
-    }
 }

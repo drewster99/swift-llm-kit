@@ -52,3 +52,54 @@ public enum LLMToolChoice: Sendable, Equatable {
     /// - Gemini: `mode: "ANY", allowedFunctionNames: [<name>]`
     case specific(name: String)
 }
+
+public extension LLMToolChoice {
+    /// Which capability governs this option. `.auto` rides the general ``ModelCapability/toolChoice``
+    /// because it is the endpoint's own default whenever tools are present.
+    var requiredCapability: ModelCapability {
+        switch self {
+        case .auto: return .toolChoice
+        case .required: return .toolChoiceRequired
+        case .textOnly: return .toolChoiceNone
+        case .specific: return .toolChoiceSpecificFunction
+        }
+    }
+
+    /// The OpenAI-family wire value: an enum string, or an object naming one function.
+    var openAIWireValue: AnyCodable {
+        switch self {
+        case .auto: return .string("auto")
+        case .required: return .string("required")
+        case .textOnly: return .string("none")
+        case .specific(let name):
+            return .dictionary(["type": .string("function"),
+                                "function": .dictionary(["name": .string(name)])])
+        }
+    }
+
+    /// Anthropic's wire value: always an object, and its "force some tool" is spelled `any`.
+    var anthropicWireValue: AnyCodable {
+        switch self {
+        case .auto: return .dictionary(["type": .string("auto")])
+        case .required: return .dictionary(["type": .string("any")])
+        case .textOnly: return .dictionary(["type": .string("none")])
+        case .specific(let name):
+            return .dictionary(["type": .string("tool"), "name": .string(name)])
+        }
+    }
+
+    /// The shape THIS provider would actually emit, or `nil` where the field does not exist.
+    ///
+    /// A probe forcing a raw `tool_choice` must send the shape the provider itself would, or it
+    /// measures nothing useful: an OpenAI bare string sent to Anthropic is rejected for being the
+    /// wrong SHAPE, and the rejection names `tool_choice`, so it would be recorded as "this model
+    /// does not support forcing tools" — flatly wrong for Claude. Gemini has no `tool_choice` at
+    /// all (it uses `toolConfig`), so there is nothing to force and `nil` says so.
+    func wireValue(for apiType: ProviderAPIType) -> AnyCodable? {
+        switch apiType {
+        case .anthropic: return anthropicWireValue
+        case .gemini: return nil
+        default: return openAIWireValue
+        }
+    }
+}

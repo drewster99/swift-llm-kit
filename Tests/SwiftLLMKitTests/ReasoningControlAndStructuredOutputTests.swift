@@ -486,3 +486,63 @@ struct ThinkingBudgetPairingTests {
         #expect(pair.budget == nil, "a probed 'nothing works' must not be overridden by the floor")
     }
 }
+
+/// The wire shapes are derived from ONE source per type now. They were written twice — a probe
+/// forcing one representation while production emitted the other would measure a shape that never
+/// ships, and the finding exports as data the emission gates then act on.
+@Suite("Wire shapes have one source")
+struct WireShapeConsolidationTests {
+
+    @Test("LLMResponseFormat's two representations are the same shape")
+    func responseFormatRepresentationsAgree() throws {
+        for mode: LLMResponseFormat in [.jsonObject,
+                                        .jsonSchema(name: "s", schema: ["type": .string("object")])] {
+            let forced = try #require(mode.forcedWireValue.rawValue as? [String: Any])
+            let production = mode.openAIWireValue
+            #expect(NSDictionary(dictionary: forced) == NSDictionary(dictionary: production),
+                    "\(mode) encodes differently for the probe than for production")
+        }
+    }
+
+    /// Anthropic's `tool_choice` is an OBJECT and spells "force some tool" as `any`. Forcing
+    /// OpenAI's bare `"required"` there is rejected for the SHAPE, and the rejection names
+    /// `tool_choice` — so it would be recorded as "cannot force a tool call", which is wrong.
+    @Test("Each provider family gets its own tool_choice shape")
+    func toolChoiceShapeIsPerProvider() throws {
+        let openAI = try #require(LLMToolChoice.required.wireValue(for: .openAICompatible))
+        #expect(openAI.rawValue as? String == "required")
+
+        let anthropic = try #require(LLMToolChoice.required.wireValue(for: .anthropic))
+        let object = try #require(anthropic.rawValue as? [String: Any])
+        #expect(object["type"] as? String == "any", "Anthropic spells it `any`, and as an object")
+
+        #expect(LLMToolChoice.required.wireValue(for: .gemini) == nil,
+                "Gemini has no tool_choice field at all — nothing to force")
+    }
+
+    @Test("Every option maps to its own capability, and .auto rides the general one")
+    func capabilityPerOption() {
+        #expect(LLMToolChoice.auto.requiredCapability == .toolChoice)
+        #expect(LLMToolChoice.required.requiredCapability == .toolChoiceRequired)
+        #expect(LLMToolChoice.textOnly.requiredCapability == .toolChoiceNone)
+        #expect(LLMToolChoice.specific(name: "t").requiredCapability == .toolChoiceSpecificFunction)
+    }
+
+    /// `.toolChoice` is written by the decoders as "accepts the PARAMETER", so a stated NO must
+    /// suppress every option — not just `auto`.
+    @Test("A stated NO on the tool_choice parameter suppresses all four options")
+    func parameterLevelNoSuppressesEverything() throws {
+        var caps = ModelCapabilities()
+        caps[.toolChoice] = false
+        caps[.toolChoiceRequired] = true          // option says yes, parameter says no
+        let provider = OpenAICompatibleProvider(
+            configuration: ModelConfiguration(name: "t", providerID: "p", modelID: "m"),
+            provider: ModelProvider(id: "p", name: "p", apiType: .openAICompatible,
+                                    endpoint: try #require(URL(string: "https://x.test/v1"))),
+            readAPIKey: { "" }, modelCapabilities: caps)
+        let body = provider.buildRequestBody(
+            messages: [.user("hi")], tools: [CapabilityProbe.makeProbeTool()],
+            overrides: LLMCallOverrides(toolChoice: .required))
+        #expect(body["tool_choice"] == nil)
+    }
+}

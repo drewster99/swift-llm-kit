@@ -25,38 +25,41 @@ public enum LLMResponseFormat: Sendable, Equatable {
     ///     mode ignore the key rather than failing, so it is not gated on its own capability.
     case jsonSchema(name: String, schema: [String: AnyCodable], strict: Bool = true)
 
-    /// The wire representation, ready to place at `response_format`.
-    public var openAIWireValue: [String: Any] {
+    /// The wire shape, ONCE. `response_format` is always an object, so `[String: AnyCodable]` is
+    /// the honest type; the two representations below are derived from it rather than written
+    /// twice. They were, and a probe forcing one while production emitted the other would have
+    /// been measuring a shape that never ships.
+    public var wireValue: [String: AnyCodable] {
         switch self {
         case .jsonObject:
-            return ["type": "json_object"]
+            return ["type": .string("json_object")]
         case .jsonSchema(let name, let schema, let strict):
             return [
-                "type": "json_schema",
-                "json_schema": [
-                    "name": name,
-                    "strict": strict,
-                    "schema": schema.mapValues(\.rawValue)
-                ] as [String: Any]
-            ]
-        }
-    }
-
-    /// The wire value as an `AnyCodable` tree, for probes that must FORCE the field past the
-    /// production gate (which is keyed on the capability the probe is establishing).
-    public var forcedWireValue: AnyCodable {
-        switch self {
-        case .jsonObject:
-            return .dictionary(["type": .string("json_object")])
-        case .jsonSchema(let name, let schema, let strict):
-            return .dictionary([
                 "type": .string("json_schema"),
                 "json_schema": .dictionary([
                     "name": .string(name),
                     "strict": .bool(strict),
                     "schema": .dictionary(schema)
                 ])
-            ])
+            ]
+        }
+    }
+
+    /// Ready to place at `response_format` in a `[String: Any]` request body.
+    public var openAIWireValue: [String: Any] { wireValue.mapValues(\.rawValue) }
+
+    /// Ready to force through `extraJSONOverrides`, for probes that must bypass the capability
+    /// gate keyed on the very capability they are establishing.
+    public var forcedWireValue: AnyCodable { .dictionary(wireValue) }
+
+    /// Whether this provider family has a `response_format` field at all.
+    ///
+    /// Anthropic and Gemini do not; forcing one there measures nothing and burns a paid call on a
+    /// rejection that says nothing about structured-output support.
+    public static func isSupportedWireField(for apiType: ProviderAPIType) -> Bool {
+        switch apiType {
+        case .anthropic, .gemini, .ollama: return false
+        default: return true
         }
     }
 

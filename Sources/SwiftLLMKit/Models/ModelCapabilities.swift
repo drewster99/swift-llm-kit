@@ -132,7 +132,7 @@ public enum ModelCapability: String, CaseIterable, Sendable, Codable, Hashable {
         case .toolChoice:          return "Model honors an explicit `tool_choice` selection."
         case .reasoningEnableable: return "Model accepts an explicit request to enable reasoning. Some reasoning models only ever reason and reject being switched on."
         case .reasoningDisableable: return "Model accepts an explicit request to disable reasoning. Thinking-only models reject this."
-        case .thinkingKeepAll: return "Model accepts `thinking.keep` to retain reasoning content across turns."
+        case .thinkingKeepAll: return "Model accepts `thinking.keep: \"all\"` to retain reasoning content across turns. Applies ONLY to the `thinking` block mechanism (Moonshot/DeepSeek); meaningless on any other reasoning control."
         case .thinkingBudgetTokens: return "Model accepts an explicit reasoning token budget rather than only a named effort level."
         case .structuredOutputJSONObject: return "Model accepts `response_format: {type: json_object}` and returns syntactically valid JSON."
         case .toolChoiceRequired: return "Model accepts `tool_choice: required` (Anthropic `any`), forcing some tool call."

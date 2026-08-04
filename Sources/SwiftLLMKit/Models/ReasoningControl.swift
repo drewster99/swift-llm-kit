@@ -48,18 +48,6 @@ public enum ReasoningControl: String, Sendable, Equatable, Hashable, Codable, Ca
     /// Gemini's `generationConfig.thinkingConfig.thinkingBudget`.
     case geminiThinkingConfig
 
-    /// Whether the mechanism carries an explicit token budget rather than only a named level.
-    ///
-    /// Advisory: the authoritative per-model answer is the `thinkingBudgetTokens` capability, since
-    /// a model may expose the mechanism while rejecting a budget. Used for defaults and UI hints,
-    /// never as the emission gate.
-    public var typicallyAcceptsTokenBudget: Bool {
-        switch self {
-        case .anthropicThinking, .enableThinkingFlag, .geminiThinkingConfig: return true
-        case .unsupported, .reasoningEffortOnly, .thinkingBlock: return false
-        }
-    }
-
     /// Label for the per-model editor picker.
     public var editorTitle: String {
         switch self {

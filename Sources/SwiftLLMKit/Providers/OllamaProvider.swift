@@ -215,7 +215,7 @@ struct OllamaProvider: LLMProvider {
             // models that don't are unaffected. No flag gating — emission
             // is benign even when ignored.
             if let toolChoice {
-                body["tool_choice"] = Self.encodeOllamaToolChoice(toolChoice)
+                body["tool_choice"] = toolChoice.openAIWireValue.rawValue
             }
         }
 
@@ -773,19 +773,4 @@ struct OllamaProvider: LLMProvider {
 
     /// Translates the unified `LLMToolChoice` to Ollama's wire shape, which
     /// mirrors OpenAI's `tool_choice` field.
-    private static func encodeOllamaToolChoice(_ choice: LLMToolChoice) -> Any {
-        switch choice {
-        case .auto:
-            return "auto"
-        case .required:
-            return "required"
-        case .textOnly:
-            return "none"
-        case .specific(let name):
-            return [
-                "type": "function",
-                "function": ["name": name]
-            ] as [String: Any]
-        }
-    }
 }

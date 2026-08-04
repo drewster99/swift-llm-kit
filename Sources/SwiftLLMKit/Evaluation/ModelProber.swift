@@ -1083,11 +1083,16 @@ public enum ModelProber {
     ///
     /// The prompt asks for something whose correct answer is unambiguous, so a model that answers
     /// in prose fails on the parse rather than on the content.
+    /// Returns `nil` where the provider family has no `response_format` field — forcing one there
+    /// measures nothing and spends a paid call on a rejection that says nothing about structured
+    /// output.
     public static func probeStructuredOutput(
         _ mode: LLMResponseFormat,
+        apiType: ProviderAPIType,
         makeProviderForcing: @Sendable ([String: AnyCodable]) async -> any LLMProvider,
         calls: ProbeCallCounter? = nil
-    ) async -> ProbeFinding<Bool> {
+    ) async -> ProbeFinding<Bool>? {
+        guard LLMResponseFormat.isSupportedWireField(for: apiType) else { return nil }
         let started = Date()
         calls?.increment()
         do {
@@ -1130,12 +1135,21 @@ public enum ModelProber {
     /// `tool_choice: required` would still have to return SOMETHING, and grading "did it really
     /// force a call" against a model free to answer directly produces false negatives on exactly
     /// the models that behave best. A refusal naming the parameter is the reliable signal.
+    /// Returns `nil` when this provider family has no `tool_choice` field, so there is nothing to
+    /// measure and no call is spent.
+    ///
+    /// The wire shape is derived from `apiType` rather than accepted from the caller. A probe that
+    /// can be handed a shape is a probe that can be handed the WRONG one: forcing OpenAI's bare
+    /// `"required"` at Anthropic — which requires `{"type": "any"}` — is rejected for the shape,
+    /// the rejection names `tool_choice`, and it would be recorded as "this model cannot force a
+    /// tool call". Flatly wrong for Claude, and it exports as shipped data.
     public static func probeToolChoice(
         _ choice: LLMToolChoice,
-        forcedWireValue: AnyCodable,
+        apiType: ProviderAPIType,
         makeProviderForcing: @Sendable ([String: AnyCodable]) async -> any LLMProvider,
         calls: ProbeCallCounter? = nil
-    ) async -> ProbeFinding<Bool> {
+    ) async -> ProbeFinding<Bool>? {
+        guard let forcedWireValue = choice.wireValue(for: apiType) else { return nil }
         let started = Date()
         calls?.increment()
         do {
@@ -1287,11 +1301,18 @@ public enum ModelProber {
     }
 
     /// Whether `thinking.keep: "all"` is accepted — retaining reasoning content across turns.
+    /// Returns `nil` unless the model's mechanism actually HAS a `keep` key.
+    ///
+    /// Acceptance-graded, so an endpoint that merely ignores unknown body keys would record
+    /// `true` — a false vendor fact written into the catalog and the shipped seed corpus. `keep`
+    /// is a key of the `thinking` object, so only ``ReasoningControl/thinkingBlock`` can answer.
     public static func probeThinkingKeep(
+        reasoningControl: ReasoningControl?,
         makeProviderForcing: @Sendable ([String: AnyCodable]) async -> any LLMProvider,
         calls: ProbeCallCounter? = nil
-    ) async -> ProbeFinding<Bool> {
-        await probeForcedField(
+    ) async -> ProbeFinding<Bool>? {
+        guard reasoningControl == .thinkingBlock else { return nil }
+        return await probeForcedField(
             ["thinking": .dictionary(["type": .string("enabled"), "keep": .string("all")])],
             description: "thinking.keep=all",
             rejectionKeywords: ["keep", "thinking"],

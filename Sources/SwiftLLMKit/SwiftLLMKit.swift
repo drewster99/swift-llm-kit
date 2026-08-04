@@ -1362,6 +1362,7 @@ public final class LLMKitManager {
         let modelCapabilities = catalogModel?.capabilities ?? ModelCapabilities()
         let measuredMaxThinkingBudget = catalogModel?.maxThinkingBudgetTokens
         let modelMaxOutputTokens = catalogModel?.maxOutputTokens
+        let thinkingBudgetAccounting = catalogModel?.thinkingBudgetAccounting
 
         let providerID = modelProvider.id
         let providerName = modelProvider.name
@@ -1402,6 +1403,8 @@ public final class LLMKitManager {
                 reasoningControl: reasoningControl,
                 modelCapabilities: modelCapabilities,
                 measuredMaxThinkingBudget: measuredMaxThinkingBudget,
+                thinkingBudgetAccounting: thinkingBudgetAccounting,
+                modelMaxOutputTokens: modelMaxOutputTokens,
                 session: session
             )
         case .ollama:
@@ -1432,6 +1435,8 @@ public final class LLMKitManager {
                     reasoningControl: reasoningControl,
                     modelCapabilities: modelCapabilities,
                     measuredMaxThinkingBudget: measuredMaxThinkingBudget,
+                    thinkingBudgetAccounting: thinkingBudgetAccounting,
+                    modelMaxOutputTokens: modelMaxOutputTokens,
                     session: session
                 )
             }

@@ -7,6 +7,14 @@ import Foundation
 /// here, and getting it wrong silently truncates replies — a caller who sets a 32k budget and a 32k
 /// output cap gets no visible answer at all on a `drawnFromMaxOutputTokens` model, with no error.
 ///
+/// Two consumers, and for a while there was only the first:
+///
+/// 1. ``searchCeiling(maxOutputTokens:maxContextTokens:)`` bounds `probeThinkingBudgetRange`.
+/// 2. `OpenAICompatibleProvider`'s `thinkingBlock` branch pairs the emitted budget against
+///    `max_tokens` when it is `drawnFromMaxOutputTokens`. Until it did, this type described a
+///    truncation that nothing anywhere prevented — Anthropic's pairing is decided by which provider
+///    class you are in, not by this fact.
+///
 /// Known: Anthropic draws from `max_tokens` and enforces `max_tokens > budget_tokens` (see
 /// `AnthropicProvider`'s clamp). Alibaba's `thinking_budget` and Gemini's `thinkingConfig` use
 /// separate keys whose accounting is UNVERIFIED — which is why this is a probed/overridable fact
