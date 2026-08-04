@@ -252,11 +252,12 @@ extension ModelProfile {
             let alreadyProbed = current?.status == .established && current?.source == .probed
             if !alreadyProbed { capabilityFindings[raw] = finding }
         }
-        if let priorBudget = prior.maxThinkingBudgetTokens,
-           priorBudget.status == .established, priorBudget.source == .probed {
-            let alreadyProbed = maxThinkingBudgetTokens?.status == .established
-                && maxThinkingBudgetTokens?.source == .probed
-            if !alreadyProbed { maxThinkingBudgetTokens = priorBudget }
+        for budget in [\ModelProfile.maxThinkingBudgetTokens, \ModelProfile.minThinkingBudgetTokens] {
+            guard let priorBudget = prior[keyPath: budget],
+                  priorBudget.status == .established, priorBudget.source == .probed else { continue }
+            let current = self[keyPath: budget]
+            let alreadyProbed = current?.status == .established && current?.source == .probed
+            if !alreadyProbed { self[keyPath: budget] = priorBudget }
         }
         for ladder in [\ModelProfile.generalEffortLevels, \ModelProfile.reasoningEffortLevels] {
             for (level, finding) in prior[keyPath: ladder]
@@ -288,6 +289,7 @@ extension ModelProfile {
             || reasoningEffortLevels.values.contains { probed($0) }
             || capabilityFindings.values.contains { probed($0) }
             || (maxThinkingBudgetTokens.map(probed) ?? false)
+            || (minThinkingBudgetTokens.map(probed) ?? false)
     }
 
     /// The vendor's own /models payload states this is not a chat model (chat decoded false) — a
@@ -361,6 +363,9 @@ extension ModelProfile {
         if let budget = maxThinkingBudgetTokens, budget.status == .established, budget.source == .probed {
             facts.maxThinkingBudgetTokens = budget.value
         }
+        if let budget = minThinkingBudgetTokens, budget.status == .established, budget.source == .probed {
+            facts.minThinkingBudgetTokens = budget.value
+        }
         if includeAccountScoped {
             facts.isAccessDenied = probed(isAccessDenied)
             // Complete-ladder gate: every known level must have an established probed answer
@@ -430,6 +435,7 @@ extension ModelProfile {
         stripLadder(&generalEffortLevels); stripLadder(&reasoningEffortLevels)
         stripLadder(&capabilityFindings)
         if var budget = maxThinkingBudgetTokens { strip(&budget); maxThinkingBudgetTokens = budget }
+        if var budget = minThinkingBudgetTokens { strip(&budget); minThinkingBudgetTokens = budget }
     }
 
     /// Strips ` (ref: <uuid>)` trace-ID suffixes from a provider error-evidence string.

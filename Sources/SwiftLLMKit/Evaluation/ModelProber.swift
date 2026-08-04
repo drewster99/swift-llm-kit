@@ -1221,12 +1221,8 @@ public enum ModelProber {
 
     // MARK: - Thinking budget range
 
-    /// The largest reasoning token budget the endpoint accepts.
-    ///
-    /// Replaces the hardcoded 1024 ceiling assumption (see ``ThinkingBudget``) with a measured
-    /// per-model fact. The **minimum is not searched for** — ``ThinkingBudget/minimumTokens`` is
-    /// asserted as the floor, and is merely CHECKED (one call, recorded in the evidence string) so
-    /// a model that rejects it is visible rather than silently mis-served.
+    /// The largest reasoning token budget the endpoint accepts. The smallest is a separate
+    /// finding — see ``probeThinkingBudgetMinimum(knownAcceptedBudget:searchCap:makeProviderWithBudget:calls:)``.
     ///
     /// **The ceiling is derived, never a constant.** When the budget is drawn from the output
     /// allowance (Anthropic: `max_tokens` must EXCEED `budget_tokens`) a value above that allowance
@@ -1289,26 +1285,7 @@ public enum ModelProber {
         // If the whole allowance is accepted there is no ceiling to find inside it.
         switch await accepts(ceiling) {
         case true:
-            // One more call to check the floor we ASSUME. `ThinkingBudget.minimumTokens` is a
-            // constant applied to every model by `ThinkingBudget.effective`, and this probe
-            // otherwise never tests it: the binary search below reaches it only when the ceiling is
-            // REJECTED, so on the common path (ceiling accepted first try) the floor is asserted and
-            // never observed — a model whose real minimum sits above 1024 would take a rejected
-            // budget from production with nothing here contradicting it.
-            //
-            // Evidence-only, deliberately. A measured minimum is a second number and this finding
-            // holds one; giving it a field means a new `ModelProfile` property, a schema bump and a
-            // migration, which is not worth doing before a model is actually found that needs it.
-            // Nothing reads this string — it is here to be read by a person.
-            let floorNote: String
-            switch await accepts(ThinkingBudget.minimumTokens) {
-            case true:  floorNote = "; the assumed \(ThinkingBudget.minimumTokens)-token floor was also accepted"
-            case false: floorNote = "; NOTE the assumed \(ThinkingBudget.minimumTokens)-token floor was REJECTED — "
-                                  + "this model's minimum is higher and production would send a rejected budget"
-            case nil:   floorNote = "; the \(ThinkingBudget.minimumTokens)-token floor went untested (no usable answer)"
-            }
-            return .established(ceiling,
-                                "accepted a budget at the model's full \(ceiling)-token allowance" + floorNote,
+            return .established(ceiling, "accepted a budget at the model's full \(ceiling)-token allowance",
                                 duration: Date().timeIntervalSince(started))
         case nil:
             return .inconclusive("the endpoint gave no usable answer at \(ceiling)",
@@ -1345,6 +1322,128 @@ public enum ModelProber {
         }
         return .established(low, "largest accepted budget, converged within \(ThinkingBudget.minimumTokens) tokens",
                             duration: Date().timeIntervalSince(started))
+    }
+
+    /// The SMALLEST reasoning token budget the endpoint accepts, searched for exactly.
+    ///
+    /// ``ThinkingBudget/minimumTokens`` is a constant applied to every model by
+    /// ``ThinkingBudget/effective(_:measuredMaximum:measuredMinimum:)``, and nothing had ever
+    /// checked it: ``probeThinkingBudgetRange`` reaches the floor only when the CEILING is
+    /// rejected, so on the common path (ceiling accepted first try) it returned without ever
+    /// asking. A model whose real minimum sits above 1024 would take a rejected budget from
+    /// production with nothing contradicting it.
+    ///
+    /// **Converges to the exact token, not to a granularity.** Its sibling stops within 1024
+    /// tokens because a ceiling is a large number nobody needs to the digit. A floor is a small
+    /// one that is USED verbatim — it becomes the value sent whenever the caller asks for less —
+    /// so "somewhere in [1024, 2048)" is not an answer any caller can act on.
+    ///
+    /// **The documented floor is tested as a HYPOTHESIS first.** Confirming "1024 is the minimum"
+    /// takes exactly two observations — 1024 accepted, 1023 rejected — so the expected case costs
+    /// two calls instead of the fourteen a blind bisection of [1, 16384] would spend. Bisection is
+    /// the fallback for when the hypothesis fails, not the primary strategy.
+    ///
+    /// **`searchCap` is an assumption and is reported as one.** A minimum above it yields
+    /// `inconclusive` naming the cap, never a number: the search cannot see past its own bound,
+    /// and reporting the cap itself would be indistinguishable from having measured it.
+    ///
+    /// Conservative under silence, in the direction that stays safe: this returns the smallest
+    /// value it has actually SEEN accepted. Overstating a floor costs a slightly deeper budget
+    /// than necessary; understating one is a rejected request.
+    public static func probeThinkingBudgetMinimum(
+        knownAcceptedBudget: Int,
+        searchCap: Int = ThinkingBudget.minimumSearchCap,
+        makeProviderWithBudget: @Sendable (_ budget: Int, _ pairedMaxOutputTokens: Int) async -> any LLMProvider,
+        calls: ProbeCallCounter? = nil
+    ) async -> ProbeFinding<Int> {
+        let started = Date()
+        func elapsed() -> TimeInterval { Date().timeIntervalSince(started) }
+
+        func accepts(_ budget: Int) async -> Bool? {
+            calls?.increment()
+            do {
+                _ = try await makeProviderWithBudget(budget, budget + ThinkingBudget.minimumTokens)
+                    .send(messages: [.user("Reply with the single word: ok")], tools: [])
+                return true
+            } catch {
+                if CapabilityProbe.classifyFailure(error).meansNoAnswer { return nil }
+                return false
+            }
+        }
+
+        guard knownAcceptedBudget >= 1 else {
+            return .inconclusive("no accepted budget to search below — the maximum probe found no usable range",
+                                 duration: elapsed())
+        }
+
+        // Bisection needs a value known to be ACCEPTED above and one known REJECTED below. `low` is
+        // seeded at 0, which is not a legal budget and so is known-rejected without spending a call.
+        var low = 0
+        var high: Int
+
+        let hypothesis = min(ThinkingBudget.minimumTokens, knownAcceptedBudget)
+        switch await accepts(hypothesis) {
+        case true:
+            // Confirm it is the FLOOR and not merely an accepted value: one call just below settles
+            // the documented case outright.
+            high = hypothesis
+            if hypothesis == 1 {
+                return .established(1, "accepted a budget of 1 token — no floor above the minimum legal value",
+                                    duration: elapsed())
+            }
+            switch await accepts(hypothesis - 1) {
+            case false:
+                return .established(hypothesis, "exactly \(hypothesis): accepted, and \(hypothesis - 1) rejected",
+                                    duration: elapsed())
+            case nil:
+                return .established(hypothesis, "smallest budget seen accepted (\(hypothesis)); the endpoint "
+                                              + "stopped answering below it, so a lower floor cannot be ruled out",
+                                    duration: elapsed())
+            case true:
+                high = hypothesis - 1
+            }
+        case nil:
+            return .inconclusive("the endpoint gave no usable answer at \(hypothesis)", duration: elapsed())
+        case false:
+            // The documented floor is REJECTED — the interesting case, and the reason this probe
+            // exists. The real minimum is above it, somewhere below the cap.
+            low = hypothesis
+            // Prefer the already-accepted value when it is under the cap: it is known-good for free,
+            // and searching above a value the model accepts would find nothing.
+            let upper = min(searchCap, knownAcceptedBudget)
+            if upper <= low {
+                return .inconclusive("\(hypothesis) was rejected and nothing between it and the accepted "
+                                   + "\(knownAcceptedBudget) is searchable", duration: elapsed())
+            }
+            if upper == knownAcceptedBudget {
+                high = upper
+            } else {
+                switch await accepts(upper) {
+                case true: high = upper
+                case false:
+                    return .inconclusive("the minimum is above the \(searchCap)-token search cap — raise the cap "
+                                       + "to measure it rather than record the cap as if it were the answer",
+                                         duration: elapsed())
+                case nil:
+                    return .inconclusive("the endpoint gave no usable answer at the \(upper)-token search cap",
+                                         duration: elapsed())
+                }
+            }
+        }
+
+        // Invariant: `low` is known-rejected, `high` known-accepted. Converge to the exact token.
+        while high - low > 1 {
+            let midpoint = low + (high - low) / 2
+            switch await accepts(midpoint) {
+            case true: high = midpoint
+            case false: low = midpoint
+            case nil:
+                return .established(high, "smallest budget seen accepted (\(high)) before the endpoint stopped "
+                                        + "answering; the true floor may be as low as \(low + 1)",
+                                    duration: elapsed())
+            }
+        }
+        return .established(high, "exactly \(high): accepted, and \(low) rejected", duration: elapsed())
     }
 
 

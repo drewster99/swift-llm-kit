@@ -67,6 +67,9 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
     /// The largest reasoning token budget this model accepts, when measured. `nil` = unknown, and
     /// callers fall back to ``ThinkingBudget/minimumTokens``.
     public var maxThinkingBudgetTokens: Int?
+    /// The smallest reasoning token budget this model accepts, when measured. `nil` = unknown, and
+    /// callers fall back to the documented ``ThinkingBudget/minimumTokens``.
+    public var minThinkingBudgetTokens: Int?
     /// Per-(provider+model) runtime behavior knobs. Defaults to all-off — a
     /// model with no flags set behaves like a model from before this field
     /// existed. See `BehaviorFlags` for available knobs and the layering rules.
@@ -171,6 +174,7 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
         reasoningControl: ReasoningControl? = nil,
         thinkingBudgetAccounting: ThinkingBudgetAccounting? = nil,
         maxThinkingBudgetTokens: Int? = nil,
+        minThinkingBudgetTokens: Int? = nil,
         behaviorFlags: BehaviorFlags = BehaviorFlags(),
         deprecatedOn: Date? = nil,
         deprecationReplacement: String? = nil,
@@ -207,6 +211,7 @@ public struct ModelInfo: Identifiable, Sendable, Equatable {
         self.reasoningControl = reasoningControl
         self.thinkingBudgetAccounting = thinkingBudgetAccounting
         self.maxThinkingBudgetTokens = maxThinkingBudgetTokens
+        self.minThinkingBudgetTokens = minThinkingBudgetTokens
         self.behaviorFlags = behaviorFlags
         self.deprecatedOn = deprecatedOn
         self.deprecationReplacement = deprecationReplacement
@@ -244,7 +249,7 @@ extension ModelInfo: Codable {
         case providerID, modelID, displayName, createdAt
         case maxInputTokens, maxOutputTokens, capabilities
         case sizeLabel, quantizationLabel, pricing, supportsChatCompletions
-        case mode, generalEffort, reasoningEffort, reasoningControl, thinkingBudgetAccounting, maxThinkingBudgetTokens, behaviorFlags
+        case mode, generalEffort, reasoningEffort, reasoningControl, thinkingBudgetAccounting, maxThinkingBudgetTokens, minThinkingBudgetTokens, behaviorFlags
         case deprecatedOn, deprecationReplacement, maxTemperature, modelDescription
         case samplingDefaults, isFree, benchmarks, huggingFaceID, hidden, isAvailable, isAccessDenied
         case outputBoundedByContext, fetchedAt, lastProbedAt
@@ -278,6 +283,7 @@ extension ModelInfo: Codable {
         reasoningControl = try container.decodeIfPresent(ReasoningControl.self, forKey: .reasoningControl)
         thinkingBudgetAccounting = try container.decodeIfPresent(ThinkingBudgetAccounting.self, forKey: .thinkingBudgetAccounting)
         maxThinkingBudgetTokens = try container.decodeIfPresent(Int.self, forKey: .maxThinkingBudgetTokens)
+        minThinkingBudgetTokens = try container.decodeIfPresent(Int.self, forKey: .minThinkingBudgetTokens)
         behaviorFlags = try container.decodeIfPresent(BehaviorFlags.self, forKey: .behaviorFlags) ?? BehaviorFlags()
         deprecatedOn = try container.decodeIfPresent(Date.self, forKey: .deprecatedOn)
         deprecationReplacement = try container.decodeIfPresent(String.self, forKey: .deprecationReplacement)
@@ -329,6 +335,7 @@ extension ModelInfo: Codable {
         try container.encodeIfPresent(reasoningControl, forKey: .reasoningControl)
         try container.encodeIfPresent(thinkingBudgetAccounting, forKey: .thinkingBudgetAccounting)
         try container.encodeIfPresent(maxThinkingBudgetTokens, forKey: .maxThinkingBudgetTokens)
+        try container.encodeIfPresent(minThinkingBudgetTokens, forKey: .minThinkingBudgetTokens)
         // Skip encoding behavior flags when they're at defaults to keep on-disk
         // payloads compact and round-trippable through clients that don't know
         // the field. The all-default case loads as the same value either way.

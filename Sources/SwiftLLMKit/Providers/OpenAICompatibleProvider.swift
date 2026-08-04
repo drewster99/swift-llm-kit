@@ -22,6 +22,7 @@ struct OpenAICompatibleProvider: LLMProvider {
     /// The model's measured thinking-budget ceiling, so a request is clamped to something the
     /// endpoint will actually accept rather than merely floored.
     private let measuredMaxThinkingBudget: Int?
+    private let measuredMinThinkingBudget: Int?
     /// Whose allowance this model's thinking budget is spent from, and the model's output cap —
     /// together they decide whether a budget has to be paired against `max_tokens`.
     private let thinkingBudgetAccounting: ThinkingBudgetAccounting?
@@ -41,6 +42,7 @@ struct OpenAICompatibleProvider: LLMProvider {
         reasoningControl: ReasoningControl? = nil,
         modelCapabilities: ModelCapabilities = ModelCapabilities(),
         measuredMaxThinkingBudget: Int? = nil,
+        measuredMinThinkingBudget: Int? = nil,
         thinkingBudgetAccounting: ThinkingBudgetAccounting? = nil,
         modelMaxOutputTokens: Int? = nil,
         session: URLSession = llmURLSession
@@ -55,6 +57,7 @@ struct OpenAICompatibleProvider: LLMProvider {
         self.reasoningControl = reasoningControl
         self.modelCapabilities = modelCapabilities
         self.measuredMaxThinkingBudget = measuredMaxThinkingBudget
+        self.measuredMinThinkingBudget = measuredMinThinkingBudget
         self.thinkingBudgetAccounting = thinkingBudgetAccounting
         self.modelMaxOutputTokens = modelMaxOutputTokens
         self.session = session
@@ -268,7 +271,8 @@ struct OpenAICompatibleProvider: LLMProvider {
                 body["enable_thinking"] = true
                 if let budget = requestedBudget, budget > 0,
                    isLegacyFallback || modelCapabilities.state(of: .thinkingSupportsTokenBudget) == true,
-                   let sent = ThinkingBudget.effective(budget, measuredMaximum: measuredMaxThinkingBudget) {
+                   let sent = ThinkingBudget.effective(budget, measuredMaximum: measuredMaxThinkingBudget,
+                                                       measuredMinimum: measuredMinThinkingBudget) {
                     body["thinking_budget"] = sent
                 }
             } else if overrides.reasoningEnabled == false, directionAllowed {
@@ -299,7 +303,8 @@ struct OpenAICompatibleProvider: LLMProvider {
                     requestedMax: overrides.maxOutputTokens ?? configuration.maxTokens,
                     modelMaxOutputTokens: thinkingBudgetAccounting == .drawnFromMaxOutputTokens
                         ? (modelMaxOutputTokens ?? configuration.maxTokens) : nil,
-                    measuredMaximum: measuredMaxThinkingBudget)
+                    measuredMaximum: measuredMaxThinkingBudget,
+                    measuredMinimum: measuredMinThinkingBudget)
                 if let sent = pair.budget { thinking["budget_tokens"] = sent }
             }
             if !thinking.isEmpty { body["thinking"] = thinking }

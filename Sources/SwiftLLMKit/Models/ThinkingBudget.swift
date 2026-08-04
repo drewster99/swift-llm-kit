@@ -10,12 +10,20 @@ import Foundation
 /// so a clamp computed from a different floor than the emission produces the API error it was
 /// written to prevent.
 ///
-/// This is a stopgap standing in for a measured fact. The floor is a per-model property we do not
-/// currently probe; when `probeThinkingBudgetRange` lands, ``effective(_:)`` becomes the one place
-/// that consults the model's own reported range instead of this constant.
+/// ``minimumTokens`` is the DOCUMENTED floor and is now only a fallback: `ModelProber`
+/// `probeThinkingBudgetMinimum` measures the real one per model, and ``effective(_:measuredMaximum:measuredMinimum:)``
+/// prefers it whenever it exists. The constant remains because most models are never probed.
 public enum ThinkingBudget {
-    /// The smallest budget the supporting APIs accept.
+    /// The smallest budget the supporting APIs document. A per-model measurement supersedes it.
     public static let minimumTokens = 1024
+
+    /// How far above the documented floor the minimum search is willing to look.
+    ///
+    /// An ASSUMPTION, and the probe reports it as one rather than recording the cap as a result: no
+    /// endpoint documents a floor anywhere near this, so a minimum above it is far more likely to
+    /// mean the probe is measuring something else (a pairing constraint, a context limit) than that
+    /// the model really demands 16K of thinking before it will answer.
+    public static let minimumSearchCap = 16_384
 
     /// The budget that will actually be sent, or `nil` when the model is MEASURED to accept none.
     ///
@@ -42,24 +50,37 @@ public enum ThinkingBudget {
         requestedBudget: Int,
         requestedMax: Int,
         modelMaxOutputTokens: Int?,
-        measuredMaximum: Int? = nil
+        measuredMaximum: Int? = nil,
+        measuredMinimum: Int? = nil
     ) -> (maxTokens: Int, budget: Int?) {
-        guard let wanted = effective(requestedBudget, measuredMaximum: measuredMaximum) else {
+        guard let wanted = effective(requestedBudget, measuredMaximum: measuredMaximum,
+                                     measuredMinimum: measuredMinimum) else {
             return (requestedMax, nil)
         }
         let raised = max(requestedMax, wanted + 1)
         // Never below what the caller already asked for, even if the catalog cap is smaller.
         let maxTokens = modelMaxOutputTokens.map { min(raised, max($0, requestedMax)) } ?? raised
         let room = maxTokens - 1
-        return (maxTokens, room >= minimumTokens ? min(wanted, room) : nil)
+        // The same floor the budget was raised to. Comparing against the CONSTANT here while
+        // `effective` used a measured floor would emit a budget below the model's real minimum
+        // whenever the two disagree — the exact rejection this measurement exists to prevent.
+        return (maxTokens, room >= floor(measuredMinimum) ? min(wanted, room) : nil)
     }
 
-    public static func effective(_ requested: Int, measuredMaximum: Int? = nil) -> Int? {
-        guard let measuredMaximum else { return max(requested, minimumTokens) }
+    /// The floor in force for a model: its measured minimum when one exists, else the documented one.
+    ///
+    /// A measured floor of 0 is meaningful — it says this endpoint imposes no minimum — so this
+    /// takes the measurement at face value rather than treating small values as missing data.
+    private static func floor(_ measuredMinimum: Int?) -> Int { measuredMinimum ?? minimumTokens }
+
+    public static func effective(_ requested: Int, measuredMaximum: Int? = nil,
+                                 measuredMinimum: Int? = nil) -> Int? {
+        let low = floor(measuredMinimum)
+        guard let measuredMaximum else { return max(requested, low) }
         // A measured maximum BELOW the floor is a real finding — `probeThinkingBudgetRange`
         // records 0 when even the minimum was rejected — and means no budget is usable at all.
         // Treating it as "unmeasured" and sending the floor anyway ignored the measurement.
-        guard measuredMaximum >= minimumTokens else { return nil }
-        return min(max(requested, minimumTokens), measuredMaximum)
+        guard measuredMaximum >= low else { return nil }
+        return min(max(requested, low), measuredMaximum)
     }
 }

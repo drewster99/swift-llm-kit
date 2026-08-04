@@ -1172,7 +1172,8 @@ public final class LLMKitManager {
                         requestedBudget: budget,
                         requestedMax: config.maxTokens,
                         modelMaxOutputTokens: prepModelInfo?.maxOutputTokens,
-                        measuredMaximum: prepModelInfo?.maxThinkingBudgetTokens)
+                        measuredMaximum: prepModelInfo?.maxThinkingBudgetTokens,
+                        measuredMinimum: prepModelInfo?.minThinkingBudgetTokens)
                     body["max_tokens"] = pair.maxTokens
                     if let sent = pair.budget {
                         body["thinking"] = ["type": "enabled", "budget_tokens": sent] as [String: Any]
@@ -1361,6 +1362,7 @@ public final class LLMKitManager {
         let reasoningControl = catalogModel?.reasoningControl
         let modelCapabilities = catalogModel?.capabilities ?? ModelCapabilities()
         let measuredMaxThinkingBudget = catalogModel?.maxThinkingBudgetTokens
+        let measuredMinThinkingBudget = catalogModel?.minThinkingBudgetTokens
         let modelMaxOutputTokens = catalogModel?.maxOutputTokens
         let thinkingBudgetAccounting = catalogModel?.thinkingBudgetAccounting
 
@@ -1385,6 +1387,7 @@ public final class LLMKitManager {
                 behaviorFlags: flags,
                 generalEffortSupport: generalEffortSupport,
                 measuredMaxThinkingBudget: measuredMaxThinkingBudget,
+                measuredMinThinkingBudget: measuredMinThinkingBudget,
                 modelMaxOutputTokens: modelMaxOutputTokens,
                 modelCapabilities: modelCapabilities
             )
@@ -1404,6 +1407,7 @@ public final class LLMKitManager {
                 reasoningControl: reasoningControl,
                 modelCapabilities: modelCapabilities,
                 measuredMaxThinkingBudget: measuredMaxThinkingBudget,
+                measuredMinThinkingBudget: measuredMinThinkingBudget,
                 thinkingBudgetAccounting: thinkingBudgetAccounting,
                 modelMaxOutputTokens: modelMaxOutputTokens,
                 session: session
@@ -1436,6 +1440,7 @@ public final class LLMKitManager {
                     reasoningControl: reasoningControl,
                     modelCapabilities: modelCapabilities,
                     measuredMaxThinkingBudget: measuredMaxThinkingBudget,
+                measuredMinThinkingBudget: measuredMinThinkingBudget,
                     thinkingBudgetAccounting: thinkingBudgetAccounting,
                     modelMaxOutputTokens: modelMaxOutputTokens,
                     session: session
@@ -1454,6 +1459,7 @@ public final class LLMKitManager {
                 readAPIKey: readAPIKey, verboseLogging: verbose,
                 modelCapabilities: modelCapabilities,
                 measuredMaxThinkingBudget: measuredMaxThinkingBudget,
+                measuredMinThinkingBudget: measuredMinThinkingBudget,
                 session: session
             )
         }

@@ -256,6 +256,8 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
     public var thinkingBudgetAccounting: ThinkingBudgetAccounting?
     /// Override the measured maximum thinking budget.
     public var maxThinkingBudgetTokens: Int?
+    /// Manual override for the smallest accepted reasoning token budget.
+    public var minThinkingBudgetTokens: Int?
     /// Hide this model from pickers. Hiding is presentation, never deletion — every record
     /// underneath survives, and un-hiding is removing this one field.
     public var hidden: Bool?
@@ -278,6 +280,7 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
         reasoningControl: ReasoningControl? = nil,
         thinkingBudgetAccounting: ThinkingBudgetAccounting? = nil,
         maxThinkingBudgetTokens: Int? = nil,
+        minThinkingBudgetTokens: Int? = nil,
         hidden: Bool? = nil,
         isAvailable: Bool? = nil,
         isAccessDenied: Bool? = nil
@@ -294,6 +297,7 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
         self.reasoningControl = reasoningControl
         self.thinkingBudgetAccounting = thinkingBudgetAccounting
         self.maxThinkingBudgetTokens = maxThinkingBudgetTokens
+        self.minThinkingBudgetTokens = minThinkingBudgetTokens
         self.hidden = hidden
         self.isAvailable = isAvailable
         self.isAccessDenied = isAccessDenied
@@ -360,6 +364,9 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
         if let v = maxThinkingBudgetTokens, (forceReplace || model.maxThinkingBudgetTokens == nil) {
             model.maxThinkingBudgetTokens = v
         }
+        if let v = minThinkingBudgetTokens, (forceReplace || model.minThinkingBudgetTokens == nil) {
+            model.minThinkingBudgetTokens = v
+        }
     }
 }
 
@@ -375,7 +382,7 @@ extension ModelMetadataOverride {
         case supportsChatCompletions
         case behaviorFlags, hidden, isAvailable, isAccessDenied
         case generalEffort, reasoningEffort, reasoningControl
-        case thinkingBudgetAccounting, maxThinkingBudgetTokens
+        case thinkingBudgetAccounting, maxThinkingBudgetTokens, minThinkingBudgetTokens
     }
 
     public init(from decoder: Decoder) throws {
@@ -395,6 +402,7 @@ extension ModelMetadataOverride {
         reasoningControl = try c.decodeIfPresent(ReasoningControl.self, forKey: .reasoningControl)
         thinkingBudgetAccounting = try c.decodeIfPresent(ThinkingBudgetAccounting.self, forKey: .thinkingBudgetAccounting)
         maxThinkingBudgetTokens = try c.decodeIfPresent(Int.self, forKey: .maxThinkingBudgetTokens)
+        minThinkingBudgetTokens = try c.decodeIfPresent(Int.self, forKey: .minThinkingBudgetTokens)
         // Migrate the legacy standalone chat flag into capabilities.chat — new-format capabilities win.
         if capabilities?[.chat] == nil,
            let legacyChat = try c.decodeIfPresent(Bool.self, forKey: .supportsChatCompletions) {
@@ -420,5 +428,6 @@ extension ModelMetadataOverride {
         try c.encodeIfPresent(reasoningControl, forKey: .reasoningControl)
         try c.encodeIfPresent(thinkingBudgetAccounting, forKey: .thinkingBudgetAccounting)
         try c.encodeIfPresent(maxThinkingBudgetTokens, forKey: .maxThinkingBudgetTokens)
+        try c.encodeIfPresent(minThinkingBudgetTokens, forKey: .minThinkingBudgetTokens)
     }
 }

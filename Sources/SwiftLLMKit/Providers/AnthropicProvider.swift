@@ -18,6 +18,7 @@ struct AnthropicProvider: LLMProvider {
     /// The model's measured thinking-budget ceiling, so a request is clamped to something the
     /// endpoint accepts rather than merely floored.
     private let measuredMaxThinkingBudget: Int?
+    private let measuredMinThinkingBudget: Int?
     /// The MODEL's output-token cap from the catalog. The hard ceiling `max_tokens` must respect
     /// while it is being raised to clear a thinking budget — the configured value is only a
     /// preference (and defaults to 4096 whatever the model can do).
@@ -35,6 +36,7 @@ struct AnthropicProvider: LLMProvider {
         behaviorFlags: BehaviorFlags = BehaviorFlags(),
         generalEffortSupport: EffortSupport? = nil,
         measuredMaxThinkingBudget: Int? = nil,
+        measuredMinThinkingBudget: Int? = nil,
         modelMaxOutputTokens: Int? = nil,
         modelCapabilities: ModelCapabilities = ModelCapabilities()
     ) {
@@ -46,6 +48,7 @@ struct AnthropicProvider: LLMProvider {
         self.behaviorFlags = behaviorFlags
         self.generalEffortSupport = generalEffortSupport
         self.measuredMaxThinkingBudget = measuredMaxThinkingBudget
+        self.measuredMinThinkingBudget = measuredMinThinkingBudget
         self.modelMaxOutputTokens = modelMaxOutputTokens
         self.modelCapabilities = modelCapabilities
     }
@@ -181,7 +184,8 @@ struct AnthropicProvider: LLMProvider {
                 requestedBudget: budget,
                 requestedMax: maxOutputTokensOverride ?? configuration.maxTokens,
                 modelMaxOutputTokens: modelMaxOutputTokens,
-                measuredMaximum: measuredMaxThinkingBudget)
+                measuredMaximum: measuredMaxThinkingBudget,
+                measuredMinimum: measuredMinThinkingBudget)
         }()
         let effectiveMaxTokens = thinkingPair?.maxTokens ?? (maxOutputTokensOverride ?? configuration.maxTokens)
         let emittableThinkingBudget = thinkingPair?.budget

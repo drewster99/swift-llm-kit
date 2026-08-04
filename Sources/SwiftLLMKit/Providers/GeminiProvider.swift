@@ -20,6 +20,7 @@ struct GeminiProvider: LLMProvider {
     /// The model's measured thinking-budget ceiling, so a request is clamped to something the
     /// endpoint accepts rather than sent raw.
     private let measuredMaxThinkingBudget: Int?
+    private let measuredMinThinkingBudget: Int?
     private let provider: ModelProvider
     private let readAPIKey: @Sendable () -> String
     private let verboseLogging: Bool
@@ -32,11 +33,13 @@ struct GeminiProvider: LLMProvider {
         verboseLogging: Bool = false,
         modelCapabilities: ModelCapabilities = ModelCapabilities(),
         measuredMaxThinkingBudget: Int? = nil,
+        measuredMinThinkingBudget: Int? = nil,
         session: URLSession = llmURLSession
     ) {
         self.configuration = configuration
         self.modelCapabilities = modelCapabilities
         self.measuredMaxThinkingBudget = measuredMaxThinkingBudget
+        self.measuredMinThinkingBudget = measuredMinThinkingBudget
         self.provider = provider
         self.readAPIKey = readAPIKey
         self.verboseLogging = verboseLogging
@@ -185,7 +188,8 @@ struct GeminiProvider: LLMProvider {
             // Clamp to the measured ceiling like the other providers; zero passes through, since
             // it is the off switch rather than a budget.
             let sent = budget == 0 ? 0
-                : ThinkingBudget.effective(budget, measuredMaximum: measuredMaxThinkingBudget)
+                : ThinkingBudget.effective(budget, measuredMaximum: measuredMaxThinkingBudget,
+                                           measuredMinimum: measuredMinThinkingBudget)
             if let sent {
                 generationConfig["thinkingConfig"] = ["thinkingBudget": sent] as [String: Any]
             }

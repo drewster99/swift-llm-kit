@@ -43,6 +43,7 @@ struct ModelProfileCodingKeyCoverageTests {
             reasoningEffortLevels: ["high": .established(false, "rejected")],
             capabilityFindings: [ModelCapability.structuredOutputSupportsJSONObject.rawValue: .established(true, "returned JSON")],
             maxThinkingBudgetTokens: .established(32_000, "largest accepted budget"),
+            minThinkingBudgetTokens: .established(1_024, "exactly 1024: accepted, and 1023 rejected"),
             callCount: 12,
             duration: 34.5
         )

@@ -207,6 +207,7 @@ struct ModelMetadataOverrideCodingKeyCoverageTests {
             generalEffort: .levels(["low"]), reasoningEffort: .supportedLevelsUnknown,
             reasoningControl: .thinkingBlock, thinkingBudgetAccounting: .separate,
             maxThinkingBudgetTokens: 32_000,
+            minThinkingBudgetTokens: 1_024,
             hidden: true, isAvailable: true, isAccessDenied: false)
         let object = try #require(
             try JSONSerialization.jsonObject(with: JSONEncoder().encode(populated)) as? [String: Any])
@@ -248,6 +249,7 @@ struct HandWrittenCodableCoverageTests {
             generalEffort: .levels(["low"]), reasoningEffort: .supportedLevelsUnknown,
             reasoningControl: .thinkingBlock, thinkingBudgetAccounting: .separate,
             maxThinkingBudgetTokens: 32_000,
+            minThinkingBudgetTokens: 1_024,
             behaviorFlags: BehaviorFlags(requiresAdaptiveThinking: true),
             deprecatedOn: Date(timeIntervalSince1970: 1), deprecationReplacement: "m2",
             maxTemperature: 2, modelDescription: "d",
@@ -676,5 +678,63 @@ struct ToolChoiceWireByteTests {
             let ollama = try #require(choice.wireValue(for: .ollama))
             #expect(ollama == choice.openAIWireValue, "\(choice) diverged from the OpenAI shape")
         }
+    }
+}
+
+/// A measured floor has to reach the wire, or measuring it was decoration. `ThinkingBudget
+/// .minimumTokens` is the DOCUMENTED floor and now only a fallback — these pin that a per-model
+/// measurement supersedes it in both directions, which is the whole point of probing for one.
+@Suite("A measured minimum budget supersedes the documented floor")
+struct MeasuredMinimumBudgetTests {
+
+    @Test("A higher measured floor raises a request that the constant would have under-sent")
+    func higherFloorRaisesTheBudget() {
+        // The case the probe exists for: production floors at 1024, this model rejects below 4096.
+        #expect(ThinkingBudget.effective(500, measuredMinimum: 4096) == 4096)
+        #expect(ThinkingBudget.effective(500) == ThinkingBudget.minimumTokens,
+                "without a measurement the documented floor still governs")
+    }
+
+    @Test("A lower measured floor permits a smaller budget than the constant would")
+    func lowerFloorPermitsSmallerBudgets() {
+        #expect(ThinkingBudget.effective(256, measuredMinimum: 128) == 256)
+        #expect(ThinkingBudget.effective(64, measuredMinimum: 128) == 128)
+    }
+
+    /// A measured floor of 0 says this endpoint imposes no minimum. Treating small values as
+    /// missing data would silently reinstate the constant on exactly the models that disproved it.
+    @Test("A measured floor of zero is a measurement, not missing data")
+    func zeroFloorIsHonoured() {
+        #expect(ThinkingBudget.effective(1, measuredMinimum: 0) == 1)
+    }
+
+    @Test("A maximum below the measured floor leaves no usable budget")
+    func maximumBelowFloorYieldsNil() {
+        #expect(ThinkingBudget.effective(8192, measuredMaximum: 2048, measuredMinimum: 4096) == nil)
+        #expect(ThinkingBudget.effective(8192, measuredMaximum: 2048) == 2048,
+                "the same maximum is fine against the documented floor")
+    }
+
+    /// `pairing` gates on having room for a legal budget. Comparing that room against the CONSTANT
+    /// while `effective` raised to a measured floor would emit a budget below the model's real
+    /// minimum whenever the two disagree — the exact rejection the measurement prevents.
+    @Test("The pairing's room check uses the same floor the budget was raised to")
+    func pairingRoomUsesTheMeasuredFloor() {
+        // Room is 2047, which clears the documented 1024 but not this model's measured 4096.
+        let pair = ThinkingBudget.pairing(requestedBudget: 8192, requestedMax: 2048,
+                                          modelMaxOutputTokens: 2048, measuredMinimum: 4096)
+        #expect(pair.budget == nil, "no legal budget fits, so none is sent")
+
+        let withoutMeasurement = ThinkingBudget.pairing(requestedBudget: 8192, requestedMax: 2048,
+                                                        modelMaxOutputTokens: 2048)
+        #expect(withoutMeasurement.budget == 2047)
+    }
+
+    @Test("A paired max_tokens still clears a raised measured floor")
+    func pairingRaisesMaxAboveTheMeasuredFloor() {
+        let pair = ThinkingBudget.pairing(requestedBudget: 100, requestedMax: 512,
+                                          modelMaxOutputTokens: nil, measuredMinimum: 4096)
+        #expect(pair.budget == 4096)
+        #expect(pair.maxTokens > 4096, "max_tokens must still exceed the budget actually sent")
     }
 }

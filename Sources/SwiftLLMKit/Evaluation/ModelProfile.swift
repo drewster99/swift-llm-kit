@@ -125,6 +125,11 @@ public struct ModelProfile: Sendable, Codable, Equatable {
     public var capabilityFindings: [String: ProbeFinding<Bool>]
     /// The largest accepted reasoning token budget, when measured.
     public var maxThinkingBudgetTokens: ProbeFinding<Int>?
+    /// The smallest accepted reasoning token budget, when measured.
+    ///
+    /// Separate from the maximum rather than a range on one finding: the two are established by
+    /// different searches with different precisions and either can be known while the other is not.
+    public var minThinkingBudgetTokens: ProbeFinding<Int>?
 
     /// Total wall clock and call count, so the cost of a full run is visible rather than guessed.
     public var callCount: Int
@@ -168,6 +173,7 @@ public struct ModelProfile: Sendable, Codable, Equatable {
         case reasoningEffortLevels
         case capabilityFindings
         case maxThinkingBudgetTokens
+        case minThinkingBudgetTokens
         case callCount
         case duration
     }
@@ -200,6 +206,7 @@ public struct ModelProfile: Sendable, Codable, Equatable {
         reasoningEffortLevels: [String: ProbeFinding<Bool>] = [:],
         capabilityFindings: [String: ProbeFinding<Bool>] = [:],
         maxThinkingBudgetTokens: ProbeFinding<Int>? = nil,
+        minThinkingBudgetTokens: ProbeFinding<Int>? = nil,
         callCount: Int = 0,
         duration: TimeInterval = 0
     ) {
@@ -230,6 +237,7 @@ public struct ModelProfile: Sendable, Codable, Equatable {
         self.reasoningEffortLevels = reasoningEffortLevels
         self.capabilityFindings = capabilityFindings
         self.maxThinkingBudgetTokens = maxThinkingBudgetTokens
+        self.minThinkingBudgetTokens = minThinkingBudgetTokens
         self.callCount = callCount
         self.duration = duration
     }

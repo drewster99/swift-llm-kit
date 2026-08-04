@@ -63,8 +63,7 @@ struct ThinkingBudgetRangeTests {
         let expectedCeiling = 64_000 - ThinkingBudget.minimumTokens
         let (finding, attempts) = await probe(maxOutput: 64_000) { _ in true }
         #expect(finding.value == expectedCeiling)
-        #expect(attempts == [expectedCeiling, ThinkingBudget.minimumTokens],
-                "the ceiling settles the maximum; the second call checks the floor we ASSUME")
+        #expect(attempts == [expectedCeiling], "one call settles it — nothing higher is reachable")
     }
 
     @Test("A separate allowance is NOT reduced — nothing has to be paired with it")
@@ -72,26 +71,7 @@ struct ThinkingBudgetRangeTests {
         let (finding, attempts) = await probe(
             maxOutput: nil, maxContext: 200_000, accounting: .separate) { _ in true }
         #expect(finding.value == 200_000)
-        #expect(attempts == [200_000, ThinkingBudget.minimumTokens])
-    }
-
-    /// The floor is ASSERTED by `ThinkingBudget.effective`, not searched for, so the one thing this
-    /// probe owes is noticing when the assertion is wrong for a model. Nothing reads the evidence
-    /// string — this pins that a rejected floor is at least SAID, since it silently would not be
-    /// otherwise: the accepted-ceiling path returns before the binary search ever reaches the floor.
-    @Test("A rejected floor is reported in the evidence, and does not change the ceiling")
-    func rejectedFloorIsSurfaced() async {
-        let expectedCeiling = 64_000 - ThinkingBudget.minimumTokens
-        let (finding, attempts) = await probe(maxOutput: 64_000) { $0 != ThinkingBudget.minimumTokens }
-        #expect(finding.value == expectedCeiling, "a bad floor is not evidence about the ceiling")
-        #expect(attempts == [expectedCeiling, ThinkingBudget.minimumTokens])
-        #expect(finding.evidence?.contains("REJECTED") == true)
-    }
-
-    @Test("An accepted floor is recorded too, so silence never has to be interpreted")
-    func acceptedFloorIsSurfaced() async {
-        let (finding, _) = await probe(maxOutput: 64_000) { _ in true }
-        #expect(finding.evidence?.contains("floor was also accepted") == true)
+        #expect(attempts == [200_000])
     }
 
     @Test("Converges on the real boundary, within the floor's precision")
@@ -164,5 +144,113 @@ struct ThinkingBudgetRangeTests {
         #expect(drawn.searchCeiling(maxOutputTokens: nil, maxContextTokens: 200_000) == 200_000)
         #expect(separate.searchCeiling(maxOutputTokens: 8_000, maxContextTokens: nil) == 8_000)
         #expect(drawn.searchCeiling(maxOutputTokens: nil, maxContextTokens: nil) == nil)
+    }
+}
+
+/// The minimum search. Its sibling above measures a CEILING to a granularity; this one measures a
+/// FLOOR to the exact token, because a floor is used verbatim as the value sent.
+@Suite("Thinking budget minimum probe")
+struct ThinkingBudgetMinimumTests {
+
+    private final class Recorder: @unchecked Sendable {
+        var attempts: [Int] = []
+        let accept: (Int) -> Bool?
+        init(accept: @escaping (Int) -> Bool?) { self.accept = accept }
+    }
+
+    private struct Stub: LLMProvider {
+        let budget: Int
+        let recorder: Recorder
+        func send(messages: [LLMMessage], tools: [LLMToolDefinition],
+                  overrides: LLMCallOverrides) async throws -> LLMResponse {
+            recorder.attempts.append(budget)
+            switch recorder.accept(budget) {
+            case true: return LLMResponse(text: "ok")
+            case false: throw LLMProviderError.httpError(statusCode: 400, body: "budget below minimum")
+            case nil: throw LLMProviderError.invalidResponse
+            }
+        }
+    }
+
+    private func probe(knownAccepted: Int = 60_000,
+                       cap: Int = ThinkingBudget.minimumSearchCap,
+                       accept: @escaping (Int) -> Bool?) async -> (ProbeFinding<Int>, [Int]) {
+        let recorder = Recorder(accept: accept)
+        let finding = await ModelProber.probeThinkingBudgetMinimum(
+            knownAcceptedBudget: knownAccepted, searchCap: cap,
+            makeProviderWithBudget: { budget, _ in Stub(budget: budget, recorder: recorder) })
+        return (finding, recorder.attempts)
+    }
+
+    /// The expected case, and the reason the documented floor is tested as a hypothesis rather than
+    /// bisected into: confirming it takes exactly two observations, not fourteen.
+    @Test("The documented floor is confirmed in two calls, not bisected into")
+    func documentedFloorConfirmedCheaply() async {
+        let (finding, attempts) = await probe { $0 >= ThinkingBudget.minimumTokens }
+        #expect(finding.value == ThinkingBudget.minimumTokens)
+        #expect(finding.status == .established)
+        #expect(attempts == [1024, 1023], "accepted at the floor, rejected just below it — that IS the floor")
+    }
+
+    @Test("A floor below the documented one is found exactly, not rounded to a granularity")
+    func lowerFloorFoundExactly() async {
+        let (finding, attempts) = await probe { $0 >= 256 }
+        #expect(finding.value == 256)
+        #expect(finding.evidence?.contains("255 rejected") == true)
+        #expect(attempts.count < 14, "bisection, not a walk")
+    }
+
+    /// The case the probe exists for: production floors at 1024 and this model wants more, so every
+    /// budgeted request below the real minimum is rejected until the measurement lands.
+    @Test("A floor ABOVE the documented one is found — the case this probe exists for")
+    func higherFloorIsFound() async {
+        let (finding, _) = await probe { $0 >= 4096 }
+        #expect(finding.value == 4096)
+        #expect(finding.status == .established)
+    }
+
+    @Test("No minimum at all is reported as 1, not as the documented floor")
+    func noFloorAtAll() async {
+        let (finding, _) = await probe { _ in true }
+        #expect(finding.value == 1)
+    }
+
+    /// The cap is an ASSUMPTION. Recording it as the answer would be indistinguishable from having
+    /// measured a model that really demands that much, so it must not be reported as a value.
+    @Test("A minimum above the search cap is inconclusive, never the cap itself")
+    func aboveCapIsInconclusive() async {
+        let (finding, _) = await probe(knownAccepted: 60_000, cap: 8192) { $0 >= 20_000 }
+        #expect(finding.status == .inconclusive)
+        #expect(finding.value == nil, "the cap is not a measurement")
+        #expect(finding.evidence?.contains("8192") == true)
+    }
+
+    /// Same rule as the maximum probe: silence is not rejection. Narrowing on a transport error
+    /// would converge on where the endpoint stopped ANSWERING and report it as the model's floor.
+    @Test("Silence mid-search reports the smallest value actually seen accepted")
+    func silenceStopsAtKnownGood() async {
+        // 1024 accepted, 1023 accepted, then the endpoint goes quiet inside the search.
+        let (finding, _) = await probe { budget in
+            if budget >= 1023 { return true }
+            return nil
+        }
+        #expect(finding.value == 1023, "conservative: overstating a floor is safe, understating is a rejection")
+        #expect(finding.evidence?.contains("stopped answering") == true)
+    }
+
+    @Test("With no usable budget range there is nothing to search below")
+    func noAcceptedBudgetMeansNoSearch() async {
+        let (finding, attempts) = await probe(knownAccepted: 0) { _ in true }
+        #expect(finding.status == .inconclusive)
+        #expect(attempts.isEmpty, "it must not spend a call it cannot interpret")
+    }
+
+    /// A model whose whole budget allowance is under the documented floor: the hypothesis is capped
+    /// to what is actually reachable rather than asking about a value the model can never accept.
+    @Test("The hypothesis is capped by the known-accepted budget")
+    func hypothesisCappedByKnownAccepted() async {
+        let (finding, attempts) = await probe(knownAccepted: 512) { $0 >= 300 }
+        #expect(finding.value == 300)
+        #expect(attempts.first == 512, "never asks about a budget above the one known to work")
     }
 }
