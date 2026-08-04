@@ -194,6 +194,9 @@ public enum ModelProber {
     ///   - effortLevelsToProbe: named efforts to attempt beyond what the seed already settled.
     ///     These measure GENERAL effort and are attempted only when the parameter below says the
     ///     endpoint actually emits it.
+    ///   - modelCapabilities: the model's catalog record — the same one the provider gates on.
+    ///     Without it the tool-calling probe cannot tell a forced call from a free one, because a
+    ///     suppressed `tool_choice` looks exactly like a successful forced request.
     ///   - supportsUnconditionalGeneralEffortEmission: whether this endpoint puts the general
     ///     effort field on the wire whether or not the model is known to accept it (Anthropic
     ///     does; flag-gated endpoints do not). Defaults to `false` — the SAFE answer, because on a
@@ -208,7 +211,8 @@ public enum ModelProber {
         seed: ModelProfile,
         effortLevelsToProbe: [String] = [],
         supportsUnconditionalGeneralEffortEmission: Bool = false,
-        preferLowImageDetail: Bool = false
+        preferLowImageDetail: Bool = false,
+        modelCapabilities: ModelCapabilities = ModelCapabilities()
     ) async -> ModelProfile {
         let started = Date()
         let calls = ProbeCallCounter()
@@ -279,8 +283,11 @@ public enum ModelProber {
         // 2. Tool calling, then the result round-trip. The reason the probe exists.
         var toolBattery: CapabilityProbe.ToolCallResult?
         if profile.toolCalling.status == .notAttempted || profile.toolResultRoundTrip.status == .notAttempted {
+            // The capabilities the PROVIDER will gate on, so `toolChoiceForced` records whether
+            // `tool_choice` actually went out rather than assuming it did.
             let toolResult = await CapabilityProbe.probeToolCalling(
-                llm: llm, providerID: profile.providerID, modelID: modelID, calls: calls
+                llm: llm, providerID: profile.providerID, modelID: modelID,
+                capabilities: modelCapabilities, calls: calls
             )
             toolBattery = toolResult
             if profile.toolCalling.status == .notAttempted {
