@@ -56,6 +56,37 @@ struct ProbeProjectionTests {
         #expect(accountScoped.reasoningEffort == nil, "a partial ladder must never project")
     }
 
+    /// Capability findings and the budget ceiling are MODEL-scoped: whether a model accepts
+    /// `json_object` does not depend on whose key asked. They were briefly nested inside the
+    /// account-scoped gate, which silently discarded every one of them from downloaded records —
+    /// those are projected with the gate false on purpose.
+    @Test("Probed capabilities project regardless of the account-scoped gate")
+    func capabilityFindingsAreModelScoped() {
+        var profile = ModelProfile(providerID: "p", modelID: "m")
+        profile[.structuredOutputJSONObject] = .established(true, "returned the requested JSON")
+        profile[.strictToolDefinitions] = .established(false, "rejected strict")
+        profile.maxThinkingBudgetTokens = .established(32_000, "largest accepted")
+
+        for includeAccountScoped in [true, false] {
+            let facts = profile.asEmpiricalFacts(includeAccountScoped: includeAccountScoped)
+            #expect(facts.capabilities.structuredOutputJSONObject == true,
+                    "dropped with includeAccountScoped=\(includeAccountScoped)")
+            #expect(facts.capabilities.strictToolDefinitions == false,
+                    "a stated NO must project too, not just a YES")
+            #expect(facts.maxThinkingBudgetTokens == 32_000)
+        }
+    }
+
+    /// Only PROBED findings project. A decoded seed is already in the authoritative layer, and
+    /// re-projecting it as empirical would let it outrank the vendor that stated it.
+    @Test("A decoded capability finding does not project as empirical")
+    func decodedFindingsDoNotProject() {
+        var profile = ModelProfile(providerID: "p", modelID: "m")
+        profile[.structuredOutputJSONObject] = .decoded(true, "stated in /models")
+        let facts = profile.asEmpiricalFacts(includeAccountScoped: true)
+        #expect(facts.capabilities.structuredOutputJSONObject == nil)
+    }
+
     @Test("Effort levels project only from a COMPLETE-ladder probe")
     func completeLadderProjection() {
         var profile = ModelProfile(providerID: "p", modelID: "m")
