@@ -1435,6 +1435,7 @@ public final class LLMKitManager {
                 configuration: config, provider: modelProvider,
                 readAPIKey: readAPIKey, verboseLogging: verbose,
                 modelCapabilities: modelCapabilities,
+                measuredMaxThinkingBudget: measuredMaxThinkingBudget,
                 session: session
             )
         }

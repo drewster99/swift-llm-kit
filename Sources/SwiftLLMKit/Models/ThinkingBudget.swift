@@ -17,7 +17,7 @@ public enum ThinkingBudget {
     /// The smallest budget the supporting APIs accept.
     public static let minimumTokens = 1024
 
-    /// The budget that will actually be sent for a requested value.
+    /// The budget that will actually be sent, or `nil` when the model is MEASURED to accept none.
     ///
     /// Callers must use this rather than flooring inline, so the value they reason about is the
     /// value that goes on the wire.
@@ -25,9 +25,12 @@ public enum ThinkingBudget {
     /// `measuredMaximum` is the model's own probed ceiling when one exists. Passing it clamps from
     /// ABOVE as well as below, which is the difference between a request that is merely large and
     /// one the endpoint refuses outright.
-    public static func effective(_ requested: Int, measuredMaximum: Int? = nil) -> Int {
-        let floored = max(requested, minimumTokens)
-        guard let measuredMaximum, measuredMaximum >= minimumTokens else { return floored }
-        return min(floored, measuredMaximum)
+    public static func effective(_ requested: Int, measuredMaximum: Int? = nil) -> Int? {
+        guard let measuredMaximum else { return max(requested, minimumTokens) }
+        // A measured maximum BELOW the floor is a real finding — `probeThinkingBudgetRange`
+        // records 0 when even the minimum was rejected — and means no budget is usable at all.
+        // Treating it as "unmeasured" and sending the floor anyway ignored the measurement.
+        guard measuredMaximum >= minimumTokens else { return nil }
+        return min(max(requested, minimumTokens), measuredMaximum)
     }
 }

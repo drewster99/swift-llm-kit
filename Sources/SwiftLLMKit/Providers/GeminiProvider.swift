@@ -17,6 +17,9 @@ struct GeminiProvider: LLMProvider {
     private let configuration: ModelConfiguration
     /// The model's capabilities, for gating knobs whose wrong emission is an HTTP 400.
     private let modelCapabilities: ModelCapabilities
+    /// The model's measured thinking-budget ceiling, so a request is clamped to something the
+    /// endpoint accepts rather than sent raw.
+    private let measuredMaxThinkingBudget: Int?
     private let provider: ModelProvider
     private let readAPIKey: @Sendable () -> String
     private let verboseLogging: Bool
@@ -28,10 +31,12 @@ struct GeminiProvider: LLMProvider {
         readAPIKey: @Sendable @escaping () -> String,
         verboseLogging: Bool = false,
         modelCapabilities: ModelCapabilities = ModelCapabilities(),
+        measuredMaxThinkingBudget: Int? = nil,
         session: URLSession = llmURLSession
     ) {
         self.configuration = configuration
         self.modelCapabilities = modelCapabilities
+        self.measuredMaxThinkingBudget = measuredMaxThinkingBudget
         self.provider = provider
         self.readAPIKey = readAPIKey
         self.verboseLogging = verboseLogging
@@ -160,12 +165,26 @@ struct GeminiProvider: LLMProvider {
         // per-call override wins, and an explicit `reasoningEnabled: false` sends 0, which is
         // Gemini's documented way to turn thinking off.
         let geminiBudget: Int? = {
-            if overrides.reasoningEnabled == false { return 0 }
-            return overrides.thinkingBudgetTokens ?? configuration.thinkingBudget
+            switch overrides.reasoningEnabled {
+            case false:
+                return 0                                    // Gemini's documented "off"
+            case true:
+                // An explicit ON must beat a configured zero, which would otherwise disable it.
+                let requested = overrides.thinkingBudgetTokens ?? configuration.thinkingBudget ?? 0
+                return requested > 0 ? requested : ThinkingBudget.minimumTokens
+            case nil:
+                return overrides.thinkingBudgetTokens ?? configuration.thinkingBudget
+            }
         }()
         if let budget = geminiBudget, budget >= 0,
            modelCapabilities.state(of: .thinkingBudgetTokens) != false {
-            generationConfig["thinkingConfig"] = ["thinkingBudget": budget] as [String: Any]
+            // Clamp to the measured ceiling like the other providers; zero passes through, since
+            // it is the off switch rather than a budget.
+            let sent = budget == 0 ? 0
+                : ThinkingBudget.effective(budget, measuredMaximum: measuredMaxThinkingBudget)
+            if let sent {
+                generationConfig["thinkingConfig"] = ["thinkingBudget": sent] as [String: Any]
+            }
         }
         if let topP = topPOverride {
             generationConfig["topP"] = topP

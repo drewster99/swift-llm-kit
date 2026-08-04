@@ -1063,10 +1063,12 @@ public enum ModelProber {
     }
 
 
-    /// Asks for a shape whose correct answer is unambiguous, so a model answering in prose fails
-    /// on the parse rather than on the content.
-    private static let structuredOutputPrompt =
-        "Reply with a JSON object having exactly one key \"ok\" set to true."
+    /// Asks in PROSE for a different shape than the forced format demands.
+    ///
+    /// This disagreement is the whole test. A prompt that asks for the shape it then grades cannot
+    /// distinguish "the endpoint held the model to `response_format`" from "the model followed
+    /// instructions", and an endpoint that IGNORES the field passes it. Here, obeying the words
+    /// produces prose; obeying the format produces JSON. Only the latter is evidence.
 
     // MARK: - Structured output
 
@@ -1094,21 +1096,19 @@ public enum ModelProber {
             // at all — and then grade a model that merely followed the prompt's wording as
             // supporting it. Every probe in this file forces for the same reason.
             let response = try await makeProviderForcing(["response_format": mode.forcedWireValue])
-                .send(messages: [.user(Self.structuredOutputPrompt)], tools: [])
+                .send(messages: [.user("Answer in one short English sentence: what colour is the sky?")],
+                      tools: [])
             let text = response.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard let data = text.data(using: .utf8),
                   let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 // A 200 whose body is not a JSON object means the field was accepted and ignored.
-                return .established(false, "returned non-JSON despite response_format: \(text.prefix(120))",
+                return .established(false, "followed the prose and returned non-JSON, so response_format was ignored: \(text.prefix(120))",
                                     duration: Date().timeIntervalSince(started))
             }
-            // The ASKED-FOR shape, not merely "some JSON": a model returning unrelated JSON has not
-            // demonstrated it is being held to anything.
-            guard object["ok"] as? Bool == true else {
-                return .established(false, "returned JSON but not the requested shape: \(text.prefix(120))",
-                                    duration: Date().timeIntervalSince(started))
-            }
-            return .established(true, "returned exactly the requested JSON object",
+            // A JSON OBJECT when the prose asked for an English sentence: the only thing that
+            // could have produced it is the endpoint enforcing the format.
+            _ = object
+            return .established(true, "returned JSON though the prompt asked for prose — the format was enforced",
                                 duration: Date().timeIntervalSince(started))
         } catch {
             let detail = CapabilityProbe.rejectionDetail(error)
@@ -1132,16 +1132,18 @@ public enum ModelProber {
     /// the models that behave best. A refusal naming the parameter is the reliable signal.
     public static func probeToolChoice(
         _ choice: LLMToolChoice,
-        llm: any LLMProvider,
-        modelID: String,
+        forcedWireValue: AnyCodable,
+        makeProviderForcing: @Sendable ([String: AnyCodable]) async -> any LLMProvider,
         calls: ProbeCallCounter? = nil
     ) async -> ProbeFinding<Bool> {
         let started = Date()
         calls?.increment()
         do {
-            _ = try await llm.send(messages: [.user("Reply with the single word: ok")],
-                                   tools: [CapabilityProbe.makeProbeTool()],
-                                   overrides: LLMCallOverrides(toolChoice: choice))
+            // FORCED: production emission is gated per option, so re-probing an option already
+            // recorded false would send nothing and grade the ordinary success as support.
+            _ = try await makeProviderForcing(["tool_choice": forcedWireValue])
+                .send(messages: [.user("Reply with the single word: ok")],
+                      tools: [CapabilityProbe.makeProbeTool()])
             return .established(true, "accepted tool_choice", duration: Date().timeIntervalSince(started))
         } catch {
             let detail = CapabilityProbe.rejectionDetail(error)
@@ -1203,8 +1205,15 @@ public enum ModelProber {
             }
         }
 
-        guard let ceiling = (accounting ?? .drawnFromMaxOutputTokens)
-                .searchCeiling(maxOutputTokens: maxOutputTokens, maxContextTokens: maxContextTokens),
+        // Reserve room for the pairing when the budget is drawn from the output allowance: probing
+        // AT `maxOutputTokens` needs a `max_tokens` ABOVE it, so the refusal would be about the
+        // output cap and the search would converge on `maxOutputTokens - floor` every time.
+        let effectiveAccounting = accounting ?? .drawnFromMaxOutputTokens
+        let rawCeiling = effectiveAccounting.searchCeiling(maxOutputTokens: maxOutputTokens,
+                                                           maxContextTokens: maxContextTokens)
+        guard let ceiling = rawCeiling.map({
+                  effectiveAccounting == .drawnFromMaxOutputTokens ? $0 - ThinkingBudget.minimumTokens : $0
+              }),
               ceiling > ThinkingBudget.minimumTokens else {
             return .inconclusive(
                 "no known output or context limit to bound the search — a ceiling here would be invented",

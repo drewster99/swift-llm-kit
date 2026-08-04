@@ -164,11 +164,16 @@ struct AnthropicProvider: LLMProvider {
         // Adaptive thinking has no budget concept, so the constraint doesn't
         // apply.
         let effectiveMaxTokens: Int = {
-            guard let override = maxOutputTokensOverride else { return configuration.maxTokens }
-            if thinkingEnabled, !usesAdaptiveThinking, let budget = requestedBudget {
-                return max(override, ThinkingBudget.effective(budget, measuredMaximum: measuredMaxThinkingBudget) + 1)
+            // Clamp the EFFECTIVE max, not just an explicit override. Anthropic requires
+            // `max_tokens > budget_tokens`, and gating the clamp on an override meant a per-call
+            // budget larger than the configured max produced an invalid request — which the
+            // per-call budget support introduced.
+            let base = maxOutputTokensOverride ?? configuration.maxTokens
+            if thinkingEnabled, !usesAdaptiveThinking, let budget = requestedBudget, budget > 0,
+               let sent = ThinkingBudget.effective(budget, measuredMaximum: measuredMaxThinkingBudget) {
+                return max(base, sent + 1)
             }
-            return override
+            return base
         }()
 
         var body: [String: Any] = [
@@ -240,12 +245,13 @@ struct AnthropicProvider: LLMProvider {
                 // Adaptive thinking — model decides depth, no budget_tokens.
                 // Steered via `output_config.effort` below if user set it.
                 body["thinking"] = ["type": "adaptive"] as [String: Any]
-            } else if let budget = requestedBudget, budget > 0 {
-                body["thinking"] = [
-                    "type": "enabled",
-                    "budget_tokens": ThinkingBudget.effective(
-                        budget, measuredMaximum: measuredMaxThinkingBudget)
-                ] as [String: Any]
+            } else if let budget = requestedBudget ?? (overrides.reasoningEnabled == true ? ThinkingBudget.minimumTokens : nil),
+                      budget > 0 {
+                // `nil` means the model was MEASURED to accept no budget at all — emit no
+                // thinking block rather than a value it will reject.
+                if let sent = ThinkingBudget.effective(budget, measuredMaximum: measuredMaxThinkingBudget) {
+                    body["thinking"] = ["type": "enabled", "budget_tokens": sent] as [String: Any]
+                }
             }
         }
 

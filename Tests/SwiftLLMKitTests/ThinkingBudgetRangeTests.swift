@@ -55,11 +55,23 @@ struct ThinkingBudgetRangeTests {
         #expect(attempts.isEmpty, "it must not spend a call it cannot interpret")
     }
 
-    @Test("Accepting the full allowance is a real answer, not a search")
+    /// The ceiling RESERVES room for the pairing when the budget is drawn from the output
+    /// allowance: probing at `maxOutputTokens` would need a `max_tokens` above it, so the refusal
+    /// would be about the output cap and the search would converge on that boundary every time.
+    @Test("The search ceiling reserves pairing room, and accepting it is a real answer")
     func fullAllowanceAccepted() async {
+        let expectedCeiling = 64_000 - ThinkingBudget.minimumTokens
         let (finding, attempts) = await probe(maxOutput: 64_000) { _ in true }
-        #expect(finding.value == 64_000)
-        #expect(attempts == [64_000], "one call settles it — nothing above the allowance is reachable")
+        #expect(finding.value == expectedCeiling)
+        #expect(attempts == [expectedCeiling], "one call settles it — nothing higher is reachable")
+    }
+
+    @Test("A separate allowance is NOT reduced — nothing has to be paired with it")
+    func separateAllowanceKeepsFullCeiling() async {
+        let (finding, attempts) = await probe(
+            maxOutput: nil, maxContext: 200_000, accounting: .separate) { _ in true }
+        #expect(finding.value == 200_000)
+        #expect(attempts == [200_000])
     }
 
     @Test("Converges on the real boundary, within the floor's precision")
@@ -86,8 +98,9 @@ struct ThinkingBudgetRangeTests {
     func silenceDoesNotNarrow() async {
         // Ceiling rejected and the minimum accepted, so the search starts; then the endpoint goes
         // quiet. The last value it actually accepted is the most that can honestly be claimed.
+        let ceiling = 64_000 - ThinkingBudget.minimumTokens
         let (finding, _) = await probe(maxOutput: 64_000) { budget in
-            if budget >= 64_000 { return false }
+            if budget >= ceiling { return false }
             if budget <= ThinkingBudget.minimumTokens { return true }
             return nil
         }

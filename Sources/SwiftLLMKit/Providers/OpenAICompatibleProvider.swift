@@ -251,19 +251,22 @@ struct OpenAICompatibleProvider: LLMProvider {
             // override is for, and previously `reasoningEnabled: false` could not turn off a model
             // whose configuration carried a positive budget.
             let wantsReasoning = overrides.reasoningEnabled ?? ((requestedBudget ?? 0) > 0)
-            if wantsReasoning {
+            // Each DIRECTION is gated by its own capability, and the legacy fallback is exempt from
+            // both — it exists precisely for models whose capabilities nothing has recorded, so
+            // requiring a known-true there would suppress the very behaviour it preserves.
+            let directionAllowed = isLegacyFallback || modelCapabilities.state(
+                of: wantsReasoning ? .reasoningEnableable : .reasoningDisableable) == true
+            if wantsReasoning, directionAllowed {
                 body["enable_thinking"] = true
                 if let budget = requestedBudget, budget > 0,
-                   isLegacyFallback || modelCapabilities.state(of: .thinkingBudgetTokens) == true {
-                    body["thinking_budget"] = ThinkingBudget.effective(
-                        budget, measuredMaximum: measuredMaxThinkingBudget)
+                   isLegacyFallback || modelCapabilities.state(of: .thinkingBudgetTokens) == true,
+                   let sent = ThinkingBudget.effective(budget, measuredMaximum: measuredMaxThinkingBudget) {
+                    body["thinking_budget"] = sent
                 }
-            } else if overrides.reasoningEnabled == false {
+            } else if overrides.reasoningEnabled == false, directionAllowed {
                 // Only an EXPLICIT off is stated; an absent budget is silence, not a request to
-                // disable. Gated, because a model that cannot be switched off rejects the field.
-                if modelCapabilities.state(of: .reasoningDisableable) == true {
-                    body["enable_thinking"] = false
-                }
+                // disable.
+                body["enable_thinking"] = false
             }
         case .thinkingBlock:
             // `{"type": "enabled"|"disabled"}`, optionally with `keep`.
@@ -278,9 +281,9 @@ struct OpenAICompatibleProvider: LLMProvider {
                 thinking["keep"] = "all"
             }
             if let budget = requestedBudget, budget > 0,
-               modelCapabilities.state(of: .thinkingBudgetTokens) == true {
-                thinking["budget_tokens"] = ThinkingBudget.effective(
-                    budget, measuredMaximum: measuredMaxThinkingBudget)
+               modelCapabilities.state(of: .thinkingBudgetTokens) == true,
+               let sent = ThinkingBudget.effective(budget, measuredMaximum: measuredMaxThinkingBudget) {
+                thinking["budget_tokens"] = sent
             }
             if !thinking.isEmpty { body["thinking"] = thinking }
         case .unsupported, .reasoningEffortOnly, .anthropicThinking, .geminiThinkingConfig, nil:
@@ -343,7 +346,9 @@ struct OpenAICompatibleProvider: LLMProvider {
             // none, or `{"type": "function", "function": {"name": "..."}}`
             // for a specific tool.
             // Gated per OPTION, not per parameter: "accepts tool_choice" does not mean "accepts
-            // every value of it", and a rejected option is an HTTP 400. Fails OPEN on unknown,
+            // every value of it", and a rejected option is an HTTP 400. NOTE for probe authors:
+            // this gate suppresses the field on a known-false, so a probe re-measuring one must
+            // FORCE it rather than ask through here. Fails OPEN on unknown,
             // unlike the newer knobs — tool_choice predates this gating and silently dropping a
             // caller's explicit choice would change long-standing behaviour on every model no
             // source has described.

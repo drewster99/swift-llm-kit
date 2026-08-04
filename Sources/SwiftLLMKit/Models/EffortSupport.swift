@@ -56,9 +56,14 @@ public enum EffortSupport: Sendable, Equatable, Hashable {
 
     /// Wrapper whose initializer is private to the file, so the empty ladder cannot be built from
     /// outside. Callers use ``EffortSupport/levels(_:)`` or ``EffortSupport/init(levels:)``.
-    public struct OrderedLevels: Sendable, Equatable, Hashable, Codable, RandomAccessCollection {
+    public struct OrderedLevels: Sendable, Equatable, Hashable, RandomAccessCollection {
         public let values: [String]
         fileprivate init(_ values: [String]) { self.values = values }
+
+        // Deliberately NOT Codable. A public Codable conformance let a caller decode
+        // `{"values": []}` straight into this wrapper and hand it to `.levels(_:)`, rebuilding the
+        // very empty ladder the wrapper exists to prevent. EffortSupport encodes the array itself
+        // and rebuilds through `init(levels:)`, which normalizes.
 
         // Reads as the ladder it is, so call sites iterate and query it without reaching for
         // `.values` — the wrapper exists to block construction, not to be carried around.

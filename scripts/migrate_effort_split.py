@@ -28,8 +28,9 @@ Safety
 ------
 * Refuses to run while AgentSmith is running (it would overwrite from memory).
 * Writes a timestamped backup of every directory it touches before changing anything.
-* Verifies afterwards that zero records still carry the old key and that the total count is
-  unchanged, and restores from the backup if either check fails.
+* Verifies afterwards that every record is at the current schema and the count is unchanged,
+  restoring the backup on ANY failure — including a malformed file that the migration pass
+  skipped, which would otherwise crash verification after valid files were already rewritten.
 """
 
 from __future__ import annotations
@@ -43,6 +44,7 @@ import sys
 from pathlib import Path
 
 ANTHROPIC_PROVIDER_IDS = {"builtin.anthropic"}
+ANTHROPIC_API_TYPE = "anthropic"
 
 OLD_KEY = "effortLevels"
 GENERAL_KEY = "generalEffortLevels"
@@ -51,17 +53,26 @@ NEW_SCHEMA_VERSION = 3
 CAPABILITY_FINDINGS_KEY = "capabilityFindings"
 
 
-def target_key(provider_id: str) -> str:
+def target_key(record: dict) -> str:
     """Which construct a record's ladder actually measured.
 
     Anthropic emits `output_config.effort` unconditionally, so its probe measured GENERAL effort.
     Every other backend is flag-gated on `reasoning_effort`, and the runner forces that raw
     parameter to measure it — so those records describe REASONING effort.
+
+    Keyed on `key.apiType`, NOT on the provider id. A USER-CREATED Anthropic provider has a UUID
+    for an id, so an id-based rule silently filed its general-effort ladder as reasoning effort —
+    the one classification error this migration can make, and a silent one.  The record carries the
+    apiType precisely because it is the authoritative answer.
     """
-    return GENERAL_KEY if provider_id in ANTHROPIC_PROVIDER_IDS else REASONING_KEY
+    api_type = (record.get("key") or {}).get("apiType")
+    if api_type:
+        return GENERAL_KEY if api_type == ANTHROPIC_API_TYPE else REASONING_KEY
+    # Pre-key records: fall back to the built-in id, which is all they carry.
+    return GENERAL_KEY if record.get("providerID") in ANTHROPIC_PROVIDER_IDS else REASONING_KEY
 
 
-def migrate_profile(profile: dict, provider_id: str) -> bool:
+def migrate_profile(profile: dict, record: dict) -> bool:
     """Brings one profile up to the current schema. Returns True if anything changed.
 
     Idempotent and step-wise, so a corpus at mixed versions converges in one pass.
@@ -71,7 +82,7 @@ def migrate_profile(profile: dict, provider_id: str) -> bool:
     # v1 -> v2: one ladder became two, split by which parameter the prober actually sent.
     if OLD_KEY in profile:
         ladder = profile.pop(OLD_KEY)
-        key = target_key(provider_id)
+        key = target_key(record)
         # Both keys must exist afterwards: they are non-optional on the Swift side, so a missing
         # one fails the decode exactly as the old key's absence would.
         profile[GENERAL_KEY] = ladder if key == GENERAL_KEY else {}
@@ -89,8 +100,7 @@ def migrate_profile(profile: dict, provider_id: str) -> bool:
 
 
 def migrate_record(record: dict) -> bool:
-    provider_id = record.get("providerID", "")
-    changed = migrate_profile(record.get("profile", {}), provider_id)
+    changed = migrate_profile(record.get("profile", {}), record)
     if changed:
         record["schemaVersion"] = NEW_SCHEMA_VERSION
     return changed
@@ -178,7 +188,7 @@ def main() -> int:
             # records it cannot decode, so a partial migration silently deletes findings.
             try:
                 verify_directory(args.probes_dir, total)
-            except AssertionError as failure:
+            except Exception as failure:   # AssertionError, JSONDecodeError, OSError — all restore
                 backup_dir = args.probes_dir.with_name(f"{args.probes_dir.name}.bak-effort-split-{stamp}")
                 print(f"  VERIFICATION FAILED: {failure}")
                 if backup_dir.is_dir():
