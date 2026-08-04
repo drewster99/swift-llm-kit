@@ -45,9 +45,32 @@ public enum EffortSupport: Sendable, Equatable, Hashable {
     /// on the basis of this record.
     case supportedLevelsUnknown
     /// The parameter is accepted and exactly these values are legal, ordered shallow → deep by
-    /// ``EffortRank``. Never empty — an empty ladder is ``unsupported``, which ``init(levels:)``
-    /// enforces so the illegal state cannot be constructed.
-    case levels([String])
+    /// ``EffortRank``.
+    ///
+    /// Never empty, and that is ENFORCED rather than documented: the payload is `private`, so the
+    /// only way to reach this case is ``levels(_:)``, which sends an empty ladder to
+    /// ``unsupported``. A publicly constructible `.levels([])` reported `isSupported == true`,
+    /// could therefore enable parameter emission, and then silently became `.unsupported` across a
+    /// Codable round trip — a value that changed meaning by being saved.
+    case levels(_ ordered: OrderedLevels)
+
+    /// Wrapper whose initializer is private to the file, so the empty ladder cannot be built from
+    /// outside. Callers use ``EffortSupport/levels(_:)`` or ``EffortSupport/init(levels:)``.
+    public struct OrderedLevels: Sendable, Equatable, Hashable, Codable, RandomAccessCollection {
+        public let values: [String]
+        fileprivate init(_ values: [String]) { self.values = values }
+
+        // Reads as the ladder it is, so call sites iterate and query it without reaching for
+        // `.values` — the wrapper exists to block construction, not to be carried around.
+        public var startIndex: Int { values.startIndex }
+        public var endIndex: Int { values.endIndex }
+        public subscript(position: Int) -> String { values[position] }
+    }
+
+    /// The only public way to build a ladder. An empty one is ``unsupported`` by construction.
+    public static func levels(_ values: [String]) -> EffortSupport {
+        EffortSupport(levels: values)
+    }
 
     /// Builds the state a stated ladder implies, normalizing the empty ladder to ``unsupported``.
     ///
@@ -57,7 +80,7 @@ public enum EffortSupport: Sendable, Equatable, Hashable {
     /// contradiction this type removes.
     public init(levels: [String]) {
         let ordered = levels.sorted { EffortRank.rank(of: $0) < EffortRank.rank(of: $1) }
-        self = ordered.isEmpty ? .unsupported : .levels(ordered)
+        self = ordered.isEmpty ? .unsupported : .levels(OrderedLevels(ordered))
     }
 
     /// Whether the parameter may be sent at all. `false` only for ``unsupported``.
@@ -71,7 +94,7 @@ public enum EffortSupport: Sendable, Equatable, Hashable {
     /// callers filtering a picker must not confuse "no levels exist" with "we don't know which",
     /// and neither may be rendered as an empty menu the user can't act on.
     public var knownLevels: [String]? {
-        if case .levels(let levels) = self { return levels }
+        if case .levels(let ladder) = self { return ladder.values }
         return nil
     }
 
@@ -84,7 +107,7 @@ public enum EffortSupport: Sendable, Equatable, Hashable {
         switch self {
         case .unsupported: return true
         case .supportedLevelsUnknown: return false
-        case .levels(let levels): return !levels.contains(level)
+        case .levels(let ladder): return !ladder.values.contains(level)
         }
     }
 }
@@ -113,9 +136,9 @@ extension EffortSupport: Codable {
             try container.encode(State.unsupported, forKey: .state)
         case .supportedLevelsUnknown:
             try container.encode(State.supportedLevelsUnknown, forKey: .state)
-        case .levels(let levels):
+        case .levels(let ladder):
             try container.encode(State.levels, forKey: .state)
-            try container.encode(levels, forKey: .levels)
+            try container.encode(ladder.values, forKey: .levels)
         }
     }
 }
@@ -128,7 +151,7 @@ public extension EffortSupport {
         switch self {
         case .unsupported: return "Not supported"
         case .supportedLevelsUnknown: return "Supported, levels unknown"
-        case .levels(let levels): return levels.joined(separator: ", ")
+        case .levels(let ladder): return ladder.values.joined(separator: ", ")
         }
     }
 }

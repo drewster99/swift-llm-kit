@@ -12,6 +12,10 @@ struct ThinkingBudgetRangeTests {
     /// a network. Records every budget attempted, which is what proves the convergence rule.
     private final class Recorder: @unchecked Sendable {
         var attempts: [Int] = []
+        /// Every (budget, pairedMaxOutputTokens) the probe asked for — Anthropic requires
+        /// `max_tokens > budget_tokens`, and a probe that failed to pair them would converge on
+        /// the PAIRING boundary and report it as the model's ceiling.
+        var pairings: [(budget: Int, pairedMax: Int)] = []
         let accept: (Int) -> Bool?
         init(accept: @escaping (Int) -> Bool?) { self.accept = accept }
     }
@@ -37,7 +41,10 @@ struct ThinkingBudgetRangeTests {
         let finding = await ModelProber.probeThinkingBudgetRange(
             llm: Stub(budget: 0, recorder: recorder), modelID: "m",
             accounting: accounting, maxOutputTokens: maxOutput, maxContextTokens: maxContext,
-            makeProviderWithBudget: { Stub(budget: $0, recorder: recorder) })
+            makeProviderWithBudget: { budget, pairedMax in
+                recorder.pairings.append((budget, pairedMax))
+                return Stub(budget: budget, recorder: recorder)
+            })
         return (finding, recorder.attempts)
     }
 
@@ -95,6 +102,23 @@ struct ThinkingBudgetRangeTests {
         let (finding, _) = await probe(maxOutput: 64_000) { _ in nil }
         #expect(finding.status == .inconclusive)
         #expect(finding.value == nil)
+    }
+
+    /// The probe must hand the factory a `max_tokens` above each budget. Without it, Anthropic
+    /// rejects on the PAIRING and the search converges on that boundary instead of the real one.
+    @Test("Every attempt pairs a max_tokens above the budget")
+    func pairsMaxTokensAboveBudget() async {
+        let recorder = Recorder(accept: { $0 <= 20_000 })
+        _ = await ModelProber.probeThinkingBudgetRange(
+            llm: Stub(budget: 0, recorder: recorder), modelID: "m",
+            accounting: .drawnFromMaxOutputTokens, maxOutputTokens: 64_000, maxContextTokens: nil,
+            makeProviderWithBudget: { budget, pairedMax in
+                recorder.pairings.append((budget, pairedMax))
+                return Stub(budget: budget, recorder: recorder)
+            })
+        #expect(!recorder.pairings.isEmpty)
+        #expect(recorder.pairings.allSatisfy { $0.pairedMax > $0.budget },
+                "a paired max_tokens at or below the budget makes the refusal about the pairing")
     }
 
     @Test("Accounting picks which limit bounds the search")

@@ -349,6 +349,17 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
         if let v = isAccessDenied, (forceReplace || model.isAccessDenied == nil) {
             model.isAccessDenied = v
         }
+        // The five fields added with the effort/reasoning work. Omitting them here left this path
+        // silently dropping them, exactly as the missing CodingKeys did on the persistence path.
+        if let v = generalEffort, (forceReplace || model.generalEffort == nil) { model.generalEffort = v }
+        if let v = reasoningEffort, (forceReplace || model.reasoningEffort == nil) { model.reasoningEffort = v }
+        if let v = reasoningControl, (forceReplace || model.reasoningControl == nil) { model.reasoningControl = v }
+        if let v = thinkingBudgetAccounting, (forceReplace || model.thinkingBudgetAccounting == nil) {
+            model.thinkingBudgetAccounting = v
+        }
+        if let v = maxThinkingBudgetTokens, (forceReplace || model.maxThinkingBudgetTokens == nil) {
+            model.maxThinkingBudgetTokens = v
+        }
     }
 }
 

@@ -1406,11 +1406,17 @@ public final class LLMKitManager {
                 let enableParallel = !flags.disableParallelToolCalls
                 var cloudProvider = modelProvider
                 cloudProvider.endpoint = openAIEndpoint
+                // The same resolved facts the direct OpenAI-compatible route gets. Dropping them
+                // here silently suppressed reasoning effort and structured output on every Ollama
+                // Cloud model, because those gates fail closed on an unknown.
                 return OpenAICompatibleProvider(
                     configuration: config, provider: cloudProvider,
                     readAPIKey: readAPIKey, verboseLogging: verbose,
                     parallelToolCalls: enableParallel,
                     behaviorFlags: flags,
+                    reasoningEffortSupport: reasoningEffortSupport,
+                    reasoningControl: reasoningControl,
+                    modelCapabilities: modelCapabilities,
                     session: session
                 )
             }

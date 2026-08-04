@@ -19,6 +19,9 @@ struct OpenAICompatibleProvider: LLMProvider {
     private let reasoningControl: ReasoningControl?
     /// The model's capabilities, for gating knobs whose wrong emission is an HTTP 400.
     private let modelCapabilities: ModelCapabilities
+    /// The model's measured thinking-budget ceiling, so a request is clamped to something the
+    /// endpoint will actually accept rather than merely floored.
+    private let measuredMaxThinkingBudget: Int?
     private let session: URLSession
     /// Stable conversation ID for xAI prompt caching. Generated once per provider instance.
     private let conversationID: String
@@ -33,6 +36,7 @@ struct OpenAICompatibleProvider: LLMProvider {
         reasoningEffortSupport: EffortSupport? = nil,
         reasoningControl: ReasoningControl? = nil,
         modelCapabilities: ModelCapabilities = ModelCapabilities(),
+        measuredMaxThinkingBudget: Int? = nil,
         session: URLSession = llmURLSession
     ) {
         self.configuration = configuration
@@ -44,6 +48,7 @@ struct OpenAICompatibleProvider: LLMProvider {
         self.reasoningEffortSupport = reasoningEffortSupport
         self.reasoningControl = reasoningControl
         self.modelCapabilities = modelCapabilities
+        self.measuredMaxThinkingBudget = measuredMaxThinkingBudget
         self.session = session
         self.conversationID = UUID().uuidString
     }
@@ -234,17 +239,31 @@ struct OpenAICompatibleProvider: LLMProvider {
         // An UNKNOWN mechanism keeps the legacy apiType behaviour instead of emitting nothing —
         // silently disabling reasoning on every not-yet-recorded model would be a regression.
         let requestedBudget = overrides.thinkingBudgetTokens ?? configuration.thinkingBudget
+        // A RECORDED mechanism is acted on strictly; the legacy apiType fallback is not. That
+        // distinction is the whole meaning of "nil keeps the legacy behaviour": no Alibaba model
+        // has its capabilities recorded yet, so applying the strict gates to the fallback would
+        // stop sending `thinking_budget` to every one of them.
+        let isLegacyFallback = reasoningControl == nil
         let control = reasoningControl ?? (provider.apiType == .alibabaCloud ? .enableThinkingFlag : nil)
         switch control {
         case .enableThinkingFlag:
-            if let budget = requestedBudget, budget > 0 {
+            // The per-call override WINS over the configured budget — that is what a per-call
+            // override is for, and previously `reasoningEnabled: false` could not turn off a model
+            // whose configuration carried a positive budget.
+            let wantsReasoning = overrides.reasoningEnabled ?? ((requestedBudget ?? 0) > 0)
+            if wantsReasoning {
                 body["enable_thinking"] = true
-                if modelCapabilities.state(of: .thinkingBudgetTokens) != false {
-                    body["thinking_budget"] = ThinkingBudget.effective(budget)
+                if let budget = requestedBudget, budget > 0,
+                   isLegacyFallback || modelCapabilities.state(of: .thinkingBudgetTokens) == true {
+                    body["thinking_budget"] = ThinkingBudget.effective(
+                        budget, measuredMaximum: measuredMaxThinkingBudget)
                 }
-            } else if overrides.reasoningEnabled == false,
-                      modelCapabilities.state(of: .reasoningDisableable) == true {
-                body["enable_thinking"] = false
+            } else if overrides.reasoningEnabled == false {
+                // Only an EXPLICIT off is stated; an absent budget is silence, not a request to
+                // disable. Gated, because a model that cannot be switched off rejects the field.
+                if modelCapabilities.state(of: .reasoningDisableable) == true {
+                    body["enable_thinking"] = false
+                }
             }
         case .thinkingBlock:
             // `{"type": "enabled"|"disabled"}`, optionally with `keep`.
@@ -260,7 +279,8 @@ struct OpenAICompatibleProvider: LLMProvider {
             }
             if let budget = requestedBudget, budget > 0,
                modelCapabilities.state(of: .thinkingBudgetTokens) == true {
-                thinking["budget_tokens"] = ThinkingBudget.effective(budget)
+                thinking["budget_tokens"] = ThinkingBudget.effective(
+                    budget, measuredMaximum: measuredMaxThinkingBudget)
             }
             if !thinking.isEmpty { body["thinking"] = thinking }
         case .unsupported, .reasoningEffortOnly, .anthropicThinking, .geminiThinkingConfig, nil:
@@ -322,7 +342,12 @@ struct OpenAICompatibleProvider: LLMProvider {
             // applies. Format depends on case: enum string for auto/required/
             // none, or `{"type": "function", "function": {"name": "..."}}`
             // for a specific tool.
-            if let toolChoice {
+            // Gated per OPTION, not per parameter: "accepts tool_choice" does not mean "accepts
+            // every value of it", and a rejected option is an HTTP 400. Fails OPEN on unknown,
+            // unlike the newer knobs — tool_choice predates this gating and silently dropping a
+            // caller's explicit choice would change long-standing behaviour on every model no
+            // source has described.
+            if let toolChoice, modelCapabilities.state(of: Self.capability(for: toolChoice)) != false {
                 body["tool_choice"] = Self.encodeOpenAIToolChoice(toolChoice)
             }
         }
@@ -627,6 +652,18 @@ struct OpenAICompatibleProvider: LLMProvider {
     /// Translates the unified `LLMToolChoice` to OpenAI's `tool_choice` wire
     /// shape. The auto/required/none cases are plain enum strings; the
     /// specific case is a nested function-object.
+    /// Which capability governs one tool_choice option. `.auto` is the endpoint's own default
+    /// whenever tools are present, so it rides the general `toolChoice` capability rather than one
+    /// of its own.
+    static func capability(for choice: LLMToolChoice) -> ModelCapability {
+        switch choice {
+        case .auto: return .toolChoice
+        case .required: return .toolChoiceRequired
+        case .textOnly: return .toolChoiceNone
+        case .specific: return .toolChoiceSpecificFunction
+        }
+    }
+
     private static func encodeOpenAIToolChoice(_ choice: LLMToolChoice) -> Any {
         switch choice {
         case .auto:

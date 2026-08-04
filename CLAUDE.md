@@ -152,8 +152,10 @@ could be forgotten.
 
 ### Probe records are schema-versioned and migrated, never soft-decoded
 
-`ProbeRecord.currentSchemaVersion` is **2** (`effortLevels` → `generalEffortLevels` +
-`reasoningEffortLevels`). The store decodes with `try?` and SKIPS failures silently, so an
+`ProbeRecord.currentSchemaVersion` is **3** (v2 split `effortLevels` into `generalEffortLevels` +
+`reasoningEffortLevels`; v3 added `capabilityFindings` and `maxThinkingBudgetTokens`). There is NO
+runtime migration — the script is the only path, deliberately, so a half-migrated corpus is a loud
+failure rather than a silent partial decode. The store decodes with `try?` and SKIPS failures silently, so an
 unmigrated record does not error — it VANISHES, taking every other finding in it with it. Migrations
 must therefore rewrite **every** record, not just the ones with interesting data.
 `scripts/migrate_effort_split.py` is the pattern: refuses to run while the host app is live, backs

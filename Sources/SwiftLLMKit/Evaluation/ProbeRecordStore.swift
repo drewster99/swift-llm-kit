@@ -347,10 +347,11 @@ extension ModelProfile {
         if let trailing = trailingSystemMessage.flatMap(probed) {
             facts.behaviorFlags.supportsTrailingSystemMessage = trailing
         }
-        if includeAccountScoped {
-            facts.isAccessDenied = probed(isAccessDenied)
-            // Complete-ladder gate: every known level must have an established probed answer
-            // (accepted or rejected) before the set of accepted levels can claim to BE the ladder.
+
+        // MODEL-SCOPED, deliberately outside the account gate below: whether a model accepts
+        // `json_object` or a `strict` tool definition does not depend on whose key asked. These
+        // were briefly nested inside it, which silently discarded every one of them from
+        // downloaded records — those are projected with the gate false on purpose.
         // Every probed capability projects by one rule, so a new one needs no code here.
         for (raw, finding) in capabilityFindings {
             guard finding.status == .established, finding.source == .probed,
@@ -360,6 +361,10 @@ extension ModelProfile {
         if let budget = maxThinkingBudgetTokens, budget.status == .established, budget.source == .probed {
             facts.maxThinkingBudgetTokens = budget.value
         }
+        if includeAccountScoped {
+            facts.isAccessDenied = probed(isAccessDenied)
+            // Complete-ladder gate: every known level must have an established probed answer
+            // (accepted or rejected) before the set of accepted levels can claim to BE the ladder.
             facts.generalEffort = Self.projectedEffort(from: generalEffortLevels)
             facts.reasoningEffort = Self.projectedEffort(from: reasoningEffortLevels)
         }

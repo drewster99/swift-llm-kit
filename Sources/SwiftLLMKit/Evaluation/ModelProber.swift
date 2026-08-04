@@ -1063,6 +1063,11 @@ public enum ModelProber {
     }
 
 
+    /// Asks for a shape whose correct answer is unambiguous, so a model answering in prose fails
+    /// on the parse rather than on the content.
+    private static let structuredOutputPrompt =
+        "Reply with a JSON object having exactly one key \"ok\" set to true."
+
     // MARK: - Structured output
 
     /// Whether the model actually HONORS a structured-output request.
@@ -1078,26 +1083,32 @@ public enum ModelProber {
     /// in prose fails on the parse rather than on the content.
     public static func probeStructuredOutput(
         _ mode: LLMResponseFormat,
-        llm: any LLMProvider,
-        modelID: String,
+        makeProviderForcing: @Sendable ([String: AnyCodable]) async -> any LLMProvider,
         calls: ProbeCallCounter? = nil
     ) async -> ProbeFinding<Bool> {
         let started = Date()
         calls?.increment()
         do {
-            let response = try await llm.send(
-                messages: [.user("Reply with a JSON object having exactly one key \"ok\" set to true.")],
-                tools: [],
-                overrides: LLMCallOverrides(responseFormat: mode))
+            // FORCED, not sent through `LLMCallOverrides`: production emission is gated on the very
+            // capability this is establishing, so on an unknown it would send no `response_format`
+            // at all — and then grade a model that merely followed the prompt's wording as
+            // supporting it. Every probe in this file forces for the same reason.
+            let response = try await makeProviderForcing(["response_format": mode.forcedWireValue])
+                .send(messages: [.user(Self.structuredOutputPrompt)], tools: [])
             let text = response.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard let data = text.data(using: .utf8),
-                  let object = try? JSONSerialization.jsonObject(with: data),
-                  object is [String: Any] else {
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 // A 200 whose body is not a JSON object means the field was accepted and ignored.
                 return .established(false, "returned non-JSON despite response_format: \(text.prefix(120))",
                                     duration: Date().timeIntervalSince(started))
             }
-            return .established(true, "returned a JSON object as requested",
+            // The ASKED-FOR shape, not merely "some JSON": a model returning unrelated JSON has not
+            // demonstrated it is being held to anything.
+            guard object["ok"] as? Bool == true else {
+                return .established(false, "returned JSON but not the requested shape: \(text.prefix(120))",
+                                    duration: Date().timeIntervalSince(started))
+            }
+            return .established(true, "returned exactly the requested JSON object",
                                 duration: Date().timeIntervalSince(started))
         } catch {
             let detail = CapabilityProbe.rejectionDetail(error)
@@ -1145,7 +1156,7 @@ public enum ModelProber {
 
     // MARK: - Thinking budget range
 
-    /// The largest reasoning token budget the endpoint accepts, and the smallest.
+    /// The largest reasoning token budget the endpoint accepts.
     ///
     /// Replaces the hardcoded 1024 floor (see ``ThinkingBudget``) with a measured per-model fact.
     ///
@@ -1160,16 +1171,19 @@ public enum ModelProber {
     /// ``probeMaxOutputTokens(llm:modelID:calls:maxContextTokens:allowBinarySearch:)`` follows. One
     /// accepting call bounds nothing from above, and "at least this" was never useful.
     ///
-    /// The Anthropic `max_tokens > budget` constraint needs no handling here: the provider's own
-    /// clamp raises `max_tokens` above whatever budget is configured, so each attempt is
-    /// automatically well-formed and a refusal is about the BUDGET rather than the pairing.
+    /// **The caller's factory must pair `max_tokens` with each budget.** Anthropic requires
+    /// `max_tokens > budget_tokens`, and the provider's clamp only fires when a per-call max-output
+    /// override is present — which this probe does not supply. Without pairing, the first attempt
+    /// at the full allowance violates the constraint and the search converges on the PAIRING
+    /// boundary, recording it as the model's intrinsic budget ceiling. `pairedMaxOutputTokens`
+    /// below is passed to the factory so the caller can honour this.
     public static func probeThinkingBudgetRange(
         llm: any LLMProvider,
         modelID: String,
         accounting: ThinkingBudgetAccounting?,
         maxOutputTokens: Int?,
         maxContextTokens: Int?,
-        makeProviderWithBudget: @Sendable (Int) async -> any LLMProvider,
+        makeProviderWithBudget: @Sendable (_ budget: Int, _ pairedMaxOutputTokens: Int) async -> any LLMProvider,
         calls: ProbeCallCounter? = nil
     ) async -> ProbeFinding<Int> {
         let started = Date()
@@ -1179,7 +1193,8 @@ public enum ModelProber {
         func accepts(_ budget: Int) async -> Bool? {
             calls?.increment()
             do {
-                _ = try await makeProviderWithBudget(budget)
+                // Always above the budget, so a refusal is about the BUDGET, not the pairing.
+                _ = try await makeProviderWithBudget(budget, budget + ThinkingBudget.minimumTokens)
                     .send(messages: [.user("Reply with the single word: ok")], tools: [])
                 return true
             } catch {

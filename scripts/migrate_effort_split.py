@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Migrate probe records from the single `effortLevels` dict to the two-construct split.
+"""Migrate probe records to the current ProbeRecord schema (v3).
 
 Background
 ----------
@@ -120,11 +120,12 @@ def migrate_directory(directory: Path, stamp: str, dry_run: bool) -> tuple[int, 
         except json.JSONDecodeError:
             print(f"  !! unreadable, left alone: {f.name}")
             continue
-        if migrate_record(record) and not dry_run:
-            f.write_text(json.dumps(record, indent=2))
+        # Called ONCE: it mutates in place, so a second call sees an already-migrated record and
+        # returns False — which made every dry run report zero changes.
+        if migrate_record(record):
             changed += 1
-        elif migrate_record(record):
-            changed += 1
+            if not dry_run:
+                f.write_text(json.dumps(record, indent=2))
     return len(files), changed
 
 
@@ -173,8 +174,19 @@ def main() -> int:
         total, changed = migrate_directory(args.probes_dir, stamp, args.dry_run)
         print(f"  {changed} of {total} records migrated")
         if not args.dry_run:
-            verify_directory(args.probes_dir, total)
-            print("  verified: no record retains the old key, count unchanged")
+            # Restore on failure rather than leaving a half-migrated directory: the store SKIPS
+            # records it cannot decode, so a partial migration silently deletes findings.
+            try:
+                verify_directory(args.probes_dir, total)
+            except AssertionError as failure:
+                backup_dir = args.probes_dir.with_name(f"{args.probes_dir.name}.bak-effort-split-{stamp}")
+                print(f"  VERIFICATION FAILED: {failure}")
+                if backup_dir.is_dir():
+                    shutil.rmtree(args.probes_dir)
+                    shutil.copytree(backup_dir, args.probes_dir)
+                    print(f"  restored from {backup_dir.name}")
+                return 1
+            print("  verified: every record is at the current schema, count unchanged")
 
     return 0
 

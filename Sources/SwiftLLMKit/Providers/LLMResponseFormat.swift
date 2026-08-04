@@ -42,6 +42,24 @@ public enum LLMResponseFormat: Sendable, Equatable {
         }
     }
 
+    /// The wire value as an `AnyCodable` tree, for probes that must FORCE the field past the
+    /// production gate (which is keyed on the capability the probe is establishing).
+    public var forcedWireValue: AnyCodable {
+        switch self {
+        case .jsonObject:
+            return .dictionary(["type": .string("json_object")])
+        case .jsonSchema(let name, let schema, let strict):
+            return .dictionary([
+                "type": .string("json_schema"),
+                "json_schema": .dictionary([
+                    "name": .string(name),
+                    "strict": .bool(strict),
+                    "schema": .dictionary(schema)
+                ])
+            ])
+        }
+    }
+
     /// The capability that must be known-true before this may be sent.
     ///
     /// Sending an unsupported `response_format` is an HTTP 400, so emission fails CLOSED — the same
