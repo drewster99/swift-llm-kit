@@ -89,9 +89,17 @@ it keyed on `!isEmpty`. `init(levels:)` normalizes `[]` to `.unsupported` so the
 unconstructable. `.supportedLevelsUnknown` is not a placeholder — it is OpenAI's normal state, since
 OpenAI publishes no ladder at all.
 
-**Emission is asymmetric on purpose.** General effort fails OPEN (sent unless the model is KNOWN not
-to take it — a clear API error beats a silently dropped knob). Reasoning effort fails CLOSED (sent
-only when known-supported, because a non-reasoning model 400s). Both read per-model catalog data
+**Emission is asymmetric on purpose, and the direction is per-knob.** General effort fails OPEN (sent
+unless the model is KNOWN not to take it — a clear API error beats a silently dropped knob).
+Reasoning effort, structured output and `strict` fail CLOSED (sent only when known-supported,
+because each is an HTTP 400 otherwise). `tool_choice` fails OPEN despite being gated per option: it
+predates this gating, and silently dropping a caller's explicit choice on every model no source has
+described would be a behaviour change, not a safety measure.
+
+**A RECORDED mechanism is gated strictly; the legacy `apiType` fallback is not.** That distinction is
+the whole meaning of "nil keeps the legacy behaviour" — no Alibaba model has its capabilities
+recorded, so applying the strict gates to the fallback would stop sending `thinking_budget` to every
+one of them. Both read per-model catalog data
 injected at provider construction, the same path `behaviorFlags` travels — never an `apiType` branch.
 
 `BehaviorFlags.supportsReasoningEffort` is RETIRED; its 18 bundled entries migrated to
@@ -141,8 +149,18 @@ even `strict` inside `tools` is reachable by supplying a full replacement array.
 
 **Acceptance is not always the right grade.** `probeParameterAcceptance` discards the response body,
 so for `response_format` it would record every endpoint that IGNORES the field as supporting it —
-`probeStructuredOutput` parses the response instead. `tool_choice` stays acceptance-graded on
-purpose: grading "did it really force a call" produces false negatives on well-behaved models.
+`probeStructuredOutput` parses the response and checks the ASKED-FOR shape, not merely that some
+JSON came back. `tool_choice` stays acceptance-graded on purpose: grading "did it really force a
+call" produces false negatives on well-behaved models.
+
+**A probe must never ask through the knob it is establishing.** `probeStructuredOutput` originally
+went through `LLMCallOverrides.responseFormat`, whose emission is gated on the very capability being
+probed — so on an unknown it sent no `response_format` at all and then graded a model that merely
+followed the prompt's wording. Force the raw field; the production gate is for production.
+
+**Pair the parameters a probe's target constrains.** Anthropic requires `max_tokens > budget_tokens`,
+so `probeThinkingBudgetRange` hands its factory a paired max. Without it the search converges on the
+PAIRING boundary and records that as the model's intrinsic ceiling.
 
 **A probe that measures a flag-gated parameter must say so.** `probeEffortLevel` sends the config's
 general effort, which a gated endpoint silently drops — turning "no error" into a false positive.
