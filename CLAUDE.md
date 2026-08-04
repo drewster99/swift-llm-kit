@@ -168,6 +168,50 @@ general effort, which a gated endpoint silently drops — turning "no error" int
 `supportsUnconditionalGeneralEffortEmission`. That guard used to live in the single caller, where it
 could be forgotten.
 
+### One source per wire shape, and per gate rule
+
+Both of these were duplicated, both drifted-in-waiting, and both cost a real bug before they were
+consolidated. The rule now: **the shape and the gate live on the type, and every caller derives.**
+
+- **`LLMToolChoice`** owns `openAIWireValue`, `anthropicWireValue`, `requiredCapability`, and
+  `wireValue(for apiType:)`. There were THREE hand-written encoders (OpenAI-compatible, an
+  Ollama copy whose own comment admitted it mirrored the first, and a third in Agent Smith's eval
+  runner). `wireValue(for:)` returns `nil` where the field does not exist — Gemini has no
+  `tool_choice` — so a probe skips instead of spending a call.
+- **`LLMResponseFormat`** owns `wireValue`; `openAIWireValue` and `forcedWireValue` derive from it.
+- **`ModelCapabilities.permitsToolChoice(_:)`** is the ONE gate rule, called by all three providers
+  AND by `CapabilityProbe`. Two facts ride in it: `.toolChoice` is "the endpoint accepts the
+  PARAMETER" (what the decoders actually write), so it is a PRECONDITION over every option, and the
+  per-option capability is that option's own veto.
+- **`ThinkingBudget.pairing`** is the one `(max_tokens, budget_tokens)` rule, shared by
+  `AnthropicProvider` and `prepareRequest`.
+
+**Why this is not tidiness.** A probe that forces a different shape than production emits measures
+something that never ships, and the finding EXPORTS as data the emission gates then act on — so a
+drifted encoder ships a wrong capability table, which then suppresses a working field or sends a
+400-producing one. Concretely: forcing OpenAI's bare `"required"` at Anthropic (which needs
+`{"type": "any"}`) is rejected for the SHAPE, the rejection names `tool_choice`, and it records
+"this model cannot force a tool call" — flatly wrong for Claude. Likewise `CapabilityProbe` must not
+claim it FORCED a call through a field the provider suppressed, which is why it shares the gate
+rather than re-deriving it.
+
+**Switch exhaustiveness does not protect any of this.** It covers CASES, not wire strings, key names
+or nesting. The worst instance was a capability mapping written as an ARRAY literal in the eval
+runner: adding an `LLMToolChoice` case breaks every switch loudly and leaves that array silently one
+probe short.
+
+### `ThinkingBudgetAccounting`: whose allowance the thinking tokens come from
+
+Not derivable from ``ReasoningControl`` — that says which KEYS to send, this says whose budget is
+spent. Anthropic draws from `max_tokens` and enforces `max_tokens > budget_tokens`; the others use
+separate keys whose accounting is UNVERIFIED, which is why it is probed and overridable rather than
+tabulated per provider. Getting it wrong does not error: it silently truncates, because a budget
+equal to the output cap leaves nothing for the answer.
+
+Two consumers: it bounds `probeThinkingBudgetRange`'s search ceiling, and it decides whether
+`OpenAICompatibleProvider`'s `thinkingBlock` branch pairs the emitted budget against `max_tokens`.
+Until the second existed, the type documented a truncation nothing anywhere prevented.
+
 ### Probe records are schema-versioned and migrated, never soft-decoded
 
 `ProbeRecord.currentSchemaVersion` is **3** (v2 split `effortLevels` into `generalEffortLevels` +
