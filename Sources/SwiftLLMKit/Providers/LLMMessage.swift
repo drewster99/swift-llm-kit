@@ -314,6 +314,21 @@ public struct LLMMessage: Codable, Sendable, Equatable {
         LLMMessage(_role: .assistant, _content: .text(text), _reasoning: reasoning)
     }
 
+    /// A PARTIAL assistant turn for the model to continue — an "assistant prefill".
+    ///
+    /// Not deprecated, and not a duplicate of ``assistant(text:reasoning:)``: those factories are
+    /// discouraged because using them to RECORD a real response silently drops reasoning and
+    /// provider continuation data. A prefill is the opposite direction — text the caller authors as
+    /// INPUT, which never had a response to preserve. Constructing one is the intended use, so it
+    /// should not have to be done through a door marked "tests only".
+    ///
+    /// Support is per-model and not universal: many endpoints reject a conversation that does not
+    /// end in a user turn, and some accept it and ignore it. See
+    /// ``ModelCapability/assistantPrefill``, which `ModelProber` measures.
+    public static func assistantPrefill(_ text: String) -> LLMMessage {
+        LLMMessage(_role: .assistant, _content: .text(text), _reasoning: nil)
+    }
+
     /// Synthetic assistant message with tool calls (and optional text +
     /// reasoning) — for tests and saved-conversation reload.
     ///

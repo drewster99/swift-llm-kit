@@ -1532,7 +1532,7 @@ public enum ModelProber {
                 messages: [
                     .user("List exactly the first five letters of the alphabet, uppercase, "
                         + "separated by ', '. Reply with only the list."),
-                    .assistant(text: "A, B, C,")
+                    .assistantPrefill("A, B, C,")
                 ], tools: [])
             // A nil body (a tool call, an empty completion) continued nothing, so it falls to
             // the neither-continued-nor-restated branch rather than being read as a refusal.
@@ -1728,21 +1728,67 @@ public enum ModelProber {
 
         // Only meaningful when reasoning was OBSERVABLE with the switch on: otherwise its absence
         // with the switch off says nothing about the switch.
-        let canBeDisabled: ProbeFinding<Bool>
-        if on.reasoningEmitted == true, off.reasoningEmitted == true {
-            let seen = off.reasoningTokens > 0 ? "\(off.reasoningTokens) thinking tokens" : "reasoning content"
-            canBeDisabled = .established(false, "reasoning continued with thinking.type=disabled "
-                                              + "(\(seen)) — the endpoint accepted the switch and "
-                                              + "then ignored it")
-        } else if on.reasoningEmitted == true, off.reasoningEmitted == false,
-                  off.finding.status == .established, off.finding.value == true {
-            canBeDisabled = .established(true, "reasoning stopped with thinking.type=disabled, "
-                                             + "having been present with it enabled")
-        } else {
-            canBeDisabled = off.finding
+        guard on.reasoningEmitted == true,
+              off.finding.status == .established, off.finding.value == true else {
+            return ReasoningConclusions(reasons: reasons, canBeDisabled: off.finding)
         }
-        return ReasoningConclusions(reasons: reasons, canBeDisabled: canBeDisabled)
+        return ReasoningConclusions(reasons: reasons,
+                                    canBeDisabled: disabledVerdict(on: on, off: off))
     }
+
+    /// Did the OFF switch actually stop the thinking, given that it was on before?
+    ///
+    /// **Not a test against zero.** kimi-k2.6 answers the trivial probe prompt with 32 thinking
+    /// tokens enabled and 1 disabled: the switch plainly worked, and a `tokens > 0` test called that
+    /// "accepted and ignored" and recorded `canBeDisabled = false` — trading the false positive this
+    /// was written to catch for a false negative on real data. A residual token is not thinking.
+    ///
+    /// So the comparison is against the model's OWN baseline, in three bands with a deliberate
+    /// can't-tell gap in the middle. The two ends are the cases where the evidence is unambiguous;
+    /// a switch that merely reduced thinking somewhat is a genuinely open question, and answering
+    /// it either way would be inventing a fact. Establishing `false` there would be the worse
+    /// error — it is the answer production acts on.
+    private static func disabledVerdict(on: ReasoningToggleObservation,
+                                        off: ReasoningToggleObservation) -> ProbeFinding<Bool> {
+        // Anthropic folds thinking into `outputTokens` and reports `reasoningTokens` as 0, so there
+        // is no baseline to take a ratio against. There the signal is binary: thinking text came
+        // back or it did not.
+        guard on.reasoningTokens > 0 else {
+            return off.reasoningEmitted == true
+                ? .established(false, "reasoning content still came back with thinking.type=disabled "
+                                    + "— the endpoint accepted the switch and then ignored it")
+                : .established(true, "reasoning content stopped with thinking.type=disabled, having "
+                                   + "been present with it enabled")
+        }
+        // A reply that returned thinking TEXT is reasoning whatever the token accounting says, so
+        // it cannot be ratio'd away: zero billed tokens alongside visible thinking is the endpoint
+        // ignoring the switch, not the thinking collapsing.
+        if off.reasoningEmitted == true, off.reasoningTokens == 0 {
+            return .established(false, "thinking content still came back with thinking.type=disabled "
+                                     + "even though no thinking tokens were billed — the switch was "
+                                     + "accepted and then ignored")
+        }
+        let ratio = Double(off.reasoningTokens) / Double(on.reasoningTokens)
+        let counts = "\(off.reasoningTokens) thinking tokens with it disabled vs "
+                   + "\(on.reasoningTokens) with it enabled"
+        if ratio >= comparableThinkingRatio {
+            return .established(false, "reasoning continued essentially unchanged — \(counts) — so "
+                                     + "the endpoint accepted the switch and then ignored it")
+        }
+        if ratio <= collapsedThinkingRatio {
+            return .established(true, "thinking collapsed when disabled — \(counts)")
+        }
+        return .inconclusive("thinking was reduced but not stopped — \(counts) — which a working "
+                           + "switch and a partly-honoured one produce alike")
+    }
+
+    /// At or above this share of the enabled-baseline, the switch changed nothing worth calling a
+    /// change. Deliberately high: `false` here is the verdict production acts on.
+    private static let comparableThinkingRatio = 0.5
+    /// At or below this share, the thinking stopped. Deliberately low, and NOT zero — providers
+    /// report residual counts (kimi-k2.6: 1 token against a 32-token baseline) for a reply that
+    /// plainly did not think.
+    private static let collapsedThinkingRatio = 0.1
 
     /// Whether `thinking.keep: "all"` is accepted — retaining reasoning content across turns.
     /// Returns `nil` unless the model's mechanism actually HAS a `keep` key.

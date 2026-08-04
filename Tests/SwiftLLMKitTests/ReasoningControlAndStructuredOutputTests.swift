@@ -814,7 +814,55 @@ struct ReasoningConclusionTests {
             on: observation(accepted: true, emitted: true, tokens: 500),
             off: observation(accepted: true, emitted: false))
         #expect(c.canBeDisabled.value == true)
-        #expect(c.canBeDisabled.evidence?.contains("stopped") == true)
+    }
+
+    /// REAL DATA, and the case a test against zero got wrong. kimi-k2.6 answers the trivial probe
+    /// prompt with 32 thinking tokens enabled and 1 disabled — the switch plainly worked, but
+    /// `tokens > 0` read that residual token as "still thinking" and recorded canBeDisabled=false.
+    @Test("A residual token against a real baseline is a working switch, not an ignored one")
+    func residualTokenIsNotStillThinking() {
+        let c = ModelProber.concludeReasoning(
+            on: observation(accepted: true, emitted: true, tokens: 32),
+            off: observation(accepted: true, emitted: true, tokens: 1))   // kimi-k2.6, 2026-08-03
+        #expect(c.canBeDisabled.value == true, "1 of 32 tokens is a switch that worked")
+        #expect(c.canBeDisabled.evidence?.contains("collapsed") == true)
+    }
+
+    /// Between the bands the evidence genuinely does not say, and answering either way invents a
+    /// fact. `false` in particular is the verdict production acts on, so it is not guessed at.
+    @Test("A switch that only reduced the thinking is inconclusive, not a verdict")
+    func partialReductionIsInconclusive() {
+        let c = ModelProber.concludeReasoning(
+            on: observation(accepted: true, emitted: true, tokens: 100),
+            off: observation(accepted: true, emitted: true, tokens: 30))
+        #expect(c.canBeDisabled.status == .inconclusive)
+        #expect(c.canBeDisabled.evidence?.contains("reduced but not stopped") == true)
+    }
+
+    /// Anthropic reports `reasoningTokens` as 0 by design (thinking is folded into outputTokens),
+    /// so there is no baseline to ratio against and the signal is binary.
+    @Test("With no token baseline the thinking TEXT decides it, both ways")
+    func textOnlyProvidersAreGradedBinary() {
+        let stillThinking = ModelProber.concludeReasoning(
+            on: observation(accepted: true, emitted: true, tokens: 0),
+            off: observation(accepted: true, emitted: true, tokens: 0))
+        #expect(stillThinking.canBeDisabled.value == false)
+
+        let stopped = ModelProber.concludeReasoning(
+            on: observation(accepted: true, emitted: true, tokens: 0),
+            off: observation(accepted: true, emitted: false, tokens: 0))
+        #expect(stopped.canBeDisabled.value == true)
+    }
+
+    /// Visible thinking with nothing billed is the endpoint ignoring the switch, not the thinking
+    /// collapsing — a ratio of 0/baseline would otherwise read it as a clean success.
+    @Test("Thinking text with zero billed tokens is not ratio'd away")
+    func textWithoutTokensIsNotACollapse() {
+        let c = ModelProber.concludeReasoning(
+            on: observation(accepted: true, emitted: true, tokens: 200),
+            off: observation(accepted: true, emitted: true, tokens: 0))
+        #expect(c.canBeDisabled.value == false)
+        #expect(c.canBeDisabled.evidence?.contains("no thinking tokens were billed") == true)
     }
 
     /// With no reasoning visible when ON there is no baseline, so its absence when OFF says nothing
