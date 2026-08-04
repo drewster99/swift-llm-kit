@@ -1076,6 +1076,14 @@ public enum ModelProber {
     /// distinguish "the endpoint held the model to `response_format`" from "the model followed
     /// instructions", and an endpoint that IGNORES the field passes it. Here, obeying the words
     /// produces prose; obeying the format produces JSON. Only the latter is evidence.
+    ///
+    /// The word "json" MUST appear, though, and that is not a hedge: `json_object` mode rejects a
+    /// prompt without it ("Prompt must contain the word 'json' in some form"), which is OpenAI's
+    /// documented rule and DeepSeek enforces. Omitting it to keep the prompt purely prose made the
+    /// endpoint refuse on the PRECONDITION, and because that message names `json_object` a
+    /// rejection keyword matched and DeepSeek was recorded as not supporting a mode it documents.
+    /// So the word appears as an aside about the transport, never as an instruction about the
+    /// answer's shape.
 
     // MARK: - Structured output
 
@@ -1108,7 +1116,9 @@ public enum ModelProber {
             // at all — and then grade a model that merely followed the prompt's wording as
             // supporting it. Every probe in this file forces for the same reason.
             let response = try await makeProviderForcing(["response_format": mode.forcedWireValue])
-                .send(messages: [.user("Answer in one short English sentence: what colour is the sky?")],
+                .send(messages: [.user(
+                          "Answer in one short English sentence: what colour is the sky? "
+                          + "(This request is sent in json mode; answer the question regardless.)")],
                       tools: [])
             let text = response.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard let data = text.data(using: .utf8),
@@ -1125,6 +1135,12 @@ public enum ModelProber {
         } catch {
             let detail = CapabilityProbe.rejectionDetail(error)
             let lowered = detail.lowercased()
+            // A complaint about the PROMPT is about this probe, not the model. Recording it as a
+            // denial is how DeepSeek was marked as lacking a mode it documents.
+            if lowered.contains("must contain the word") {
+                return .inconclusive("the probe's prompt failed the mode's precondition: \(detail)",
+                                     duration: Date().timeIntervalSince(started))
+            }
             if !CapabilityProbe.classifyFailure(error).meansNoAnswer,
                lowered.contains("response_format") || lowered.contains("json_schema")
                 || lowered.contains("json_object") || lowered.contains("schema") {
@@ -1150,9 +1166,19 @@ public enum ModelProber {
     /// `"required"` at Anthropic — which requires `{"type": "any"}` — is rejected for the shape,
     /// the rejection names `tool_choice`, and it would be recorded as "this model cannot force a
     /// tool call". Flatly wrong for Claude, and it exports as shipped data.
+    /// - Parameter disableThinkingFirst: force `thinking: {type: disabled}` alongside the choice.
+    ///   Pass this whenever the model is KNOWN to allow it. Both Moonshot and DeepSeek reject
+    ///   `required` and named-function choices "incompatible with thinking enabled", so a probe run
+    ///   with thinking on measures that incompatibility rather than the option — every model was
+    ///   recorded as unable to force a tool call, which then makes the emission gate suppress a
+    ///   choice those models accept perfectly well with thinking off.
+    ///
+    ///   When thinking CANNOT be disabled, a remaining refusal is a true and useful `false`: the
+    ///   option is unusable on that model in every configuration it has.
     public static func probeToolChoice(
         _ choice: LLMToolChoice,
         apiType: ProviderAPIType,
+        disableThinkingFirst: Bool = false,
         makeProviderForcing: @Sendable ([String: AnyCodable]) async -> any LLMProvider,
         calls: ProbeCallCounter? = nil
     ) async -> ProbeFinding<Bool>? {
@@ -1162,15 +1188,31 @@ public enum ModelProber {
         do {
             // FORCED: production emission is gated per option, so re-probing an option already
             // recorded false would send nothing and grade the ordinary success as support.
-            _ = try await makeProviderForcing(["tool_choice": forcedWireValue])
+            var forced: [String: AnyCodable] = ["tool_choice": forcedWireValue]
+            if disableThinkingFirst {
+                forced["thinking"] = .dictionary(["type": .string("disabled")])
+            }
+            _ = try await makeProviderForcing(forced)
                 .send(messages: [.user("Reply with the single word: ok")],
                       tools: [CapabilityProbe.makeProbeTool()])
             return .established(true, "accepted tool_choice", duration: Date().timeIntervalSince(started))
         } catch {
             let detail = CapabilityProbe.rejectionDetail(error)
+            let lowered = detail.lowercased()
+            // A refusal that blames ANOTHER mode is not an answer about this option. If thinking
+            // could not be turned off first, the option really is unusable on this model and the
+            // `false` stands; otherwise the measurement is confounded and establishes nothing.
+            let blamesAnotherMode = lowered.contains("incompatible with") || lowered.contains("thinking mode")
+            if blamesAnotherMode && !disableThinkingFirst {
+                return .inconclusive(
+                    "refused for a reason other than the option itself, and thinking was not disabled first: \(detail)",
+                    duration: Date().timeIntervalSince(started))
+            }
             if !CapabilityProbe.classifyFailure(error).meansNoAnswer,
-               detail.lowercased().contains("tool_choice") || detail.lowercased().contains("tool choice") {
-                return .established(false, detail, duration: Date().timeIntervalSince(started))
+               lowered.contains("tool_choice") || lowered.contains("tool choice") {
+                let note = blamesAnotherMode
+                    ? " (still refused with thinking disabled, so the option is unusable on this model)" : ""
+                return .established(false, detail + note, duration: Date().timeIntervalSince(started))
             }
             return .inconclusive(detail, duration: Date().timeIntervalSince(started))
         }
