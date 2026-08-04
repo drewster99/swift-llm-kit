@@ -47,7 +47,8 @@ ANTHROPIC_PROVIDER_IDS = {"builtin.anthropic"}
 OLD_KEY = "effortLevels"
 GENERAL_KEY = "generalEffortLevels"
 REASONING_KEY = "reasoningEffortLevels"
-NEW_SCHEMA_VERSION = 2
+NEW_SCHEMA_VERSION = 3
+CAPABILITY_FINDINGS_KEY = "capabilityFindings"
 
 
 def target_key(provider_id: str) -> str:
@@ -61,16 +62,30 @@ def target_key(provider_id: str) -> str:
 
 
 def migrate_profile(profile: dict, provider_id: str) -> bool:
-    """Returns True if the profile was changed."""
-    if OLD_KEY not in profile:
-        return False
-    ladder = profile.pop(OLD_KEY)
-    key = target_key(provider_id)
-    # Both keys must exist afterwards: they are non-optional on the Swift side, so a missing one
-    # fails the decode exactly as the old key's absence would.
-    profile[GENERAL_KEY] = ladder if key == GENERAL_KEY else {}
-    profile[REASONING_KEY] = ladder if key == REASONING_KEY else {}
-    return True
+    """Brings one profile up to the current schema. Returns True if anything changed.
+
+    Idempotent and step-wise, so a corpus at mixed versions converges in one pass.
+    """
+    changed = False
+
+    # v1 -> v2: one ladder became two, split by which parameter the prober actually sent.
+    if OLD_KEY in profile:
+        ladder = profile.pop(OLD_KEY)
+        key = target_key(provider_id)
+        # Both keys must exist afterwards: they are non-optional on the Swift side, so a missing
+        # one fails the decode exactly as the old key's absence would.
+        profile[GENERAL_KEY] = ladder if key == GENERAL_KEY else {}
+        profile[REASONING_KEY] = ladder if key == REASONING_KEY else {}
+        changed = True
+
+    # v2 -> v3: capabilityFindings is non-optional, so every record must carry it. Empty is the
+    # honest value — these capabilities have never been probed on any existing record.
+    # (maxThinkingBudgetTokens is optional and needs no backfill.)
+    if CAPABILITY_FINDINGS_KEY not in profile:
+        profile[CAPABILITY_FINDINGS_KEY] = {}
+        changed = True
+
+    return changed
 
 
 def migrate_record(record: dict) -> bool:
@@ -130,7 +145,9 @@ def verify_directory(directory: Path, expected_total: int) -> None:
         record = json.loads(f.read_text())
         profile = record.get("profile", {})
         assert OLD_KEY not in profile, f"{f.name} still carries {OLD_KEY}"
-        assert GENERAL_KEY in profile and REASONING_KEY in profile, f"{f.name} missing a new key"
+        assert GENERAL_KEY in profile and REASONING_KEY in profile, f"{f.name} missing an effort key"
+        assert CAPABILITY_FINDINGS_KEY in profile, f"{f.name} missing {CAPABILITY_FINDINGS_KEY}"
+        assert record.get("schemaVersion") == NEW_SCHEMA_VERSION, f"{f.name} not at v{NEW_SCHEMA_VERSION}"
 
 
 def main() -> int:

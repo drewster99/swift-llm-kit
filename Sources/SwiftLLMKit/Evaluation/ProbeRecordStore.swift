@@ -58,10 +58,13 @@ public struct ProbeRecordKey: Codable, Sendable, Equatable, Hashable {
 /// at the store boundary.)
 public struct ProbeRecord: Codable, Sendable, Equatable {
     /// Bump when the record's serialized shape changes incompatibly.
-    /// v2: `effortLevels` split into `generalEffortLevels` + `reasoningEffortLevels`. The shapes
-    /// are incompatible — the old key is gone and both new ones are required — so records must be
-    /// migrated (scripts/migrate_effort_split.py), not merely re-read.
-    public static let currentSchemaVersion = 2
+    /// v2: `effortLevels` split into `generalEffortLevels` + `reasoningEffortLevels`.
+    /// v3: adds `capabilityFindings` and `maxThinkingBudgetTokens`.
+    ///
+    /// Each bump is incompatible in the same way — a required key is added or removed, and the
+    /// store decodes with `try?` and SKIPS failures, so an unmigrated record does not error, it
+    /// VANISHES with every finding in it. Migrate with scripts/migrate_effort_split.py.
+    public static let currentSchemaVersion = 3
 
     public var schemaVersion: Int
     /// The prober that produced this run — findings from an older prober are suspect once the
@@ -243,6 +246,18 @@ extension ModelProfile {
         }
         // Both effort ladders carry forward by the same rule. Written over a keypath rather than
         // duplicated so a third construct can't be added to one and forgotten in the other.
+        for (raw, finding) in prior.capabilityFindings
+        where finding.status == .established && finding.source == .probed {
+            let current = capabilityFindings[raw]
+            let alreadyProbed = current?.status == .established && current?.source == .probed
+            if !alreadyProbed { capabilityFindings[raw] = finding }
+        }
+        if let priorBudget = prior.maxThinkingBudgetTokens,
+           priorBudget.status == .established, priorBudget.source == .probed {
+            let alreadyProbed = maxThinkingBudgetTokens?.status == .established
+                && maxThinkingBudgetTokens?.source == .probed
+            if !alreadyProbed { maxThinkingBudgetTokens = priorBudget }
+        }
         for ladder in [\ModelProfile.generalEffortLevels, \ModelProfile.reasoningEffortLevels] {
             for (level, finding) in prior[keyPath: ladder]
             where finding.status == .established && finding.source == .probed {
@@ -271,6 +286,8 @@ extension ModelProfile {
             || (trailingSystemMessage.map(probed) ?? false)
             || generalEffortLevels.values.contains { probed($0) }
             || reasoningEffortLevels.values.contains { probed($0) }
+            || capabilityFindings.values.contains { probed($0) }
+            || (maxThinkingBudgetTokens.map(probed) ?? false)
     }
 
     /// The vendor's own /models payload states this is not a chat model (chat decoded false) — a
@@ -334,6 +351,15 @@ extension ModelProfile {
             facts.isAccessDenied = probed(isAccessDenied)
             // Complete-ladder gate: every known level must have an established probed answer
             // (accepted or rejected) before the set of accepted levels can claim to BE the ladder.
+        // Every probed capability projects by one rule, so a new one needs no code here.
+        for (raw, finding) in capabilityFindings {
+            guard finding.status == .established, finding.source == .probed,
+                  let capability = ModelCapability(rawValue: raw), let value = finding.value else { continue }
+            facts.capabilities[capability] = value
+        }
+        if let budget = maxThinkingBudgetTokens, budget.status == .established, budget.source == .probed {
+            facts.maxThinkingBudgetTokens = budget.value
+        }
             facts.generalEffort = Self.projectedEffort(from: generalEffortLevels)
             facts.reasoningEffort = Self.projectedEffort(from: reasoningEffortLevels)
         }
@@ -397,6 +423,8 @@ extension ModelProfile {
             }
         }
         stripLadder(&generalEffortLevels); stripLadder(&reasoningEffortLevels)
+        stripLadder(&capabilityFindings)
+        if var budget = maxThinkingBudgetTokens { strip(&budget); maxThinkingBudgetTokens = budget }
     }
 
     /// Strips ` (ref: <uuid>)` trace-ID suffixes from a provider error-evidence string.

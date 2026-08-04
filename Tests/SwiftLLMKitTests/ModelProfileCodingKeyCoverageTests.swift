@@ -41,6 +41,8 @@ struct ModelProfileCodingKeyCoverageTests {
             trailingSystemMessage: .established(true, "echoed the nonce"),
             generalEffortLevels: ["low": .established(true, "accepted")],
             reasoningEffortLevels: ["high": .established(false, "rejected")],
+            capabilityFindings: [ModelCapability.structuredOutputJSONObject.rawValue: .established(true, "returned JSON")],
+            maxThinkingBudgetTokens: .established(32_000, "largest accepted budget"),
             callCount: 12,
             duration: 34.5
         )
@@ -108,6 +110,7 @@ struct ModelProfileCodingKeyCoverageTests {
           "trailingSystemTurn": {"status": "established", "value": true, "evidence": "echoed the code carried by the trailing system turn", "source": "probed", "duration": 1.73},
           "generalEffortLevels": {},
           "reasoningEffortLevels": {},
+          "capabilityFindings": {},
           "callCount": 1,
           "duration": 1.73
         }

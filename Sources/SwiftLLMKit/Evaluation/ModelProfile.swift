@@ -112,6 +112,19 @@ public struct ModelProfile: Sendable, Codable, Equatable {
     public var generalEffortLevels: [String: ProbeFinding<Bool>]
     /// Per named REASONING effort level (`reasoning_effort`): accepted or rejected.
     public var reasoningEffortLevels: [String: ProbeFinding<Bool>]
+    /// Findings for boolean capabilities, keyed by ``ModelCapability`` raw value.
+    ///
+    /// ONE dictionary rather than a stored property per capability, because every stored property
+    /// here must also be added by hand to the CodingKeys, the prior-result carry-forward, the
+    /// persistence-eligibility check, the empirical projection, and the evidence stripper — five
+    /// places, none of which the compiler checks. A capability added tomorrow needs no change here
+    /// at all.
+    ///
+    /// Keyed by raw value rather than by the enum so a capability RETIRED from the enum leaves its
+    /// records readable instead of failing the decode of everything around it.
+    public var capabilityFindings: [String: ProbeFinding<Bool>]
+    /// The largest accepted reasoning token budget, when measured.
+    public var maxThinkingBudgetTokens: ProbeFinding<Int>?
 
     /// Total wall clock and call count, so the cost of a full run is visible rather than guessed.
     public var callCount: Int
@@ -153,6 +166,8 @@ public struct ModelProfile: Sendable, Codable, Equatable {
         case trailingSystemMessage = "trailingSystemTurn"
         case generalEffortLevels
         case reasoningEffortLevels
+        case capabilityFindings
+        case maxThinkingBudgetTokens
         case callCount
         case duration
     }
@@ -183,6 +198,8 @@ public struct ModelProfile: Sendable, Codable, Equatable {
         trailingSystemMessage: ProbeFinding<Bool>? = nil,
         generalEffortLevels: [String: ProbeFinding<Bool>] = [:],
         reasoningEffortLevels: [String: ProbeFinding<Bool>] = [:],
+        capabilityFindings: [String: ProbeFinding<Bool>] = [:],
+        maxThinkingBudgetTokens: ProbeFinding<Int>? = nil,
         callCount: Int = 0,
         duration: TimeInterval = 0
     ) {
@@ -211,6 +228,8 @@ public struct ModelProfile: Sendable, Codable, Equatable {
         self.trailingSystemMessage = trailingSystemMessage
         self.generalEffortLevels = generalEffortLevels
         self.reasoningEffortLevels = reasoningEffortLevels
+        self.capabilityFindings = capabilityFindings
+        self.maxThinkingBudgetTokens = maxThinkingBudgetTokens
         self.callCount = callCount
         self.duration = duration
     }
@@ -224,6 +243,12 @@ public struct ModelProfile: Sendable, Codable, Equatable {
     /// Reasoning-effort levels with an established `true`. Same rule as the general twin.
     public var establishedReasoningEffortLevels: [String] {
         Self.established(in: reasoningEffortLevels)
+    }
+
+    /// Typed access to ``capabilityFindings`` — call sites never spell a raw value.
+    public subscript(capability: ModelCapability) -> ProbeFinding<Bool>? {
+        get { capabilityFindings[capability.rawValue] }
+        set { capabilityFindings[capability.rawValue] = newValue }
     }
 
     private static func established(in levels: [String: ProbeFinding<Bool>]) -> [String] {

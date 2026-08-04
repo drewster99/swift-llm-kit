@@ -1238,6 +1238,103 @@ public enum ModelProber {
                             duration: Date().timeIntervalSince(started))
     }
 
+
+    // MARK: - Reasoning toggling, keep, strict tools
+
+    /// Whether reasoning can be switched to a given state.
+    ///
+    /// The two directions are probed SEPARATELY and neither implies the other: Kimi documents
+    /// models that can be switched on but never off, and thinking-only models that reject being
+    /// switched off while accepting being switched on.
+    ///
+    /// Forces the raw `thinking` object rather than going through `LLMCallOverrides`, because the
+    /// production path is gated on the very capability this is trying to establish — asking through
+    /// it would send nothing and grade the silence as success.
+    public static func probeReasoningToggle(
+        enabled: Bool,
+        makeProviderForcing: ([String: AnyCodable]) -> any LLMProvider,
+        calls: ProbeCallCounter? = nil
+    ) async -> ProbeFinding<Bool> {
+        await probeForcedField(
+            ["thinking": .dictionary(["type": .string(enabled ? "enabled" : "disabled")])],
+            description: "thinking.type=\(enabled ? "enabled" : "disabled")",
+            rejectionKeywords: ["thinking", "reasoning"],
+            makeProviderForcing: makeProviderForcing, calls: calls)
+    }
+
+    /// Whether `thinking.keep: "all"` is accepted — retaining reasoning content across turns.
+    public static func probeThinkingKeep(
+        makeProviderForcing: ([String: AnyCodable]) -> any LLMProvider,
+        calls: ProbeCallCounter? = nil
+    ) async -> ProbeFinding<Bool> {
+        await probeForcedField(
+            ["thinking": .dictionary(["type": .string("enabled"), "keep": .string("all")])],
+            description: "thinking.keep=all",
+            rejectionKeywords: ["keep", "thinking"],
+            makeProviderForcing: makeProviderForcing, calls: calls)
+    }
+
+    /// Whether `strict: true` is accepted on a function definition.
+    ///
+    /// Replaces the WHOLE `tools` array: `mergeJSONOverrides` deep-merges dictionaries but replaces
+    /// arrays outright, so reaching a key inside one means supplying the array entire. Strict mode
+    /// also constrains the schema itself (no open-ended objects), so the probe tool is declared
+    /// with an explicit closed schema — otherwise a rejection would be about the SCHEMA rather than
+    /// about `strict`, and would be recorded as the wrong fact.
+    public static func probeStrictToolDefinitions(
+        makeProviderForcing: ([String: AnyCodable]) -> any LLMProvider,
+        calls: ProbeCallCounter? = nil
+    ) async -> ProbeFinding<Bool> {
+        let strictTool: AnyCodable = .dictionary([
+            "type": .string("function"),
+            "function": .dictionary([
+                "name": .string(CapabilityProbe.probeToolName),
+                "description": .string("Returns the test identifier string."),
+                "strict": .bool(true),
+                "parameters": .dictionary([
+                    "type": .string("object"),
+                    "properties": .dictionary([:]),
+                    "required": .array([]),
+                    "additionalProperties": .bool(false)
+                ])
+            ])
+        ])
+        return await probeForcedField(
+            ["tools": .array([strictTool])],
+            description: "strict tool definition",
+            rejectionKeywords: ["strict", "schema", "additionalproperties"],
+            makeProviderForcing: makeProviderForcing, calls: calls)
+    }
+
+    /// Sends one request with `overrides` forced into the raw body and grades the endpoint's answer.
+    ///
+    /// Acceptance-graded: these fields change what the model DOES, not what it returns in a
+    /// checkable shape, so there is nothing to parse. A refusal naming the field is the signal; any
+    /// other failure establishes nothing and stays inconclusive rather than becoming a false "no".
+    private static func probeForcedField(
+        _ forced: [String: AnyCodable],
+        description: String,
+        rejectionKeywords: [String],
+        makeProviderForcing: ([String: AnyCodable]) -> any LLMProvider,
+        calls: ProbeCallCounter?
+    ) async -> ProbeFinding<Bool> {
+        let started = Date()
+        calls?.increment()
+        do {
+            _ = try await makeProviderForcing(forced)
+                .send(messages: [.user("Reply with the single word: ok")], tools: [])
+            return .established(true, "accepted \(description)", duration: Date().timeIntervalSince(started))
+        } catch {
+            let detail = CapabilityProbe.rejectionDetail(error)
+            let lowered = detail.lowercased()
+            if !CapabilityProbe.classifyFailure(error).meansNoAnswer,
+               rejectionKeywords.contains(where: { lowered.contains($0) }) {
+                return .established(false, detail, duration: Date().timeIntervalSince(started))
+            }
+            return .inconclusive(detail, duration: Date().timeIntervalSince(started))
+        }
+    }
+
     // MARK: - Error → finding
 
     /// Maps a thrown error to a Bool finding for capabilities where a refusal that NAMES the
