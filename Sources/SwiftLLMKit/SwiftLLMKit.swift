@@ -1351,6 +1351,7 @@ public final class LLMKitManager {
         let reasoningEffortSupport = catalogModel?.reasoningEffort
         let reasoningControl = catalogModel?.reasoningControl
         let modelCapabilities = catalogModel?.capabilities ?? ModelCapabilities()
+        let measuredMaxThinkingBudget = catalogModel?.maxThinkingBudgetTokens
 
         let providerID = modelProvider.id
         let providerName = modelProvider.name
@@ -1371,7 +1372,8 @@ public final class LLMKitManager {
                 readAPIKey: readAPIKey, verboseLogging: verbose,
                 session: session,
                 behaviorFlags: flags,
-                generalEffortSupport: generalEffortSupport
+                generalEffortSupport: generalEffortSupport,
+                measuredMaxThinkingBudget: measuredMaxThinkingBudget
             )
         case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaModel, .alibabaCloud, .openRouter:
             // `parallel_tool_calls: true` is sent by default for every OpenAI-compatible
@@ -1388,6 +1390,7 @@ public final class LLMKitManager {
                 reasoningEffortSupport: reasoningEffortSupport,
                 reasoningControl: reasoningControl,
                 modelCapabilities: modelCapabilities,
+                measuredMaxThinkingBudget: measuredMaxThinkingBudget,
                 session: session
             )
         case .ollama:
@@ -1417,6 +1420,7 @@ public final class LLMKitManager {
                     reasoningEffortSupport: reasoningEffortSupport,
                     reasoningControl: reasoningControl,
                     modelCapabilities: modelCapabilities,
+                    measuredMaxThinkingBudget: measuredMaxThinkingBudget,
                     session: session
                 )
             }
@@ -1430,6 +1434,7 @@ public final class LLMKitManager {
             return GeminiProvider(
                 configuration: config, provider: modelProvider,
                 readAPIKey: readAPIKey, verboseLogging: verbose,
+                modelCapabilities: modelCapabilities,
                 session: session
             )
         }

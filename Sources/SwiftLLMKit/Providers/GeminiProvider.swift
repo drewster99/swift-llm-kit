@@ -15,6 +15,8 @@ private let logger = Logger(subsystem: "SwiftLLMKit", category: "Gemini")
 ///   (request logs capture URLs but not headers, so this keeps keys out of logs)
 struct GeminiProvider: LLMProvider {
     private let configuration: ModelConfiguration
+    /// The model's capabilities, for gating knobs whose wrong emission is an HTTP 400.
+    private let modelCapabilities: ModelCapabilities
     private let provider: ModelProvider
     private let readAPIKey: @Sendable () -> String
     private let verboseLogging: Bool
@@ -25,9 +27,11 @@ struct GeminiProvider: LLMProvider {
         provider: ModelProvider,
         readAPIKey: @Sendable @escaping () -> String,
         verboseLogging: Bool = false,
+        modelCapabilities: ModelCapabilities = ModelCapabilities(),
         session: URLSession = llmURLSession
     ) {
         self.configuration = configuration
+        self.modelCapabilities = modelCapabilities
         self.provider = provider
         self.readAPIKey = readAPIKey
         self.verboseLogging = verboseLogging
@@ -40,7 +44,7 @@ struct GeminiProvider: LLMProvider {
         overrides: LLMCallOverrides = LLMCallOverrides()
     ) async throws -> LLMResponse {
         // Gemini doesn't have an effort enum — depth is controlled via
-        // `thinkingConfig.thinkingBudget` (token count) in the request.
+        // `thinkingConfig.thinkingBudget` (token count), emitted below.
         // `overrides.thinkingEffort` is silently ignored. Consumers routing
         // through Gemini members of a hydra: set thinkingBudget on the
         // underlying LLM config instead of relying on per-call effort.
@@ -150,6 +154,18 @@ struct GeminiProvider: LLMProvider {
         var generationConfig: [String: Any] = ["maxOutputTokens": effectiveMaxTokens]
         if let temperature = temperatureOverride ?? configuration.temperature {
             generationConfig["temperature"] = temperature
+        }
+        // Gemini's reasoning depth control, which this file has documented since it was written
+        // and never actually sent — a configured `thinkingBudget` was silently dropped. The
+        // per-call override wins, and an explicit `reasoningEnabled: false` sends 0, which is
+        // Gemini's documented way to turn thinking off.
+        let geminiBudget: Int? = {
+            if overrides.reasoningEnabled == false { return 0 }
+            return overrides.thinkingBudgetTokens ?? configuration.thinkingBudget
+        }()
+        if let budget = geminiBudget, budget >= 0,
+           modelCapabilities.state(of: .thinkingBudgetTokens) != false {
+            generationConfig["thinkingConfig"] = ["thinkingBudget": budget] as [String: Any]
         }
         if let topP = topPOverride {
             generationConfig["topP"] = topP

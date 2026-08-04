@@ -15,6 +15,9 @@ struct AnthropicProvider: LLMProvider {
     /// path `behaviorFlags` travels, so effort gating is per-model data rather than an apiType
     /// branch. `nil` = unknown, which for general effort means "send it anyway" (fails open).
     private let generalEffortSupport: EffortSupport?
+    /// The model's measured thinking-budget ceiling, so a request is clamped to something the
+    /// endpoint accepts rather than merely floored.
+    private let measuredMaxThinkingBudget: Int?
 
     public init(
         configuration: ModelConfiguration,
@@ -23,7 +26,8 @@ struct AnthropicProvider: LLMProvider {
         verboseLogging: Bool = false,
         session: URLSession = llmURLSession,
         behaviorFlags: BehaviorFlags = BehaviorFlags(),
-        generalEffortSupport: EffortSupport? = nil
+        generalEffortSupport: EffortSupport? = nil,
+        measuredMaxThinkingBudget: Int? = nil
     ) {
         self.configuration = configuration
         self.provider = provider
@@ -32,6 +36,7 @@ struct AnthropicProvider: LLMProvider {
         self.session = session
         self.behaviorFlags = behaviorFlags
         self.generalEffortSupport = generalEffortSupport
+        self.measuredMaxThinkingBudget = measuredMaxThinkingBudget
     }
 
     public func send(
@@ -148,7 +153,10 @@ struct AnthropicProvider: LLMProvider {
         // boolean signal on adaptive-thinking models: > 0 means "thinking on,"
         // model picks depth itself (steered via `output_config.effort`).
         let usesAdaptiveThinking = behaviorFlags.requiresAdaptiveThinking
-        let thinkingEnabled = (configuration.thinkingBudget ?? 0) > 0
+        // Per-call overrides win over the configuration — that is what a per-call override is
+        // for, and Anthropic ignored both entirely until now.
+        let requestedBudget = overrides.thinkingBudgetTokens ?? configuration.thinkingBudget
+        let thinkingEnabled = overrides.reasoningEnabled ?? ((requestedBudget ?? 0) > 0)
 
         // When MANUAL extended thinking is enabled, max_tokens must exceed
         // budget_tokens (which is itself floored at 1024 by Anthropic). Clamp
@@ -157,8 +165,8 @@ struct AnthropicProvider: LLMProvider {
         // apply.
         let effectiveMaxTokens: Int = {
             guard let override = maxOutputTokensOverride else { return configuration.maxTokens }
-            if thinkingEnabled, !usesAdaptiveThinking, let budget = configuration.thinkingBudget {
-                return max(override, ThinkingBudget.effective(budget) + 1)
+            if thinkingEnabled, !usesAdaptiveThinking, let budget = requestedBudget {
+                return max(override, ThinkingBudget.effective(budget, measuredMaximum: measuredMaxThinkingBudget) + 1)
             }
             return override
         }()
@@ -232,10 +240,11 @@ struct AnthropicProvider: LLMProvider {
                 // Adaptive thinking — model decides depth, no budget_tokens.
                 // Steered via `output_config.effort` below if user set it.
                 body["thinking"] = ["type": "adaptive"] as [String: Any]
-            } else if let budget = configuration.thinkingBudget {
+            } else if let budget = requestedBudget, budget > 0 {
                 body["thinking"] = [
                     "type": "enabled",
-                    "budget_tokens": ThinkingBudget.effective(budget)
+                    "budget_tokens": ThinkingBudget.effective(
+                        budget, measuredMaximum: measuredMaxThinkingBudget)
                 ] as [String: Any]
             }
         }

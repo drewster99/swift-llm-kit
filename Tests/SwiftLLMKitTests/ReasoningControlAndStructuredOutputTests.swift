@@ -287,3 +287,69 @@ struct HandWrittenCodableCoverageTests {
             """, sourceLocation: sourceLocation)
     }
 }
+
+/// Anthropic and Gemini ignored the per-call reasoning overrides entirely, and Gemini never emitted
+/// the thinking budget its own source comment had documented since the file was written.
+@Suite("Anthropic and Gemini honour the per-call reasoning overrides")
+struct NonOpenAIReasoningOverrideTests {
+
+    private func anthropic(thinkingBudget: Int?) throws -> AnthropicProvider {
+        AnthropicProvider(
+            configuration: ModelConfiguration(name: "t", providerID: "p", modelID: "m",
+                                              thinkingBudget: thinkingBudget),
+            provider: ModelProvider(id: "p", name: "p", apiType: .anthropic,
+                                    endpoint: try #require(URL(string: "https://api.anthropic.com"))),
+            readAPIKey: { "" })
+    }
+
+    private func gemini(thinkingBudget: Int?, capabilities: ModelCapabilities = ModelCapabilities()) throws -> GeminiProvider {
+        GeminiProvider(
+            configuration: ModelConfiguration(name: "t", providerID: "p", modelID: "m",
+                                              thinkingBudget: thinkingBudget),
+            provider: ModelProvider(id: "p", name: "p", apiType: .gemini,
+                                    endpoint: try #require(URL(string: "https://g.test/v1beta"))),
+            readAPIKey: { "" }, modelCapabilities: capabilities)
+    }
+
+    @Test("Anthropic: a per-call budget overrides the configured one")
+    func anthropicPerCallBudget() throws {
+        let body = try anthropic(thinkingBudget: 2048).buildRequestBody(
+            messages: [.user("hi")], tools: [],
+            overrides: LLMCallOverrides(thinkingBudgetTokens: 8192))
+        let thinking = try #require(body["thinking"] as? [String: Any])
+        #expect(thinking["budget_tokens"] as? Int == 8192, "the per-call value must win")
+    }
+
+    @Test("Anthropic: reasoningEnabled false turns thinking off despite a configured budget")
+    func anthropicPerCallDisable() throws {
+        let body = try anthropic(thinkingBudget: 4096).buildRequestBody(
+            messages: [.user("hi")], tools: [],
+            overrides: LLMCallOverrides(reasoningEnabled: false))
+        #expect(body["thinking"] == nil, "an explicit off must beat a configured budget")
+    }
+
+    /// The field the provider documented and never sent.
+    @Test("Gemini emits thinkingConfig.thinkingBudget for a configured budget")
+    func geminiEmitsBudget() throws {
+        let body = try gemini(thinkingBudget: 4096).buildRequestBody(messages: [.user("hi")], tools: [])
+        let config = try #require(body["generationConfig"] as? [String: Any])
+        let thinking = try #require(config["thinkingConfig"] as? [String: Any])
+        #expect(thinking["thinkingBudget"] as? Int == 4096)
+    }
+
+    @Test("Gemini: an explicit off sends budget 0; a known-false capability sends nothing")
+    func geminiOffAndGated() throws {
+        let off = try gemini(thinkingBudget: 4096).buildRequestBody(
+            messages: [.user("hi")], tools: [], overrides: LLMCallOverrides(reasoningEnabled: false))
+        let config = try #require(off["generationConfig"] as? [String: Any])
+        #expect((config["thinkingConfig"] as? [String: Any])?["thinkingBudget"] as? Int == 0,
+                "Gemini turns thinking off with a zero budget")
+
+        var caps = ModelCapabilities()
+        caps[.thinkingBudgetTokens] = false
+        let gated = try gemini(thinkingBudget: 4096, capabilities: caps)
+            .buildRequestBody(messages: [.user("hi")], tools: [])
+        let gatedConfig = try #require(gated["generationConfig"] as? [String: Any])
+        #expect(gatedConfig["thinkingConfig"] == nil, "a stated NO suppresses it")
+    }
+}
