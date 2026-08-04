@@ -1163,11 +1163,20 @@ public final class LLMKitManager {
                 body["temperature"] = 1.0
                 if prepFlags.requiresAdaptiveThinking {
                     body["thinking"] = ["type": "adaptive"] as [String: Any]
-                } else if let budget = config.thinkingBudget {
-                    body["thinking"] = [
-                        "type": "enabled",
-                        "budget_tokens": ThinkingBudget.effective(budget)
-                    ] as [String: Any]
+                } else if let budget = config.thinkingBudget, budget > 0 {
+                    // The SAME pairing the provider applies. This path had no pairing at all, so it
+                    // could emit `max_tokens == budget_tokens` — a request Anthropic rejects — and
+                    // once `effective` became optional it was putting an `Int?` into `[String: Any]`,
+                    // which serializes as `budget_tokens: null`.
+                    let pair = ThinkingBudget.pairing(
+                        requestedBudget: budget,
+                        requestedMax: config.maxTokens,
+                        modelMaxOutputTokens: prepModelInfo?.maxOutputTokens,
+                        measuredMaximum: prepModelInfo?.maxThinkingBudgetTokens)
+                    body["max_tokens"] = pair.maxTokens
+                    if let sent = pair.budget {
+                        body["thinking"] = ["type": "enabled", "budget_tokens": sent] as [String: Any]
+                    }
                 }
             }
             // Top-level `output_config.effort` — GENERAL effort, independent of thinking mode.

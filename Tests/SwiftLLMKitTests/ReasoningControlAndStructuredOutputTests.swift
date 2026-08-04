@@ -431,3 +431,58 @@ struct AnthropicBudgetPairingTests {
         #expect(sent["thinking"] == nil, "a rejected request is worse than no thinking")
     }
 }
+
+/// `prepareRequest` builds the same request as `AnthropicProvider` for callers that finish the body
+/// themselves, so the two must agree. They did not: this path had NO pairing at all — it could emit
+/// `max_tokens == budget_tokens`, which Anthropic rejects — and once `ThinkingBudget.effective`
+/// became optional it was putting an `Int?` into `[String: Any]`, serializing `budget_tokens: null`.
+@Suite("ThinkingBudget.pairing is the one rule both Anthropic paths use")
+struct ThinkingBudgetPairingTests {
+
+    @Test("The pair is always legal: max_tokens strictly exceeds the budget")
+    func pairIsAlwaysLegal() {
+        let cases: [(budget: Int, max: Int, cap: Int?)] = [
+            (4096, 4096, nil), (4096, 4096, 4096), (8192, 4096, 4096),
+            (1024, 64_000, 64_000), (32_000, 2048, nil), (100, 4096, nil)
+        ]
+        for c in cases {
+            let pair = ThinkingBudget.pairing(requestedBudget: c.budget, requestedMax: c.max,
+                                              modelMaxOutputTokens: c.cap)
+            if let budget = pair.budget {
+                #expect(pair.maxTokens > budget,
+                        "illegal pairing for \(c): max_tokens=\(pair.maxTokens) budget=\(budget)")
+                #expect(budget >= ThinkingBudget.minimumTokens, "below Anthropic's floor for \(c)")
+            }
+            if let cap = c.cap {
+                #expect(pair.maxTokens <= max(cap, c.max), "exceeded the model cap for \(c)")
+            }
+        }
+    }
+
+    @Test("A known cap degrades the budget; an unknown cap raises max_tokens")
+    func capDecidesWhichSideGives() {
+        let known = ThinkingBudget.pairing(requestedBudget: 8192, requestedMax: 4096,
+                                           modelMaxOutputTokens: 4096)
+        #expect(known.maxTokens == 4096)
+        #expect(known.budget == 4095, "the budget gives way under a known cap")
+
+        let unknown = ThinkingBudget.pairing(requestedBudget: 8192, requestedMax: 4096,
+                                             modelMaxOutputTokens: nil)
+        #expect(unknown.maxTokens == 8193, "raised, because refusing would break uncatalogued models")
+        #expect(unknown.budget == 8192)
+    }
+
+    @Test("No room for a legal budget yields nil rather than an illegal one")
+    func noRoomYieldsNil() {
+        let pair = ThinkingBudget.pairing(requestedBudget: 8192, requestedMax: 512,
+                                          modelMaxOutputTokens: 512)
+        #expect(pair.budget == nil, "511 tokens of room is below the 1024 floor")
+    }
+
+    @Test("A measured ceiling of zero means no budget at all")
+    func measuredZeroMeansNone() {
+        let pair = ThinkingBudget.pairing(requestedBudget: 8192, requestedMax: 64_000,
+                                          modelMaxOutputTokens: 64_000, measuredMaximum: 0)
+        #expect(pair.budget == nil, "a probed 'nothing works' must not be overridden by the floor")
+    }
+}

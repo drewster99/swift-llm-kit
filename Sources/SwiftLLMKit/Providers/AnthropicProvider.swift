@@ -169,40 +169,17 @@ struct AnthropicProvider: LLMProvider {
         // the override so a tight per-call cap doesn't produce an API error.
         // Adaptive thinking has no budget concept, so the constraint doesn't
         // apply.
-        // `max_tokens` must EXCEED `budget_tokens`, and it must not exceed the output ceiling the
-        // caller has actually sanctioned. Those two pull opposite ways when the budget is large, and
-        // only one of them is negotiable: the ceiling reflects the model's own cap, while the budget
-        // is a depth preference. So a TIGHT per-call cap may be raised back toward the sanctioned
-        // ceiling (the documented reason this clamp exists), and past that it is the BUDGET that
-        // gives way — degrading depth instead of emitting a request the endpoint rejects either way.
-        //
-        // Raising `max_tokens` unconditionally, as this briefly did, merely swapped one invalid
-        // request for another: a 4096-max config with an 8192 budget produced `max_tokens: 8193`,
-        // above the model's own output cap.
-        // The only true ceiling is the MODEL's own output cap. Neither the configured value nor a
-        // per-call override is that: both are caller preferences, and the configured default is
-        // 4096 regardless of model. When the cap is unknown we raise freely (the long-standing
-        // behaviour); when it is known we respect it and let the BUDGET give way instead.
-        let sanctionedCeiling = modelMaxOutputTokens
-        let requestedThinkingBudget: Int? = {
+        // One shared pairing routine with `prepareRequest` — see `ThinkingBudget.pairing`.
+        let thinkingPair: (maxTokens: Int, budget: Int?)? = {
             guard thinkingEnabled, !usesAdaptiveThinking, let budget = requestedBudget, budget > 0 else { return nil }
-            return ThinkingBudget.effective(budget, measuredMaximum: measuredMaxThinkingBudget)
+            return ThinkingBudget.pairing(
+                requestedBudget: budget,
+                requestedMax: maxOutputTokensOverride ?? configuration.maxTokens,
+                modelMaxOutputTokens: modelMaxOutputTokens,
+                measuredMaximum: measuredMaxThinkingBudget)
         }()
-        let effectiveMaxTokens: Int = {
-            let base = maxOutputTokensOverride ?? configuration.maxTokens
-            guard let wanted = requestedThinkingBudget else { return base }
-            let raised = max(base, wanted + 1)
-            guard let ceiling = sanctionedCeiling else { return raised }
-            return min(raised, max(ceiling, base))
-        }()
-        /// The budget actually emitted: at least one token below `max_tokens`, and `nil` when no
-        /// room remains for a legal budget at all — better no thinking block than a rejected one.
-        let emittableThinkingBudget: Int? = {
-            guard let wanted = requestedThinkingBudget else { return nil }
-            let room = effectiveMaxTokens - 1
-            guard room >= ThinkingBudget.minimumTokens else { return nil }
-            return min(wanted, room)
-        }()
+        let effectiveMaxTokens = thinkingPair?.maxTokens ?? (maxOutputTokensOverride ?? configuration.maxTokens)
+        let emittableThinkingBudget = thinkingPair?.budget
 
         var body: [String: Any] = [
             "model": configuration.model,

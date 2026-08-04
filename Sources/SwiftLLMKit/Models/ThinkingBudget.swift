@@ -25,6 +25,35 @@ public enum ThinkingBudget {
     /// `measuredMaximum` is the model's own probed ceiling when one exists. Passing it clamps from
     /// ABOVE as well as below, which is the difference between a request that is merely large and
     /// one the endpoint refuses outright.
+    /// The `(max_tokens, budget_tokens)` pair to send for a requested budget.
+    ///
+    /// Anthropic requires `max_tokens` to EXCEED `budget_tokens`, and `max_tokens` must not exceed
+    /// the MODEL's output cap. Those pull opposite ways and only one is negotiable: the cap is a
+    /// hard limit, the budget is a depth preference. So a tight `requestedMax` is raised to clear
+    /// the budget, and past a KNOWN cap it is the budget that gives way.
+    ///
+    /// `budget == nil` means no legal budget exists — emit no thinking block rather than one the
+    /// endpoint will reject.
+    ///
+    /// Shared by `AnthropicProvider` and `LLMKitManager.prepareRequest` deliberately: they build
+    /// the same request from the same configuration, and this rule was already wrong in two
+    /// different ways when it lived in one of them and was absent from the other.
+    public static func pairing(
+        requestedBudget: Int,
+        requestedMax: Int,
+        modelMaxOutputTokens: Int?,
+        measuredMaximum: Int? = nil
+    ) -> (maxTokens: Int, budget: Int?) {
+        guard let wanted = effective(requestedBudget, measuredMaximum: measuredMaximum) else {
+            return (requestedMax, nil)
+        }
+        let raised = max(requestedMax, wanted + 1)
+        // Never below what the caller already asked for, even if the catalog cap is smaller.
+        let maxTokens = modelMaxOutputTokens.map { min(raised, max($0, requestedMax)) } ?? raised
+        let room = maxTokens - 1
+        return (maxTokens, room >= minimumTokens ? min(wanted, room) : nil)
+    }
+
     public static func effective(_ requested: Int, measuredMaximum: Int? = nil) -> Int? {
         guard let measuredMaximum else { return max(requested, minimumTokens) }
         // A measured maximum BELOW the floor is a real finding — `probeThinkingBudgetRange`
