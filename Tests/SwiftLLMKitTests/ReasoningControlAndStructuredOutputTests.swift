@@ -230,3 +230,60 @@ struct ModelMetadataOverrideCodingKeyCoverageTests {
         #expect(restored == original)
     }
 }
+
+/// The same reflection guard for the other two hand-written `Codable` types that gained fields.
+///
+/// `ModelMetadataOverride` shipped five silently-dropped fields before this pattern was caught;
+/// these types are written the same way, so they get the same check rather than the same incident.
+@Suite("Hand-written Codable coverage: ModelInfo and ModelConfiguration")
+struct HandWrittenCodableCoverageTests {
+
+    @Test("Every ModelInfo stored property is encoded")
+    func modelInfoCoverage() throws {
+        let info = ModelInfo(
+            providerID: "p", modelID: "m", displayName: "M", createdAt: Date(timeIntervalSince1970: 0),
+            maxInputTokens: 1000, maxOutputTokens: 100,
+            capabilities: ModelCapabilities([.vision]), sizeLabel: "7B", quantizationLabel: "q4",
+            pricing: ModelPricing(base: PricingTier(input: 1, output: 2)), mode: "chat",
+            generalEffort: .levels(["low"]), reasoningEffort: .supportedLevelsUnknown,
+            reasoningControl: .thinkingBlock, thinkingBudgetAccounting: .separate,
+            maxThinkingBudgetTokens: 32_000,
+            behaviorFlags: BehaviorFlags(requiresAdaptiveThinking: true),
+            deprecatedOn: Date(timeIntervalSince1970: 1), deprecationReplacement: "m2",
+            maxTemperature: 2, modelDescription: "d",
+            samplingDefaults: SamplingDefaults(temperature: 0.5), isFree: false,
+            benchmarks: nil, huggingFaceID: "hf/m", hidden: false,
+            isAvailable: true, isAccessDenied: false, outputBoundedByContext: true,
+            fetchedAt: Date(timeIntervalSince1970: 2), lastProbedAt: Date(timeIntervalSince1970: 3))
+        // Every field must be NON-DEFAULT: several encode conditionally, so a defaulted fixture
+        // would report them missing and a genuinely uncovered one would hide among the noise.
+        try expectEveryStoredPropertyEncoded(info, ignoring: ["benchmarks"])
+    }
+
+    @Test("Every ModelConfiguration stored property is encoded")
+    func modelConfigurationCoverage() throws {
+        let config = ModelConfiguration(
+            name: "c", providerID: "p", modelID: "m", temperature: 0.5,
+            maxOutputTokens: 100, maxContextTokens: 1000, thinkingBudget: 2048,
+            effort: "high", reasoningEffort: "low", extendedCacheTTL: true, streaming: false,
+            extraJSONOverrides: ["k": .string("v")])
+        // `isValid`/`validationError` are runtime state, not persisted configuration.
+        try expectEveryStoredPropertyEncoded(config, ignoring: ["isValid", "validationError"])
+    }
+
+    /// Reflection rather than a round trip, for the reason documented on the override guard: an
+    /// uncovered property decodes back to its default and compares equal to a defaulted fixture.
+    private func expectEveryStoredPropertyEncoded<T: Encodable>(
+        _ value: T, ignoring: Set<String>, sourceLocation: SourceLocation = #_sourceLocation
+    ) throws {
+        let object = try #require(
+            try JSONSerialization.jsonObject(with: JSONEncoder().encode(value)) as? [String: Any],
+            sourceLocation: sourceLocation)
+        let stored = Set(Mirror(reflecting: value).children.compactMap(\.label)).subtracting(ignoring)
+        let missing = stored.subtracting(object.keys).sorted()
+        #expect(missing.isEmpty, """
+            \(type(of: value)): \(missing.joined(separator: ", ")) is stored but never encoded — \
+            add it to the hand-written CodingKeys/encode.
+            """, sourceLocation: sourceLocation)
+    }
+}
