@@ -1169,7 +1169,7 @@ public enum ModelProber {
         accounting: ThinkingBudgetAccounting?,
         maxOutputTokens: Int?,
         maxContextTokens: Int?,
-        makeProviderWithBudget: (Int) -> any LLMProvider,
+        makeProviderWithBudget: @Sendable (Int) async -> any LLMProvider,
         calls: ProbeCallCounter? = nil
     ) async -> ProbeFinding<Int> {
         let started = Date()
@@ -1252,7 +1252,7 @@ public enum ModelProber {
     /// it would send nothing and grade the silence as success.
     public static func probeReasoningToggle(
         enabled: Bool,
-        makeProviderForcing: ([String: AnyCodable]) -> any LLMProvider,
+        makeProviderForcing: @Sendable ([String: AnyCodable]) async -> any LLMProvider,
         calls: ProbeCallCounter? = nil
     ) async -> ProbeFinding<Bool> {
         await probeForcedField(
@@ -1264,7 +1264,7 @@ public enum ModelProber {
 
     /// Whether `thinking.keep: "all"` is accepted — retaining reasoning content across turns.
     public static func probeThinkingKeep(
-        makeProviderForcing: ([String: AnyCodable]) -> any LLMProvider,
+        makeProviderForcing: @Sendable ([String: AnyCodable]) async -> any LLMProvider,
         calls: ProbeCallCounter? = nil
     ) async -> ProbeFinding<Bool> {
         await probeForcedField(
@@ -1282,7 +1282,7 @@ public enum ModelProber {
     /// with an explicit closed schema — otherwise a rejection would be about the SCHEMA rather than
     /// about `strict`, and would be recorded as the wrong fact.
     public static func probeStrictToolDefinitions(
-        makeProviderForcing: ([String: AnyCodable]) -> any LLMProvider,
+        makeProviderForcing: @Sendable ([String: AnyCodable]) async -> any LLMProvider,
         calls: ProbeCallCounter? = nil
     ) async -> ProbeFinding<Bool> {
         let strictTool: AnyCodable = .dictionary([
@@ -1315,7 +1315,7 @@ public enum ModelProber {
         _ forced: [String: AnyCodable],
         description: String,
         rejectionKeywords: [String],
-        makeProviderForcing: ([String: AnyCodable]) -> any LLMProvider,
+        makeProviderForcing: @Sendable ([String: AnyCodable]) async -> any LLMProvider,
         calls: ProbeCallCounter?
     ) async -> ProbeFinding<Bool> {
         let started = Date()
