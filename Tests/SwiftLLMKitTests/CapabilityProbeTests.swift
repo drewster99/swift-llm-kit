@@ -378,7 +378,7 @@ struct AnthropicDecodeTests {
         let models = try decode()
         let sonnet = try #require(models.first { $0.modelID == "claude-sonnet-5" })
         #expect(sonnet.capabilities.vision && sonnet.capabilities.pdfInput && sonnet.capabilities.reasoning)
-        #expect(sonnet.capabilities.codeExecution && sonnet.capabilities.responseSchema)
+        #expect(sonnet.capabilities.codeExecution && sonnet.capabilities.structuredOutputSupportsJSONSchema)
         #expect(sonnet.maxInputTokens == 1_000_000 && sonnet.maxOutputTokens == 128_000)
     }
 
@@ -635,9 +635,9 @@ struct OpenRouterDecodeTests {
         #expect(m.capabilities.pdfInput == true)
         #expect(m.capabilities.audioInput == false)
         #expect(m.capabilities.toolUse == true)
-        #expect(m.capabilities.toolChoice == true)
+        #expect(m.capabilities.toolChoiceSupported == true)
         #expect(m.capabilities.reasoning == true)
-        #expect(m.capabilities.responseSchema == true)
+        #expect(m.capabilities.structuredOutputSupportsJSONSchema == true)
         let pricing = try #require(m.pricing)
         #expect(pricing.base.input == 0.000005)
         #expect(pricing.base.output == 0.000025)
@@ -725,7 +725,7 @@ struct HuggingFaceDecodeTests {
         let novita = try #require(byID["zai-org/GLM-5.2:novita"])
         #expect(novita.maxInputTokens == 1048576)
         #expect(novita.isFree == false)
-        #expect(novita.capabilities.responseSchema == true)
+        #expect(novita.capabilities.structuredOutputSupportsJSONSchema == true)
         #expect(novita.capabilities.toolUse == true)
         #expect(novita.capabilities.vision == true)      // shared model-level modality
         #expect(novita.pricing?.base.input == 1.4 / 1_000_000)
@@ -736,7 +736,7 @@ struct HuggingFaceDecodeTests {
         #expect(together.maxInputTokens == 262144)
         let fireworks = try #require(byID["zai-org/GLM-5.2:fireworks-ai"])
         #expect(fireworks.maxInputTokens == 1048576)
-        #expect(fireworks.capabilities.responseSchema == false)
+        #expect(fireworks.capabilities.structuredOutputSupportsJSONSchema == false)
     }
 
     @Test("A provider carrying only a name and is_free is skipped, not defaulted")

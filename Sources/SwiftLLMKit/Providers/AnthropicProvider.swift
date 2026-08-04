@@ -264,7 +264,7 @@ struct AnthropicProvider: LLMProvider {
                 // emitted from `thinkingBudget`, and no Anthropic model has this capability
                 // recorded, so requiring known-true would switch thinking off everywhere.
                 if let sent = emittableThinkingBudget,
-                   modelCapabilities.state(of: .thinkingBudgetTokens) != false {
+                   modelCapabilities.state(of: .thinkingSupportsTokenBudget) != false {
                     body["thinking"] = ["type": "enabled", "budget_tokens": sent] as [String: Any]
                 }
             }

@@ -69,8 +69,8 @@ public enum LLMResponseFormat: Sendable, Equatable {
     /// rule as reasoning effort, for the same reason.
     public var requiredCapability: ModelCapability {
         switch self {
-        case .jsonObject: return .structuredOutputJSONObject
-        case .jsonSchema: return .responseSchema
+        case .jsonObject: return .structuredOutputSupportsJSONObject
+        case .jsonSchema: return .structuredOutputSupportsJSONSchema
         }
     }
 }

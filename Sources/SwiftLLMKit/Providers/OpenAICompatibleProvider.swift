@@ -263,11 +263,11 @@ struct OpenAICompatibleProvider: LLMProvider {
             // both — it exists precisely for models whose capabilities nothing has recorded, so
             // requiring a known-true there would suppress the very behaviour it preserves.
             let directionAllowed = isLegacyFallback || modelCapabilities.state(
-                of: wantsReasoning ? .reasoningEnableable : .reasoningDisableable) == true
+                of: wantsReasoning ? .reasoningCanBeEnabled : .reasoningCanBeDisabled) == true
             if wantsReasoning, directionAllowed {
                 body["enable_thinking"] = true
                 if let budget = requestedBudget, budget > 0,
-                   isLegacyFallback || modelCapabilities.state(of: .thinkingBudgetTokens) == true,
+                   isLegacyFallback || modelCapabilities.state(of: .thinkingSupportsTokenBudget) == true,
                    let sent = ThinkingBudget.effective(budget, measuredMaximum: measuredMaxThinkingBudget) {
                     body["thinking_budget"] = sent
                 }
@@ -280,16 +280,16 @@ struct OpenAICompatibleProvider: LLMProvider {
             // `{"type": "enabled"|"disabled"}`, optionally with `keep`.
             var thinking: [String: Any] = [:]
             if let wantsReasoning = overrides.reasoningEnabled {
-                let gate: ModelCapability = wantsReasoning ? .reasoningEnableable : .reasoningDisableable
+                let gate: ModelCapability = wantsReasoning ? .reasoningCanBeEnabled : .reasoningCanBeDisabled
                 if modelCapabilities.state(of: gate) == true {
                     thinking["type"] = wantsReasoning ? "enabled" : "disabled"
                 }
             }
-            if overrides.keepThinking == true, modelCapabilities.state(of: .thinkingKeepAll) == true {
+            if overrides.keepThinking == true, modelCapabilities.state(of: .thinkingSupportsKeepAll) == true {
                 thinking["keep"] = "all"
             }
             if let budget = requestedBudget, budget > 0,
-               modelCapabilities.state(of: .thinkingBudgetTokens) == true {
+               modelCapabilities.state(of: .thinkingSupportsTokenBudget) == true {
                 // Pair against the output cap when this model spends its thinking from that
                 // allowance. Emitting a budget with no `max_tokens` relationship is precisely the
                 // silent truncation `ThinkingBudgetAccounting` describes — a budget equal to the
@@ -345,7 +345,7 @@ struct OpenAICompatibleProvider: LLMProvider {
                 // `strict` is omitted unless the model is KNOWN to support it: endpoints that don't
                 // recognise it vary between ignoring and rejecting the request.
                 if let strict = tool.strict,
-                   modelCapabilities.state(of: .strictToolDefinitions) == true {
+                   modelCapabilities.state(of: .toolDefinitionsSupportStrict) == true {
                     function["strict"] = strict
                 }
                 return ["type": "function", "function": function] as [String: Any]
@@ -369,7 +369,7 @@ struct OpenAICompatibleProvider: LLMProvider {
             // unlike the newer knobs — tool_choice predates this gating and silently dropping a
             // caller's explicit choice would change long-standing behaviour on every model no
             // source has described.
-            // Two gates, because there are two different facts. `.toolChoice` is written by the
+            // Two gates, because there are two different facts. `.toolChoiceSupported` is written by the
             // decoders as "this endpoint accepts the PARAMETER at all" (LiteLLM's
             // `supportsToolChoice`, OpenRouter's `supported_parameters`), so it is a precondition
             // over every option — reading it as "accepts `auto`" meant the strongest available

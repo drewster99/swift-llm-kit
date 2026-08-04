@@ -18,22 +18,22 @@ public struct ModelCapabilitiesOverride: Codable, Sendable, Equatable {
     public var audioInput: Bool?
     public var audioOutput: Bool?
     public var videoInput: Bool?
-    public var responseSchema: Bool?
+    public var structuredOutputSupportsJSONSchema: Bool?
     public var parallelToolCalls: Bool?
     public var pdfInput: Bool?
     public var webSearch: Bool?
     public var systemMessages: Bool?
     public var assistantPrefill: Bool?
-    public var toolChoice: Bool?
-    public var reasoningEnableable: Bool?
-    public var reasoningDisableable: Bool?
-    public var thinkingKeepAll: Bool?
-    public var thinkingBudgetTokens: Bool?
-    public var structuredOutputJSONObject: Bool?
-    public var toolChoiceRequired: Bool?
-    public var toolChoiceNone: Bool?
-    public var toolChoiceSpecificFunction: Bool?
-    public var strictToolDefinitions: Bool?
+    public var toolChoiceSupported: Bool?
+    public var reasoningCanBeEnabled: Bool?
+    public var reasoningCanBeDisabled: Bool?
+    public var thinkingSupportsKeepAll: Bool?
+    public var thinkingSupportsTokenBudget: Bool?
+    public var structuredOutputSupportsJSONObject: Bool?
+    public var toolChoiceSupportsValueRequired: Bool?
+    public var toolChoiceSupportsValueNone: Bool?
+    public var toolChoiceSupportsNamedFunction: Bool?
+    public var toolDefinitionsSupportStrict: Bool?
     public var toolResultRoundTrip: Bool?
 
     public init(
@@ -48,22 +48,22 @@ public struct ModelCapabilitiesOverride: Codable, Sendable, Equatable {
         audioInput: Bool? = nil,
         audioOutput: Bool? = nil,
         videoInput: Bool? = nil,
-        responseSchema: Bool? = nil,
+        structuredOutputSupportsJSONSchema: Bool? = nil,
         parallelToolCalls: Bool? = nil,
         pdfInput: Bool? = nil,
         webSearch: Bool? = nil,
         systemMessages: Bool? = nil,
         assistantPrefill: Bool? = nil,
-        toolChoice: Bool? = nil,
-        reasoningEnableable: Bool? = nil,
-        reasoningDisableable: Bool? = nil,
-        thinkingKeepAll: Bool? = nil,
-        thinkingBudgetTokens: Bool? = nil,
-        structuredOutputJSONObject: Bool? = nil,
-        toolChoiceRequired: Bool? = nil,
-        toolChoiceNone: Bool? = nil,
-        toolChoiceSpecificFunction: Bool? = nil,
-        strictToolDefinitions: Bool? = nil,
+        toolChoiceSupported: Bool? = nil,
+        reasoningCanBeEnabled: Bool? = nil,
+        reasoningCanBeDisabled: Bool? = nil,
+        thinkingSupportsKeepAll: Bool? = nil,
+        thinkingSupportsTokenBudget: Bool? = nil,
+        structuredOutputSupportsJSONObject: Bool? = nil,
+        toolChoiceSupportsValueRequired: Bool? = nil,
+        toolChoiceSupportsValueNone: Bool? = nil,
+        toolChoiceSupportsNamedFunction: Bool? = nil,
+        toolDefinitionsSupportStrict: Bool? = nil,
         toolResultRoundTrip: Bool? = nil
     ) {
         self.chat = chat
@@ -77,22 +77,22 @@ public struct ModelCapabilitiesOverride: Codable, Sendable, Equatable {
         self.audioInput = audioInput
         self.audioOutput = audioOutput
         self.videoInput = videoInput
-        self.responseSchema = responseSchema
+        self.structuredOutputSupportsJSONSchema = structuredOutputSupportsJSONSchema
         self.parallelToolCalls = parallelToolCalls
         self.pdfInput = pdfInput
         self.webSearch = webSearch
         self.systemMessages = systemMessages
         self.assistantPrefill = assistantPrefill
-        self.toolChoice = toolChoice
-        self.reasoningEnableable = reasoningEnableable
-        self.reasoningDisableable = reasoningDisableable
-        self.thinkingKeepAll = thinkingKeepAll
-        self.thinkingBudgetTokens = thinkingBudgetTokens
-        self.structuredOutputJSONObject = structuredOutputJSONObject
-        self.toolChoiceRequired = toolChoiceRequired
-        self.toolChoiceNone = toolChoiceNone
-        self.toolChoiceSpecificFunction = toolChoiceSpecificFunction
-        self.strictToolDefinitions = strictToolDefinitions
+        self.toolChoiceSupported = toolChoiceSupported
+        self.reasoningCanBeEnabled = reasoningCanBeEnabled
+        self.reasoningCanBeDisabled = reasoningCanBeDisabled
+        self.thinkingSupportsKeepAll = thinkingSupportsKeepAll
+        self.thinkingSupportsTokenBudget = thinkingSupportsTokenBudget
+        self.structuredOutputSupportsJSONObject = structuredOutputSupportsJSONObject
+        self.toolChoiceSupportsValueRequired = toolChoiceSupportsValueRequired
+        self.toolChoiceSupportsValueNone = toolChoiceSupportsValueNone
+        self.toolChoiceSupportsNamedFunction = toolChoiceSupportsNamedFunction
+        self.toolDefinitionsSupportStrict = toolDefinitionsSupportStrict
         self.toolResultRoundTrip = toolResultRoundTrip
     }
 
@@ -114,22 +114,22 @@ public struct ModelCapabilitiesOverride: Codable, Sendable, Equatable {
         if let v = audioInput, (forceReplace || v) { capabilities.audioInput = v }
         if let v = audioOutput, (forceReplace || v) { capabilities.audioOutput = v }
         if let v = videoInput, (forceReplace || v) { capabilities.videoInput = v }
-        if let v = responseSchema, (forceReplace || v) { capabilities.responseSchema = v }
+        if let v = structuredOutputSupportsJSONSchema, (forceReplace || v) { capabilities.structuredOutputSupportsJSONSchema = v }
         if let v = parallelToolCalls, (forceReplace || v) { capabilities.parallelToolCalls = v }
         if let v = pdfInput, (forceReplace || v) { capabilities.pdfInput = v }
         if let v = webSearch, (forceReplace || v) { capabilities.webSearch = v }
         if let v = systemMessages, (forceReplace || v) { capabilities.systemMessages = v }
         if let v = assistantPrefill, (forceReplace || v) { capabilities.assistantPrefill = v }
-        if let v = toolChoice, (forceReplace || v) { capabilities.toolChoice = v }
-        if let v = reasoningEnableable, (forceReplace || v) { capabilities.reasoningEnableable = v }
-        if let v = reasoningDisableable, (forceReplace || v) { capabilities.reasoningDisableable = v }
-        if let v = thinkingKeepAll, (forceReplace || v) { capabilities.thinkingKeepAll = v }
-        if let v = thinkingBudgetTokens, (forceReplace || v) { capabilities.thinkingBudgetTokens = v }
-        if let v = structuredOutputJSONObject, (forceReplace || v) { capabilities.structuredOutputJSONObject = v }
-        if let v = toolChoiceRequired, (forceReplace || v) { capabilities.toolChoiceRequired = v }
-        if let v = toolChoiceNone, (forceReplace || v) { capabilities.toolChoiceNone = v }
-        if let v = toolChoiceSpecificFunction, (forceReplace || v) { capabilities.toolChoiceSpecificFunction = v }
-        if let v = strictToolDefinitions, (forceReplace || v) { capabilities.strictToolDefinitions = v }
+        if let v = toolChoiceSupported, (forceReplace || v) { capabilities.toolChoiceSupported = v }
+        if let v = reasoningCanBeEnabled, (forceReplace || v) { capabilities.reasoningCanBeEnabled = v }
+        if let v = reasoningCanBeDisabled, (forceReplace || v) { capabilities.reasoningCanBeDisabled = v }
+        if let v = thinkingSupportsKeepAll, (forceReplace || v) { capabilities.thinkingSupportsKeepAll = v }
+        if let v = thinkingSupportsTokenBudget, (forceReplace || v) { capabilities.thinkingSupportsTokenBudget = v }
+        if let v = structuredOutputSupportsJSONObject, (forceReplace || v) { capabilities.structuredOutputSupportsJSONObject = v }
+        if let v = toolChoiceSupportsValueRequired, (forceReplace || v) { capabilities.toolChoiceSupportsValueRequired = v }
+        if let v = toolChoiceSupportsValueNone, (forceReplace || v) { capabilities.toolChoiceSupportsValueNone = v }
+        if let v = toolChoiceSupportsNamedFunction, (forceReplace || v) { capabilities.toolChoiceSupportsNamedFunction = v }
+        if let v = toolDefinitionsSupportStrict, (forceReplace || v) { capabilities.toolDefinitionsSupportStrict = v }
         if let v = toolResultRoundTrip, (forceReplace || v) { capabilities.toolResultRoundTrip = v }
     }
 
@@ -150,22 +150,22 @@ public struct ModelCapabilitiesOverride: Codable, Sendable, Equatable {
             case .audioInput: return audioInput
             case .audioOutput: return audioOutput
             case .videoInput: return videoInput
-            case .responseSchema: return responseSchema
+            case .structuredOutputSupportsJSONSchema: return structuredOutputSupportsJSONSchema
             case .parallelToolCalls: return parallelToolCalls
             case .pdfInput: return pdfInput
             case .webSearch: return webSearch
             case .systemMessages: return systemMessages
             case .assistantPrefill: return assistantPrefill
-            case .toolChoice: return toolChoice
-            case .reasoningEnableable: return reasoningEnableable
-            case .reasoningDisableable: return reasoningDisableable
-            case .thinkingKeepAll: return thinkingKeepAll
-            case .thinkingBudgetTokens: return thinkingBudgetTokens
-            case .structuredOutputJSONObject: return structuredOutputJSONObject
-            case .toolChoiceRequired: return toolChoiceRequired
-            case .toolChoiceNone: return toolChoiceNone
-            case .toolChoiceSpecificFunction: return toolChoiceSpecificFunction
-            case .strictToolDefinitions: return strictToolDefinitions
+            case .toolChoiceSupported: return toolChoiceSupported
+            case .reasoningCanBeEnabled: return reasoningCanBeEnabled
+            case .reasoningCanBeDisabled: return reasoningCanBeDisabled
+            case .thinkingSupportsKeepAll: return thinkingSupportsKeepAll
+            case .thinkingSupportsTokenBudget: return thinkingSupportsTokenBudget
+            case .structuredOutputSupportsJSONObject: return structuredOutputSupportsJSONObject
+            case .toolChoiceSupportsValueRequired: return toolChoiceSupportsValueRequired
+            case .toolChoiceSupportsValueNone: return toolChoiceSupportsValueNone
+            case .toolChoiceSupportsNamedFunction: return toolChoiceSupportsNamedFunction
+            case .toolDefinitionsSupportStrict: return toolDefinitionsSupportStrict
             case .toolResultRoundTrip: return toolResultRoundTrip
             }
         }
@@ -182,22 +182,22 @@ public struct ModelCapabilitiesOverride: Codable, Sendable, Equatable {
             case .audioInput: audioInput = newValue
             case .audioOutput: audioOutput = newValue
             case .videoInput: videoInput = newValue
-            case .responseSchema: responseSchema = newValue
+            case .structuredOutputSupportsJSONSchema: structuredOutputSupportsJSONSchema = newValue
             case .parallelToolCalls: parallelToolCalls = newValue
             case .pdfInput: pdfInput = newValue
             case .webSearch: webSearch = newValue
             case .systemMessages: systemMessages = newValue
             case .assistantPrefill: assistantPrefill = newValue
-            case .toolChoice: toolChoice = newValue
-            case .reasoningEnableable: reasoningEnableable = newValue
-            case .reasoningDisableable: reasoningDisableable = newValue
-            case .thinkingKeepAll: thinkingKeepAll = newValue
-            case .thinkingBudgetTokens: thinkingBudgetTokens = newValue
-            case .structuredOutputJSONObject: structuredOutputJSONObject = newValue
-            case .toolChoiceRequired: toolChoiceRequired = newValue
-            case .toolChoiceNone: toolChoiceNone = newValue
-            case .toolChoiceSpecificFunction: toolChoiceSpecificFunction = newValue
-            case .strictToolDefinitions: strictToolDefinitions = newValue
+            case .toolChoiceSupported: toolChoiceSupported = newValue
+            case .reasoningCanBeEnabled: reasoningCanBeEnabled = newValue
+            case .reasoningCanBeDisabled: reasoningCanBeDisabled = newValue
+            case .thinkingSupportsKeepAll: thinkingSupportsKeepAll = newValue
+            case .thinkingSupportsTokenBudget: thinkingSupportsTokenBudget = newValue
+            case .structuredOutputSupportsJSONObject: structuredOutputSupportsJSONObject = newValue
+            case .toolChoiceSupportsValueRequired: toolChoiceSupportsValueRequired = newValue
+            case .toolChoiceSupportsValueNone: toolChoiceSupportsValueNone = newValue
+            case .toolChoiceSupportsNamedFunction: toolChoiceSupportsNamedFunction = newValue
+            case .toolDefinitionsSupportStrict: toolDefinitionsSupportStrict = newValue
             case .toolResultRoundTrip: toolResultRoundTrip = newValue
             }
         }

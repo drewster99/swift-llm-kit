@@ -507,13 +507,13 @@ public struct LiteLLMEntry: Sendable {
         if supportsAudioInput { capabilities.audioInput = true }
         if supportsAudioOutput { capabilities.audioOutput = true }
         if supportsVideoInput { capabilities.videoInput = true }
-        if supportsResponseSchema { capabilities.responseSchema = true }
+        if supportsResponseSchema { capabilities.structuredOutputSupportsJSONSchema = true }
         if supportsParallelToolCalls { capabilities.parallelToolCalls = true }
         if supportsPdfInput { capabilities.pdfInput = true }
         if supportsWebSearch { capabilities.webSearch = true }
         if supportsSystemMessages { capabilities.systemMessages = true }
         if supportsAssistantPrefill { capabilities.assistantPrefill = true }
-        if supportsToolChoice { capabilities.toolChoice = true }
+        if supportsToolChoice { capabilities.toolChoiceSupported = true }
     }
 }
 

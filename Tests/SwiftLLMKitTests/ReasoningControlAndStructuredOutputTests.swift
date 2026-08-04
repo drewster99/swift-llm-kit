@@ -30,7 +30,7 @@ struct ReasoningControlEmissionTests {
     @Test("thinkingBlock: enabling is emitted only when the model can be switched ON")
     func thinkingBlockEnable() throws {
         let allowed = try provider(control: .thinkingBlock,
-                                   capabilities: ModelCapabilities([.reasoningEnableable]))
+                                   capabilities: ModelCapabilities([.reasoningCanBeEnabled]))
         let body = allowed.buildRequestBody(messages: [.user("hi")], tools: [],
                                             overrides: LLMCallOverrides(reasoningEnabled: true))
         #expect((body["thinking"] as? [String: Any])?["type"] as? String == "enabled")
@@ -46,13 +46,13 @@ struct ReasoningControlEmissionTests {
     @Test("thinkingBlock: disabling requires the DISABLE capability, not the enable one")
     func thinkingBlockDisableIsSeparate() throws {
         let onlyEnableable = try provider(control: .thinkingBlock,
-                                          capabilities: ModelCapabilities([.reasoningEnableable]))
+                                          capabilities: ModelCapabilities([.reasoningCanBeEnabled]))
         let body = onlyEnableable.buildRequestBody(messages: [.user("hi")], tools: [],
                                                    overrides: LLMCallOverrides(reasoningEnabled: false))
         #expect(body["thinking"] == nil, "enable-able must not imply disable-able")
 
         let disableable = try provider(control: .thinkingBlock,
-                                       capabilities: ModelCapabilities([.reasoningDisableable]))
+                                       capabilities: ModelCapabilities([.reasoningCanBeDisabled]))
         let ok = disableable.buildRequestBody(messages: [.user("hi")], tools: [],
                                               overrides: LLMCallOverrides(reasoningEnabled: false))
         #expect((ok["thinking"] as? [String: Any])?["type"] as? String == "disabled")
@@ -60,7 +60,7 @@ struct ReasoningControlEmissionTests {
 
     @Test("thinkingBlock: keep and budget ride the same object, each on its own capability")
     func thinkingBlockKeepAndBudget() throws {
-        let caps = ModelCapabilities([.reasoningEnableable, .thinkingKeepAll, .thinkingBudgetTokens])
+        let caps = ModelCapabilities([.reasoningCanBeEnabled, .thinkingSupportsKeepAll, .thinkingSupportsTokenBudget])
         let p = try provider(control: .thinkingBlock, capabilities: caps)
         let body = p.buildRequestBody(messages: [.user("hi")], tools: [],
                                       overrides: LLMCallOverrides(reasoningEnabled: true,
@@ -72,7 +72,7 @@ struct ReasoningControlEmissionTests {
 
         // Without the keep capability the rest still goes; only the unsupported key is dropped.
         let noKeep = try provider(control: .thinkingBlock,
-                                  capabilities: ModelCapabilities([.reasoningEnableable]))
+                                  capabilities: ModelCapabilities([.reasoningCanBeEnabled]))
         let partial = noKeep.buildRequestBody(messages: [.user("hi")], tools: [],
                                               overrides: LLMCallOverrides(reasoningEnabled: true, keepThinking: true))
         #expect((partial["thinking"] as? [String: Any])?["keep"] == nil)
@@ -93,7 +93,7 @@ struct ReasoningControlEmissionTests {
     func noOnOffMechanisms() throws {
         for control in [ReasoningControl.reasoningEffortOnly, .unsupported] {
             let p = try provider(control: control,
-                                 capabilities: ModelCapabilities([.reasoningEnableable]))
+                                 capabilities: ModelCapabilities([.reasoningCanBeEnabled]))
             let body = p.buildRequestBody(messages: [.user("hi")], tools: [],
                                           overrides: LLMCallOverrides(reasoningEnabled: true))
             #expect(body["thinking"] == nil, "\(control) has no on/off knob")
@@ -105,7 +105,7 @@ struct ReasoningControlEmissionTests {
 
     @Test("response_format is emitted only for the mode the model actually supports")
     func structuredOutputGating() throws {
-        let objectOnly = try provider(capabilities: ModelCapabilities([.structuredOutputJSONObject]))
+        let objectOnly = try provider(capabilities: ModelCapabilities([.structuredOutputSupportsJSONObject]))
         let ok = objectOnly.buildRequestBody(messages: [.user("hi")], tools: [],
                                              overrides: LLMCallOverrides(responseFormat: .jsonObject))
         #expect((ok["response_format"] as? [String: Any])?["type"] as? String == "json_object")
@@ -125,7 +125,7 @@ struct ReasoningControlEmissionTests {
 
     @Test("json_schema carries name, strict and the schema at the documented path")
     func schemaWireShape() throws {
-        let p = try provider(capabilities: ModelCapabilities([.responseSchema]))
+        let p = try provider(capabilities: ModelCapabilities([.structuredOutputSupportsJSONSchema]))
         let body = p.buildRequestBody(
             messages: [.user("hi")], tools: [],
             overrides: LLMCallOverrides(responseFormat: .jsonSchema(
@@ -144,7 +144,7 @@ struct ReasoningControlEmissionTests {
     func strictToolGating() throws {
         let tool = LLMToolDefinition(name: "t", description: "d", parameters: [:], strict: true)
 
-        let supported = try provider(capabilities: ModelCapabilities([.strictToolDefinitions]))
+        let supported = try provider(capabilities: ModelCapabilities([.toolDefinitionsSupportStrict]))
         let body = supported.buildRequestBody(messages: [.user("hi")], tools: [tool])
         let fn = try #require((body["tools"] as? [[String: Any]])?.first?["function"] as? [String: Any])
         #expect(fn["strict"] as? Bool == true)
@@ -332,7 +332,7 @@ struct NonOpenAIReasoningOverrideTests {
     /// capability.
     @Test("Gemini emits thinkingConfig.thinkingBudget once the model is known to take it")
     func geminiEmitsBudget() throws {
-        let body = try gemini(thinkingBudget: 4096, capabilities: ModelCapabilities([.thinkingBudgetTokens]))
+        let body = try gemini(thinkingBudget: 4096, capabilities: ModelCapabilities([.thinkingSupportsTokenBudget]))
             .buildRequestBody(messages: [.user("hi")], tools: [])
         let config = try #require(body["generationConfig"] as? [String: Any])
         let thinking = try #require(config["thinkingConfig"] as? [String: Any])
@@ -346,7 +346,7 @@ struct NonOpenAIReasoningOverrideTests {
     @Test("Gemini sends nothing while support is UNKNOWN, not just when it is denied")
     func geminiFailsClosedOnUnknown() throws {
         for capabilities in [ModelCapabilities(), {
-            var denied = ModelCapabilities(); denied[.thinkingBudgetTokens] = false; return denied
+            var denied = ModelCapabilities(); denied[.thinkingSupportsTokenBudget] = false; return denied
         }()] {
             let body = try gemini(thinkingBudget: 4096, capabilities: capabilities)
                 .buildRequestBody(messages: [.user("hi")], tools: [])
@@ -357,7 +357,7 @@ struct NonOpenAIReasoningOverrideTests {
 
     @Test("Gemini: an explicit off sends budget 0 on a supporting model")
     func geminiExplicitOff() throws {
-        let off = try gemini(thinkingBudget: 4096, capabilities: ModelCapabilities([.thinkingBudgetTokens]))
+        let off = try gemini(thinkingBudget: 4096, capabilities: ModelCapabilities([.thinkingSupportsTokenBudget]))
             .buildRequestBody(messages: [.user("hi")], tools: [],
                               overrides: LLMCallOverrides(reasoningEnabled: false))
         let config = try #require(off["generationConfig"] as? [String: Any])
@@ -522,19 +522,19 @@ struct WireShapeConsolidationTests {
 
     @Test("Every option maps to its own capability, and .auto rides the general one")
     func capabilityPerOption() {
-        #expect(LLMToolChoice.auto.requiredCapability == .toolChoice)
-        #expect(LLMToolChoice.required.requiredCapability == .toolChoiceRequired)
-        #expect(LLMToolChoice.textOnly.requiredCapability == .toolChoiceNone)
-        #expect(LLMToolChoice.specific(name: "t").requiredCapability == .toolChoiceSpecificFunction)
+        #expect(LLMToolChoice.auto.requiredCapability == .toolChoiceSupported)
+        #expect(LLMToolChoice.required.requiredCapability == .toolChoiceSupportsValueRequired)
+        #expect(LLMToolChoice.textOnly.requiredCapability == .toolChoiceSupportsValueNone)
+        #expect(LLMToolChoice.specific(name: "t").requiredCapability == .toolChoiceSupportsNamedFunction)
     }
 
-    /// `.toolChoice` is written by the decoders as "accepts the PARAMETER", so a stated NO must
+    /// `.toolChoiceSupported` is written by the decoders as "accepts the PARAMETER", so a stated NO must
     /// suppress every option — not just `auto`.
     @Test("A stated NO on the tool_choice parameter suppresses all four options")
     func parameterLevelNoSuppressesEverything() throws {
         var caps = ModelCapabilities()
-        caps[.toolChoice] = false
-        caps[.toolChoiceRequired] = true          // option says yes, parameter says no
+        caps[.toolChoiceSupported] = false
+        caps[.toolChoiceSupportsValueRequired] = true          // option says yes, parameter says no
         let provider = OpenAICompatibleProvider(
             configuration: ModelConfiguration(name: "t", providerID: "p", modelID: "m"),
             provider: ModelProvider(id: "p", name: "p", apiType: .openAICompatible,
@@ -576,7 +576,7 @@ struct UniformGatingTests {
     @Test("Anthropic honours a stated NO on a tool_choice option")
     func anthropicGatesToolChoice() throws {
         let tool = CapabilityProbe.makeProbeTool()
-        let denied = try anthropic(denying(.toolChoiceRequired)).buildRequestBody(
+        let denied = try anthropic(denying(.toolChoiceSupportsValueRequired)).buildRequestBody(
             messages: [.user("hi")], tools: [tool], toolChoice: .required)
         #expect(denied["tool_choice"] == nil)
 
@@ -590,7 +590,7 @@ struct UniformGatingTests {
     @Test("Ollama honours a stated NO on a tool_choice option")
     func ollamaGatesToolChoice() throws {
         let tool = CapabilityProbe.makeProbeTool()
-        let denied = try ollama(denying(.toolChoiceRequired)).buildRequestBody(
+        let denied = try ollama(denying(.toolChoiceSupportsValueRequired)).buildRequestBody(
             messages: [.user("hi")], tools: [tool], toolChoice: .required)
         #expect(denied["tool_choice"] == nil)
 
@@ -601,7 +601,7 @@ struct UniformGatingTests {
 
     @Test("Anthropic honours a stated NO on the thinking budget")
     func anthropicGatesThinkingBudget() throws {
-        let denied = try anthropic(denying(.thinkingBudgetTokens), thinkingBudget: 4096)
+        let denied = try anthropic(denying(.thinkingSupportsTokenBudget), thinkingBudget: 4096)
             .buildRequestBody(messages: [.user("hi")], tools: [])
         #expect(denied["thinking"] == nil)
 
@@ -615,7 +615,7 @@ struct UniformGatingTests {
     /// The parameter-level NO is a precondition over every option, on every route.
     @Test("A stated NO on the parameter suppresses all four options everywhere")
     func parameterLevelNoIsUniform() throws {
-        let caps = denying(.toolChoice)
+        let caps = denying(.toolChoiceSupported)
         let tool = CapabilityProbe.makeProbeTool()
         for choice: LLMToolChoice in [.auto, .required, .textOnly, .specific(name: "x")] {
             #expect(!caps.permitsToolChoice(choice), "\(choice) should be suppressed")
@@ -630,8 +630,8 @@ struct UniformGatingTests {
     @Test("permitsToolChoice is the one rule the probe and the providers share")
     func probeAndProvidersShareTheRule() {
         #expect(ModelCapabilities().permitsToolChoice(.required), "unknown permits")
-        #expect(!denying(.toolChoiceRequired).permitsToolChoice(.required))
-        #expect(!denying(.toolChoice).permitsToolChoice(.required), "the parameter-level veto wins")
+        #expect(!denying(.toolChoiceSupportsValueRequired).permitsToolChoice(.required))
+        #expect(!denying(.toolChoiceSupported).permitsToolChoice(.required), "the parameter-level veto wins")
     }
 }
 

@@ -181,7 +181,7 @@ struct GeminiProvider: LLMProvider {
         // nothing and avoids sending `thinkingConfig` to the non-thinking Gemini models that
         // reject it — which would break requests that work today.
         if let budget = geminiBudget, budget >= 0,
-           modelCapabilities.state(of: .thinkingBudgetTokens) == true {
+           modelCapabilities.state(of: .thinkingSupportsTokenBudget) == true {
             // Clamp to the measured ceiling like the other providers; zero passes through, since
             // it is the off switch rather than a budget.
             let sent = budget == 0 ? 0

@@ -93,22 +93,22 @@ public enum ModelFactsFieldTable {
         .field("capabilities.audioInput", \ModelFacts.capabilities.audioInput),
         .field("capabilities.audioOutput", \ModelFacts.capabilities.audioOutput),
         .field("capabilities.videoInput", \ModelFacts.capabilities.videoInput),
-        .field("capabilities.responseSchema", \ModelFacts.capabilities.responseSchema),
+        .field("capabilities.structuredOutputSupportsJSONSchema", \ModelFacts.capabilities.structuredOutputSupportsJSONSchema),
         .field("capabilities.parallelToolCalls", \ModelFacts.capabilities.parallelToolCalls),
         .field("capabilities.pdfInput", \ModelFacts.capabilities.pdfInput),
         .field("capabilities.webSearch", \ModelFacts.capabilities.webSearch),
         .field("capabilities.systemMessages", \ModelFacts.capabilities.systemMessages),
         .field("capabilities.assistantPrefill", \ModelFacts.capabilities.assistantPrefill),
-        .field("capabilities.toolChoice", \ModelFacts.capabilities.toolChoice),
-        .field("capabilities.reasoningEnableable", \ModelFacts.capabilities.reasoningEnableable),
-        .field("capabilities.reasoningDisableable", \ModelFacts.capabilities.reasoningDisableable),
-        .field("capabilities.thinkingKeepAll", \ModelFacts.capabilities.thinkingKeepAll),
-        .field("capabilities.thinkingBudgetTokens", \ModelFacts.capabilities.thinkingBudgetTokens),
-        .field("capabilities.structuredOutputJSONObject", \ModelFacts.capabilities.structuredOutputJSONObject),
-        .field("capabilities.toolChoiceRequired", \ModelFacts.capabilities.toolChoiceRequired),
-        .field("capabilities.toolChoiceNone", \ModelFacts.capabilities.toolChoiceNone),
-        .field("capabilities.toolChoiceSpecificFunction", \ModelFacts.capabilities.toolChoiceSpecificFunction),
-        .field("capabilities.strictToolDefinitions", \ModelFacts.capabilities.strictToolDefinitions),
+        .field("capabilities.toolChoiceSupported", \ModelFacts.capabilities.toolChoiceSupported),
+        .field("capabilities.reasoningCanBeEnabled", \ModelFacts.capabilities.reasoningCanBeEnabled),
+        .field("capabilities.reasoningCanBeDisabled", \ModelFacts.capabilities.reasoningCanBeDisabled),
+        .field("capabilities.thinkingSupportsKeepAll", \ModelFacts.capabilities.thinkingSupportsKeepAll),
+        .field("capabilities.thinkingSupportsTokenBudget", \ModelFacts.capabilities.thinkingSupportsTokenBudget),
+        .field("capabilities.structuredOutputSupportsJSONObject", \ModelFacts.capabilities.structuredOutputSupportsJSONObject),
+        .field("capabilities.toolChoiceSupportsValueRequired", \ModelFacts.capabilities.toolChoiceSupportsValueRequired),
+        .field("capabilities.toolChoiceSupportsValueNone", \ModelFacts.capabilities.toolChoiceSupportsValueNone),
+        .field("capabilities.toolChoiceSupportsNamedFunction", \ModelFacts.capabilities.toolChoiceSupportsNamedFunction),
+        .field("capabilities.toolDefinitionsSupportStrict", \ModelFacts.capabilities.toolDefinitionsSupportStrict),
         .field("capabilities.toolResultRoundTrip", \ModelFacts.capabilities.toolResultRoundTrip),
     ]
 
@@ -250,13 +250,13 @@ extension LiteLLMEntry {
         if supportsAudioInput { facts.capabilities.audioInput = true }
         if supportsAudioOutput { facts.capabilities.audioOutput = true }
         if supportsVideoInput { facts.capabilities.videoInput = true }
-        if supportsResponseSchema { facts.capabilities.responseSchema = true }
+        if supportsResponseSchema { facts.capabilities.structuredOutputSupportsJSONSchema = true }
         if supportsParallelToolCalls { facts.capabilities.parallelToolCalls = true }
         if supportsPdfInput { facts.capabilities.pdfInput = true }
         if supportsWebSearch { facts.capabilities.webSearch = true }
         if supportsSystemMessages { facts.capabilities.systemMessages = true }
         if supportsAssistantPrefill { facts.capabilities.assistantPrefill = true }
-        if supportsToolChoice { facts.capabilities.toolChoice = true }
+        if supportsToolChoice { facts.capabilities.toolChoiceSupported = true }
         // Chat is the one capability LiteLLM can state NEGATIVELY: mode != chat is a definitive
         // "not a chat model" (embedding/moderation/…), so record the known false.
         if !supportsChatCompletions { facts.capabilities.chat = false }

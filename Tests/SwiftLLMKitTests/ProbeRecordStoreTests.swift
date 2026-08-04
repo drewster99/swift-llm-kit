@@ -63,15 +63,15 @@ struct ProbeProjectionTests {
     @Test("Probed capabilities project regardless of the account-scoped gate")
     func capabilityFindingsAreModelScoped() {
         var profile = ModelProfile(providerID: "p", modelID: "m")
-        profile[.structuredOutputJSONObject] = .established(true, "returned the requested JSON")
-        profile[.strictToolDefinitions] = .established(false, "rejected strict")
+        profile[.structuredOutputSupportsJSONObject] = .established(true, "returned the requested JSON")
+        profile[.toolDefinitionsSupportStrict] = .established(false, "rejected strict")
         profile.maxThinkingBudgetTokens = .established(32_000, "largest accepted")
 
         for includeAccountScoped in [true, false] {
             let facts = profile.asEmpiricalFacts(includeAccountScoped: includeAccountScoped)
-            #expect(facts.capabilities.structuredOutputJSONObject == true,
+            #expect(facts.capabilities.structuredOutputSupportsJSONObject == true,
                     "dropped with includeAccountScoped=\(includeAccountScoped)")
-            #expect(facts.capabilities.strictToolDefinitions == false,
+            #expect(facts.capabilities.toolDefinitionsSupportStrict == false,
                     "a stated NO must project too, not just a YES")
             #expect(facts.maxThinkingBudgetTokens == 32_000)
         }
@@ -82,9 +82,9 @@ struct ProbeProjectionTests {
     @Test("A decoded capability finding does not project as empirical")
     func decodedFindingsDoNotProject() {
         var profile = ModelProfile(providerID: "p", modelID: "m")
-        profile[.structuredOutputJSONObject] = .decoded(true, "stated in /models")
+        profile[.structuredOutputSupportsJSONObject] = .decoded(true, "stated in /models")
         let facts = profile.asEmpiricalFacts(includeAccountScoped: true)
-        #expect(facts.capabilities.structuredOutputJSONObject == nil)
+        #expect(facts.capabilities.structuredOutputSupportsJSONObject == nil)
     }
 
     @Test("Effort levels project only from a COMPLETE-ladder probe")

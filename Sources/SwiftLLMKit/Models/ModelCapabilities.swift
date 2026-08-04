@@ -7,39 +7,39 @@ public enum ModelCapability: String, CaseIterable, Sendable, Codable, Hashable {
     /// every other capability (no special default; unknown is not "supported"); see
     /// ``ModelInfo/supportsChatCompletions``, a view over this capability. Consumers that must not
     /// penalize an unmeasured model gate on a KNOWN non-chat (`state(of: .chat) == false`).
-    case chat
+    case chat = "chat"
     /// The model is a BATCH-only variant (async batch-submission API, e.g. OpenRouter's `:batch`
     /// slug), so it cannot back an interactive agent. Present so a role can forbid it via
     /// `mustNotBePresent: [.batch]`; it is never a thing to REQUIRE.
-    case batch
-    case toolUse
-    case vision
-    case reasoning
-    case codeExecution
-    case promptCaching
-    case computerUse
-    case audioInput
-    case audioOutput
-    case videoInput
-    case responseSchema
-    case parallelToolCalls
-    case pdfInput
-    case webSearch
-    case systemMessages
-    case assistantPrefill
-    case toolChoice
+    case batch = "batch"
+    case toolUse = "toolUse"
+    case vision = "vision"
+    case reasoning = "reasoning"
+    case codeExecution = "codeExecution"
+    case promptCaching = "promptCaching"
+    case computerUse = "computerUse"
+    case audioInput = "audioInput"
+    case audioOutput = "audioOutput"
+    case videoInput = "videoInput"
+    case structuredOutputSupportsJSONSchema = "responseSchema"
+    case parallelToolCalls = "parallelToolCalls"
+    case pdfInput = "pdfInput"
+    case webSearch = "webSearch"
+    case systemMessages = "systemMessages"
+    case assistantPrefill = "assistantPrefill"
+    case toolChoiceSupported = "toolChoice"
     /// Empirical-only: the model called a tool AND consumed the tool result (returned the probe's
     /// identifier). The half an agent actually depends on; no vendor publishes it.
-    case toolResultRoundTrip
-    case reasoningEnableable
-    case reasoningDisableable
-    case thinkingKeepAll
-    case thinkingBudgetTokens
-    case structuredOutputJSONObject
-    case toolChoiceRequired
-    case toolChoiceNone
-    case toolChoiceSpecificFunction
-    case strictToolDefinitions
+    case toolResultRoundTrip = "toolResultRoundTrip"
+    case reasoningCanBeEnabled = "reasoningEnableable"
+    case reasoningCanBeDisabled = "reasoningDisableable"
+    case thinkingSupportsKeepAll = "thinkingKeepAll"
+    case thinkingSupportsTokenBudget = "thinkingBudgetTokens"
+    case structuredOutputSupportsJSONObject = "structuredOutputJSONObject"
+    case toolChoiceSupportsValueRequired = "toolChoiceRequired"
+    case toolChoiceSupportsValueNone = "toolChoiceNone"
+    case toolChoiceSupportsNamedFunction = "toolChoiceSpecificFunction"
+    case toolDefinitionsSupportStrict = "strictToolDefinitions"
 
     /// Short human-readable label, used by ``ModelCapabilities/enabledLabels``.
     public var label: String {
@@ -55,22 +55,22 @@ public enum ModelCapability: String, CaseIterable, Sendable, Codable, Hashable {
         case .audioInput:          return "Audio In"
         case .audioOutput:         return "Audio Out"
         case .videoInput:          return "Video In"
-        case .responseSchema:      return "Schema"
+        case .structuredOutputSupportsJSONSchema:      return "Schema"
         case .parallelToolCalls:   return "Parallel Tools"
         case .pdfInput:            return "PDF"
         case .webSearch:           return "Web Search"
         case .systemMessages:      return "System Msgs"
         case .assistantPrefill:    return "Prefill"
-        case .toolChoice:          return "Tool Choice"
-        case .reasoningEnableable: return "Reasoning can be turned ON"
-        case .reasoningDisableable: return "Reasoning can be turned OFF"
-        case .thinkingKeepAll: return "Supports `thinking.keep`"
-        case .thinkingBudgetTokens: return "Accepts a thinking token budget"
-        case .structuredOutputJSONObject: return "Structured output: `json_object`"
-        case .toolChoiceRequired: return "Tool choice: `required`"
-        case .toolChoiceNone: return "Tool choice: `none`"
-        case .toolChoiceSpecificFunction: return "Tool choice: specific function"
-        case .strictToolDefinitions: return "Supports `strict` tool definitions"
+        case .toolChoiceSupported:          return "Tool Choice"
+        case .reasoningCanBeEnabled: return "Reasoning can be turned ON"
+        case .reasoningCanBeDisabled: return "Reasoning can be turned OFF"
+        case .thinkingSupportsKeepAll: return "Supports `thinking.keep`"
+        case .thinkingSupportsTokenBudget: return "Accepts a thinking token budget"
+        case .structuredOutputSupportsJSONObject: return "Structured output: `json_object`"
+        case .toolChoiceSupportsValueRequired: return "Tool choice: `required`"
+        case .toolChoiceSupportsValueNone: return "Tool choice: `none`"
+        case .toolChoiceSupportsNamedFunction: return "Tool choice: specific function"
+        case .toolDefinitionsSupportStrict: return "Supports `strict` tool definitions"
         case .toolResultRoundTrip: return "Tool Round-Trip"
         }
     }
@@ -89,22 +89,22 @@ public enum ModelCapability: String, CaseIterable, Sendable, Codable, Hashable {
         case .audioInput:          return "Audio input"
         case .audioOutput:         return "Audio output"
         case .videoInput:          return "Video input"
-        case .responseSchema:      return "Response schema"
+        case .structuredOutputSupportsJSONSchema:      return "Response schema"
         case .parallelToolCalls:   return "Parallel tool calls"
         case .pdfInput:            return "PDF input"
         case .webSearch:           return "Web search"
         case .systemMessages:      return "System messages"
         case .assistantPrefill:    return "Assistant prefill"
-        case .toolChoice:          return "Tool choice"
-        case .reasoningEnableable: return "reasoning on"
-        case .reasoningDisableable: return "reasoning off"
-        case .thinkingKeepAll: return "thinking keep"
-        case .thinkingBudgetTokens: return "thinking budget"
-        case .structuredOutputJSONObject: return "json_object"
-        case .toolChoiceRequired: return "tool_choice req"
-        case .toolChoiceNone: return "tool_choice none"
-        case .toolChoiceSpecificFunction: return "tool_choice fn"
-        case .strictToolDefinitions: return "strict tools"
+        case .toolChoiceSupported:          return "Tool choice"
+        case .reasoningCanBeEnabled: return "reasoning on"
+        case .reasoningCanBeDisabled: return "reasoning off"
+        case .thinkingSupportsKeepAll: return "thinking keep"
+        case .thinkingSupportsTokenBudget: return "thinking budget"
+        case .structuredOutputSupportsJSONObject: return "json_object"
+        case .toolChoiceSupportsValueRequired: return "tool_choice req"
+        case .toolChoiceSupportsValueNone: return "tool_choice none"
+        case .toolChoiceSupportsNamedFunction: return "tool_choice fn"
+        case .toolDefinitionsSupportStrict: return "strict tools"
         case .toolResultRoundTrip: return "Tool result round-trip"
         }
     }
@@ -123,22 +123,22 @@ public enum ModelCapability: String, CaseIterable, Sendable, Codable, Hashable {
         case .audioInput:          return "Model can accept audio as input."
         case .audioOutput:         return "Model can produce audio output."
         case .videoInput:          return "Model can accept video as input."
-        case .responseSchema:      return "Model supports structured-output / JSON-schema responses."
+        case .structuredOutputSupportsJSONSchema:      return "Model supports structured-output / JSON-schema responses."
         case .parallelToolCalls:   return "Model can emit multiple tool calls in one turn."
         case .pdfInput:            return "Model can accept PDF documents as input."
         case .webSearch:           return "Model has a built-in web-search tool."
         case .systemMessages:      return "Model accepts a system message (some backends fold it into the first user turn)."
         case .assistantPrefill:    return "Model supports prefilling the start of the assistant's reply."
-        case .toolChoice:          return "Model honors an explicit `tool_choice` selection."
-        case .reasoningEnableable: return "Model accepts an explicit request to enable reasoning. Some reasoning models only ever reason and reject being switched on."
-        case .reasoningDisableable: return "Model accepts an explicit request to disable reasoning. Thinking-only models reject this."
-        case .thinkingKeepAll: return "Model accepts `thinking.keep: \"all\"` to retain reasoning content across turns. Applies ONLY to the `thinking` block mechanism (Moonshot/DeepSeek); meaningless on any other reasoning control."
-        case .thinkingBudgetTokens: return "Model accepts an explicit reasoning token budget rather than only a named effort level."
-        case .structuredOutputJSONObject: return "Model accepts `response_format: {type: json_object}` and returns syntactically valid JSON."
-        case .toolChoiceRequired: return "Model accepts `tool_choice: required` (Anthropic `any`), forcing some tool call."
-        case .toolChoiceNone: return "Model accepts `tool_choice: none`, forbidding tool calls while tools are present."
-        case .toolChoiceSpecificFunction: return "Model accepts `tool_choice` naming one function, forcing that tool."
-        case .strictToolDefinitions: return "Model accepts `strict: true` on a function definition for guaranteed schema adherence."
+        case .toolChoiceSupported:          return "Model honors an explicit `tool_choice` selection."
+        case .reasoningCanBeEnabled: return "Model accepts an explicit request to enable reasoning. Some reasoning models only ever reason and reject being switched on."
+        case .reasoningCanBeDisabled: return "Model accepts an explicit request to disable reasoning. Thinking-only models reject this."
+        case .thinkingSupportsKeepAll: return "Model accepts `thinking.keep: \"all\"` to retain reasoning content across turns. Applies ONLY to the `thinking` block mechanism (Moonshot/DeepSeek); meaningless on any other reasoning control."
+        case .thinkingSupportsTokenBudget: return "Model accepts an explicit reasoning token budget rather than only a named effort level."
+        case .structuredOutputSupportsJSONObject: return "Model accepts `response_format: {type: json_object}` and returns syntactically valid JSON."
+        case .toolChoiceSupportsValueRequired: return "Model accepts `tool_choice: required` (Anthropic `any`), forcing some tool call."
+        case .toolChoiceSupportsValueNone: return "Model accepts `tool_choice: none`, forbidding tool calls while tools are present."
+        case .toolChoiceSupportsNamedFunction: return "Model accepts `tool_choice` naming one function, forcing that tool."
+        case .toolDefinitionsSupportStrict: return "Model accepts `strict: true` on a function definition for guaranteed schema adherence."
         case .toolResultRoundTrip: return "Model consumes tool RESULTS, not just emits calls — the half an agent depends on. Probe-established; force only to correct a stale verdict."
         }
     }
@@ -199,23 +199,23 @@ public struct ModelCapabilities: Sendable, Equatable {
     public var audioInput: Bool { get { has(.audioInput) } set { set(.audioInput, newValue) } }
     public var audioOutput: Bool { get { has(.audioOutput) } set { set(.audioOutput, newValue) } }
     public var videoInput: Bool { get { has(.videoInput) } set { set(.videoInput, newValue) } }
-    public var responseSchema: Bool { get { has(.responseSchema) } set { set(.responseSchema, newValue) } }
+    public var structuredOutputSupportsJSONSchema: Bool { get { has(.structuredOutputSupportsJSONSchema) } set { set(.structuredOutputSupportsJSONSchema, newValue) } }
     public var parallelToolCalls: Bool { get { has(.parallelToolCalls) } set { set(.parallelToolCalls, newValue) } }
     public var pdfInput: Bool { get { has(.pdfInput) } set { set(.pdfInput, newValue) } }
     public var webSearch: Bool { get { has(.webSearch) } set { set(.webSearch, newValue) } }
     public var systemMessages: Bool { get { has(.systemMessages) } set { set(.systemMessages, newValue) } }
     public var assistantPrefill: Bool { get { has(.assistantPrefill) } set { set(.assistantPrefill, newValue) } }
-    public var toolChoice: Bool { get { has(.toolChoice) } set { set(.toolChoice, newValue) } }
+    public var toolChoiceSupported: Bool { get { has(.toolChoiceSupported) } set { set(.toolChoiceSupported, newValue) } }
     public var toolResultRoundTrip: Bool { get { has(.toolResultRoundTrip) } set { set(.toolResultRoundTrip, newValue) } }
-    public var reasoningEnableable: Bool { get { has(.reasoningEnableable) } set { set(.reasoningEnableable, newValue) } }
-    public var reasoningDisableable: Bool { get { has(.reasoningDisableable) } set { set(.reasoningDisableable, newValue) } }
-    public var thinkingKeepAll: Bool { get { has(.thinkingKeepAll) } set { set(.thinkingKeepAll, newValue) } }
-    public var thinkingBudgetTokens: Bool { get { has(.thinkingBudgetTokens) } set { set(.thinkingBudgetTokens, newValue) } }
-    public var structuredOutputJSONObject: Bool { get { has(.structuredOutputJSONObject) } set { set(.structuredOutputJSONObject, newValue) } }
-    public var toolChoiceRequired: Bool { get { has(.toolChoiceRequired) } set { set(.toolChoiceRequired, newValue) } }
-    public var toolChoiceNone: Bool { get { has(.toolChoiceNone) } set { set(.toolChoiceNone, newValue) } }
-    public var toolChoiceSpecificFunction: Bool { get { has(.toolChoiceSpecificFunction) } set { set(.toolChoiceSpecificFunction, newValue) } }
-    public var strictToolDefinitions: Bool { get { has(.strictToolDefinitions) } set { set(.strictToolDefinitions, newValue) } }
+    public var reasoningCanBeEnabled: Bool { get { has(.reasoningCanBeEnabled) } set { set(.reasoningCanBeEnabled, newValue) } }
+    public var reasoningCanBeDisabled: Bool { get { has(.reasoningCanBeDisabled) } set { set(.reasoningCanBeDisabled, newValue) } }
+    public var thinkingSupportsKeepAll: Bool { get { has(.thinkingSupportsKeepAll) } set { set(.thinkingSupportsKeepAll, newValue) } }
+    public var thinkingSupportsTokenBudget: Bool { get { has(.thinkingSupportsTokenBudget) } set { set(.thinkingSupportsTokenBudget, newValue) } }
+    public var structuredOutputSupportsJSONObject: Bool { get { has(.structuredOutputSupportsJSONObject) } set { set(.structuredOutputSupportsJSONObject, newValue) } }
+    public var toolChoiceSupportsValueRequired: Bool { get { has(.toolChoiceSupportsValueRequired) } set { set(.toolChoiceSupportsValueRequired, newValue) } }
+    public var toolChoiceSupportsValueNone: Bool { get { has(.toolChoiceSupportsValueNone) } set { set(.toolChoiceSupportsValueNone, newValue) } }
+    public var toolChoiceSupportsNamedFunction: Bool { get { has(.toolChoiceSupportsNamedFunction) } set { set(.toolChoiceSupportsNamedFunction, newValue) } }
+    public var toolDefinitionsSupportStrict: Bool { get { has(.toolDefinitionsSupportStrict) } set { set(.toolDefinitionsSupportStrict, newValue) } }
 
     /// Whether the capability is KNOWN-TRUE. Unknown and known-false both read `false`.
     public func contains(_ capability: ModelCapability) -> Bool { has(capability) }
@@ -250,13 +250,13 @@ public struct ModelCapabilities: Sendable, Equatable {
         audioInput: Bool = false,
         audioOutput: Bool = false,
         videoInput: Bool = false,
-        responseSchema: Bool = false,
+        structuredOutputSupportsJSONSchema: Bool = false,
         parallelToolCalls: Bool = false,
         pdfInput: Bool = false,
         webSearch: Bool = false,
         systemMessages: Bool = false,
         assistantPrefill: Bool = false,
-        toolChoice: Bool = false,
+        toolChoiceSupported: Bool = false,
         toolResultRoundTrip: Bool = false
     ) {
         var trues = Set<ModelCapability>()
@@ -269,13 +269,13 @@ public struct ModelCapabilities: Sendable, Equatable {
         if audioInput { trues.insert(.audioInput) }
         if audioOutput { trues.insert(.audioOutput) }
         if videoInput { trues.insert(.videoInput) }
-        if responseSchema { trues.insert(.responseSchema) }
+        if structuredOutputSupportsJSONSchema { trues.insert(.structuredOutputSupportsJSONSchema) }
         if parallelToolCalls { trues.insert(.parallelToolCalls) }
         if pdfInput { trues.insert(.pdfInput) }
         if webSearch { trues.insert(.webSearch) }
         if systemMessages { trues.insert(.systemMessages) }
         if assistantPrefill { trues.insert(.assistantPrefill) }
-        if toolChoice { trues.insert(.toolChoice) }
+        if toolChoiceSupported { trues.insert(.toolChoiceSupported) }
         if toolResultRoundTrip { trues.insert(.toolResultRoundTrip) }
         states = Dictionary(uniqueKeysWithValues: trues.map { ($0, true) })
     }
@@ -345,6 +345,6 @@ public extension ModelCapabilities {
     /// the provider then suppressed. A second copy of this rule is how the probe's record and the
     /// wire drift apart.
     func permitsToolChoice(_ choice: LLMToolChoice) -> Bool {
-        state(of: .toolChoice) != false && state(of: choice.requiredCapability) != false
+        state(of: .toolChoiceSupported) != false && state(of: choice.requiredCapability) != false
     }
 }

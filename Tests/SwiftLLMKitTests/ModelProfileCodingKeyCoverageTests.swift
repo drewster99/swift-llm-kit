@@ -41,7 +41,7 @@ struct ModelProfileCodingKeyCoverageTests {
             trailingSystemMessage: .established(true, "echoed the nonce"),
             generalEffortLevels: ["low": .established(true, "accepted")],
             reasoningEffortLevels: ["high": .established(false, "rejected")],
-            capabilityFindings: [ModelCapability.structuredOutputJSONObject.rawValue: .established(true, "returned JSON")],
+            capabilityFindings: [ModelCapability.structuredOutputSupportsJSONObject.rawValue: .established(true, "returned JSON")],
             maxThinkingBudgetTokens: .established(32_000, "largest accepted budget"),
             callCount: 12,
             duration: 34.5

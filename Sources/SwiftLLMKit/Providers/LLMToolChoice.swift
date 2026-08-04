@@ -58,10 +58,10 @@ public extension LLMToolChoice {
     /// because it is the endpoint's own default whenever tools are present.
     var requiredCapability: ModelCapability {
         switch self {
-        case .auto: return .toolChoice
-        case .required: return .toolChoiceRequired
-        case .textOnly: return .toolChoiceNone
-        case .specific: return .toolChoiceSpecificFunction
+        case .auto: return .toolChoiceSupported
+        case .required: return .toolChoiceSupportsValueRequired
+        case .textOnly: return .toolChoiceSupportsValueNone
+        case .specific: return .toolChoiceSupportsNamedFunction
         }
     }
 

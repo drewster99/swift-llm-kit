@@ -209,7 +209,7 @@ public struct ModelFetchService: Sendable {
                     facts.capabilities.pdfInput = capabilities.pdfInput?.supported
                     facts.capabilities.reasoning = capabilities.thinking?.supported
                     facts.capabilities.codeExecution = capabilities.codeExecution?.supported
-                    facts.capabilities.responseSchema = capabilities.structuredOutputs?.supported
+                    facts.capabilities.structuredOutputSupportsJSONSchema = capabilities.structuredOutputs?.supported
 
                     // The payload's own per-model level list, ordered by our rank table (the
                     // payload is a JSON object, so it carries no order itself). An effort block
@@ -406,10 +406,10 @@ public struct ModelFetchService: Sendable {
                 let params = Set(model.supportedParameters ?? [])
                 if !params.isEmpty {
                     facts.capabilities.toolUse = params.contains("tools")
-                    facts.capabilities.toolChoice = params.contains("tool_choice")
+                    facts.capabilities.toolChoiceSupported = params.contains("tool_choice")
                     if params.contains("parallel_tool_calls") { facts.capabilities.parallelToolCalls = true }
                     facts.capabilities.reasoning = params.contains("reasoning") || params.contains("reasoning_effort") || params.contains("include_reasoning")
-                    facts.capabilities.responseSchema = params.contains("structured_outputs") || params.contains("response_format")
+                    facts.capabilities.structuredOutputSupportsJSONSchema = params.contains("structured_outputs") || params.contains("response_format")
                     if params.contains("web_search_options") { facts.capabilities.webSearch = true }
                 }
 
@@ -569,7 +569,7 @@ public struct ModelFetchService: Sendable {
                         var facts = shared
                         facts.displayName = "\(model.id) (\(entry.provider))"
                         facts.capabilities.toolUse = entry.supportsTools
-                        facts.capabilities.responseSchema = entry.supportsStructuredOutput
+                        facts.capabilities.structuredOutputSupportsJSONSchema = entry.supportsStructuredOutput
                         facts.maxInputTokens = entry.contextLength
                         facts.isFree = entry.isFree
                         if let p = entry.pricing {
