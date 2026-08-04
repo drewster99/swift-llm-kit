@@ -26,7 +26,7 @@ with `Optional.none`.
 
 **Nine capabilities added**, each an independent fact: reasoning enable and disable are separate
 (Kimi documents models supporting only one direction), as are `json_object` and `json_schema`
-(DeepSeek documents the former with the latter unconfirmed). `responseSchema` was REUSED for schema
+(DeepSeek documents the former with the latter unconfirmed). `responseSchema` (since renamed `structuredOutputSupportsJSONSchema`) was REUSED for schema
 mode rather than duplicated.
 
 **Capabilities that cannot be exercised are not worth recording**, so the request surface grew to

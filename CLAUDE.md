@@ -122,7 +122,7 @@ has said" would be written identically and mean opposite things.
 reasoning on every not-yet-recorded model is a regression dressed up as caution.
 
 Whether reasoning can be turned on and whether it can be turned OFF are SEPARATE capabilities
-(`reasoningEnableable` / `reasoningDisableable`) — Kimi documents models supporting only one
+(`reasoningCanBeEnabled` / `reasoningCanBeDisabled`) — Kimi documents models supporting only one
 direction.
 
 ### Capabilities are vendor facts; every new one needs five edits and a UI slot
@@ -167,6 +167,31 @@ general effort, which a gated endpoint silently drops — turning "no error" int
 `probe(...)` refuses to run it unless the caller passes
 `supportsUnconditionalGeneralEffortEmission`. That guard used to live in the single caller, where it
 could be forgotten.
+
+### Capability names say what is TRUE of the model, not what the parameter is
+
+Two grammatical families, and mixing them is what made the first batch unreadable:
+
+- **"the model HAS X"** — `vision`, `toolUse`, `pdfInput`, `parallelToolCalls`. The noun IS the
+  feature and reads correctly.
+- **"the model ACCEPTS value v of parameter p"** — these must SAY so. Written as
+  `<parameter><Value>` they parse as an adjective phrase about the parameter and invert:
+  `toolChoiceRequired` reads "a tool_choice is required", the opposite of "the tool_choice
+  parameter accepts the value `required`". Hence `toolChoiceSupportsValueRequired`,
+  `structuredOutputSupportsJSONObject`, `thinkingSupportsKeepAll`, `toolDefinitionsSupportStrict`.
+
+A capability must also not share a spelling with a request KNOB. `thinkingBudgetTokens` was a Bool
+capability and an `Int?` on `LLMCallOverrides`, twenty lines apart in the same file; it is
+`thinkingSupportsTokenBudget` now.
+
+**`ModelCapability` rawValues are the persisted keys and are PINNED explicitly**, with a guard test
+asserting them against an independent table plus completeness. They were implicit, so a rename
+silently rewrote the key and orphaned every record using it — `vision` alone is in 1,414. Renaming a
+case is free; changing a wire string fails the build. When a wire string genuinely must change, it
+is a one-time script (`scripts/migrate_capability_wire_names.py`) run with the app quit, landing in
+the SAME commit as the pin change — the app reads exactly one spelling at a time. A record carrying
+an unmigrated spelling decodes with that capability ABSENT, never wrong, which is silent; that is
+why the script verifies zero survivors rather than trusting the pass.
 
 ### One source per wire shape, and per gate rule
 
