@@ -609,16 +609,4 @@ struct AnthropicProvider: LLMProvider {
     /// wire shape. Anthropic uses "any" for the "require some tool" mode
     /// (not "required" as OpenAI does), and a `name` field on the `"tool"`
     /// case to pin a specific tool.
-    private static func encodeAnthropicToolChoice(_ choice: LLMToolChoice) -> [String: Any] {
-        switch choice {
-        case .auto:
-            return ["type": "auto"]
-        case .required:
-            return ["type": "any"]
-        case .textOnly:
-            return ["type": "none"]
-        case .specific(let name):
-            return ["type": "tool", "name": name]
-        }
-    }
 }

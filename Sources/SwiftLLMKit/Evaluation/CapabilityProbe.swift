@@ -198,10 +198,21 @@ public enum CapabilityProbe {
                 logger.error("Probe \(modelID, privacy: .public): no answer — \(error.localizedDescription, privacy: .public)")
                 return fail(.inconclusive, detail, forced: true)
             case .refusedTools, .refusedOurRequest:
-                // Either way, retry with the choice free. A refusal naming tools might still only
-                // be about tool_choice; a refusal about something else might be cured by dropping
-                // the parameter it disliked. Only the retry can tell, and guessing here is how a
-                // false negative gets written.
+                // Retrying is only informative if the first attempt actually CARRIED tool_choice.
+                // When the model's record already denied the option the provider suppressed it, so
+                // the first call was ALREADY free-choice and an identical retry spends a paid call
+                // to learn nothing. Classify it exactly as the retry's own catch would.
+                guard forced else {
+                    switch Self.classifyFailure(error) {
+                    case .refusedTools:
+                        return fail(.rejected, detail, forced: false)
+                    case .refusedOurRequest, .noAnswer, .paymentRequired:
+                        return fail(.inconclusive, detail, forced: false)
+                    }
+                }
+                // A refusal naming tools might still only be about tool_choice; a refusal about
+                // something else might be cured by dropping the parameter it disliked. Only the
+                // retry can tell, and guessing here is how a false negative gets written.
                 forced = false
                 do {
                     calls?.increment()

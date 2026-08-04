@@ -634,3 +634,47 @@ struct UniformGatingTests {
         #expect(!denying(.toolChoice).permitsToolChoice(.required), "the parameter-level veto wins")
     }
 }
+
+/// The per-provider `tool_choice` encoders were deleted when the shape moved onto `LLMToolChoice`.
+/// These pin the exact bytes each family expects, so that consolidation cannot have quietly changed
+/// what goes on the wire — and so a future edit to the enum cannot either.
+@Suite("tool_choice wire bytes, per provider family")
+struct ToolChoiceWireByteTests {
+
+    @Test("Anthropic's shapes are objects, and 'force some tool' is `any`")
+    func anthropicBytes() throws {
+        let expected: [(LLMToolChoice, [String: String])] = [
+            (.auto, ["type": "auto"]),
+            (.required, ["type": "any"]),
+            (.textOnly, ["type": "none"]),
+            (.specific(name: "get_x"), ["type": "tool", "name": "get_x"])
+        ]
+        for (choice, want) in expected {
+            let got = try #require(choice.anthropicWireValue.rawValue as? [String: Any])
+            #expect(NSDictionary(dictionary: got) == NSDictionary(dictionary: want),
+                    "\(choice) encoded as \(got), expected \(want)")
+        }
+    }
+
+    @Test("The OpenAI family uses enum strings, and an object only for a named function")
+    func openAIBytes() throws {
+        #expect(LLMToolChoice.auto.openAIWireValue.rawValue as? String == "auto")
+        #expect(LLMToolChoice.required.openAIWireValue.rawValue as? String == "required")
+        #expect(LLMToolChoice.textOnly.openAIWireValue.rawValue as? String == "none",
+                "OpenAI spells 'no tools' as `none`, not `textOnly`")
+        let specific = try #require(
+            LLMToolChoice.specific(name: "get_x").openAIWireValue.rawValue as? [String: Any])
+        #expect(specific["type"] as? String == "function")
+        #expect((specific["function"] as? [String: Any])?["name"] as? String == "get_x")
+    }
+
+    /// Ollama follows the OpenAI shape — its deleted encoder was byte-identical, and its own
+    /// comment said so. Pinned because "identical today" is not the same as "identical tomorrow".
+    @Test("Ollama resolves to the OpenAI shape, not a copy of it")
+    func ollamaMatchesOpenAI() throws {
+        for choice: LLMToolChoice in [.auto, .required, .textOnly, .specific(name: "get_x")] {
+            let ollama = try #require(choice.wireValue(for: .ollama))
+            #expect(ollama == choice.openAIWireValue, "\(choice) diverged from the OpenAI shape")
+        }
+    }
+}
