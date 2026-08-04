@@ -328,28 +328,106 @@ struct NonOpenAIReasoningOverrideTests {
         #expect(body["thinking"] == nil, "an explicit off must beat a configured budget")
     }
 
-    /// The field the provider documented and never sent.
-    @Test("Gemini emits thinkingConfig.thinkingBudget for a configured budget")
+    /// The field the provider documented and never sent — now emitted, but only on a KNOWN-true
+    /// capability.
+    @Test("Gemini emits thinkingConfig.thinkingBudget once the model is known to take it")
     func geminiEmitsBudget() throws {
-        let body = try gemini(thinkingBudget: 4096).buildRequestBody(messages: [.user("hi")], tools: [])
+        let body = try gemini(thinkingBudget: 4096, capabilities: ModelCapabilities([.thinkingBudgetTokens]))
+            .buildRequestBody(messages: [.user("hi")], tools: [])
         let config = try #require(body["generationConfig"] as? [String: Any])
         let thinking = try #require(config["thinkingConfig"] as? [String: Any])
         #expect(thinking["thinkingBudget"] as? Int == 4096)
     }
 
-    @Test("Gemini: an explicit off sends budget 0; a known-false capability sends nothing")
-    func geminiOffAndGated() throws {
-        let off = try gemini(thinkingBudget: 4096).buildRequestBody(
-            messages: [.user("hi")], tools: [], overrides: LLMCallOverrides(reasoningEnabled: false))
+    /// Fails CLOSED, and that asymmetry with Alibaba's `enable_thinking` fallback is deliberate:
+    /// that one preserves behaviour the library already had, whereas this field was NEVER emitted.
+    /// Failing open would start sending `thinkingConfig` to the non-thinking Gemini models that
+    /// reject it — breaking requests that work today, to no benefit.
+    @Test("Gemini sends nothing while support is UNKNOWN, not just when it is denied")
+    func geminiFailsClosedOnUnknown() throws {
+        for capabilities in [ModelCapabilities(), {
+            var denied = ModelCapabilities(); denied[.thinkingBudgetTokens] = false; return denied
+        }()] {
+            let body = try gemini(thinkingBudget: 4096, capabilities: capabilities)
+                .buildRequestBody(messages: [.user("hi")], tools: [])
+            let config = try #require(body["generationConfig"] as? [String: Any])
+            #expect(config["thinkingConfig"] == nil)
+        }
+    }
+
+    @Test("Gemini: an explicit off sends budget 0 on a supporting model")
+    func geminiExplicitOff() throws {
+        let off = try gemini(thinkingBudget: 4096, capabilities: ModelCapabilities([.thinkingBudgetTokens]))
+            .buildRequestBody(messages: [.user("hi")], tools: [],
+                              overrides: LLMCallOverrides(reasoningEnabled: false))
         let config = try #require(off["generationConfig"] as? [String: Any])
         #expect((config["thinkingConfig"] as? [String: Any])?["thinkingBudget"] as? Int == 0,
                 "Gemini turns thinking off with a zero budget")
+    }
+}
 
-        var caps = ModelCapabilities()
-        caps[.thinkingBudgetTokens] = false
-        let gated = try gemini(thinkingBudget: 4096, capabilities: caps)
-            .buildRequestBody(messages: [.user("hi")], tools: [])
-        let gatedConfig = try #require(gated["generationConfig"] as? [String: Any])
-        #expect(gatedConfig["thinkingConfig"] == nil, "a stated NO suppresses it")
+
+/// Anthropic requires `max_tokens > budget_tokens`, and `max_tokens` must not exceed the output
+/// ceiling the caller sanctioned. Both were violated in turn: first by clamping only when a
+/// per-call max override existed, then by raising `max_tokens` past the ceiling to satisfy the
+/// pairing. The budget is the negotiable side.
+@Suite("Anthropic thinking budget never produces an invalid pairing")
+struct AnthropicBudgetPairingTests {
+
+    private func body(maxTokens: Int, budget: Int?, overrideMax: Int? = nil,
+                      perCallBudget: Int? = nil, modelCap: Int? = nil) throws -> [String: Any] {
+        let provider = AnthropicProvider(
+            configuration: ModelConfiguration(name: "t", providerID: "p", modelID: "m",
+                                              maxOutputTokens: maxTokens, thinkingBudget: budget),
+            provider: ModelProvider(id: "p", name: "p", apiType: .anthropic,
+                                    endpoint: try #require(URL(string: "https://api.anthropic.com"))),
+            readAPIKey: { "" }, modelMaxOutputTokens: modelCap)
+        return try provider.buildRequestBody(
+            messages: [.user("hi")], tools: [],
+            overrides: LLMCallOverrides(reasoningEffort: nil, thinkingBudgetTokens: perCallBudget,
+                                        maxOutputTokens: overrideMax))
+    }
+
+    private func pairing(_ body: [String: Any]) -> (maxTokens: Int, budget: Int)? {
+        guard let maxTokens = body["max_tokens"] as? Int,
+              let thinking = body["thinking"] as? [String: Any],
+              let budget = thinking["budget_tokens"] as? Int else { return nil }
+        return (maxTokens, budget)
+    }
+
+    /// With the model's cap KNOWN, `max_tokens` may not be raised past it — so the budget is what
+    /// gives way. The configured value is only a preference; the cap is the hard limit.
+    @Test("A budget beyond the MODEL's cap degrades the budget, not the ceiling")
+    func oversizedBudgetDegrades() throws {
+        let sent = try body(maxTokens: 4096, budget: nil, perCallBudget: 8192, modelCap: 4096)
+        let pair = try #require(pairing(sent))
+        #expect(pair.maxTokens <= 4096, "max_tokens must not exceed the model's own cap")
+        #expect(pair.budget < pair.maxTokens, "the pairing must still be legal")
+    }
+
+    /// With the cap UNKNOWN, raising is the long-standing behaviour and stays — refusing to raise
+    /// would break thinking on every model whose cap has not been catalogued.
+    @Test("An unknown model cap still raises max_tokens to clear the budget")
+    func unknownCapStillRaises() throws {
+        let sent = try body(maxTokens: 4096, budget: 4096)
+        let pair = try #require(pairing(sent))
+        #expect(pair.budget == 4096, "the configured depth survives")
+        #expect(pair.maxTokens == 4097, "raised to clear it — the old code emitted 4096/4096, which is invalid")
+    }
+
+    @Test("A tight per-call cap is raised back toward the configured ceiling — the documented case")
+    func tightPerCallCapIsRaised() throws {
+        let sent = try body(maxTokens: 64_000, budget: 8192, overrideMax: 512)
+        let pair = try #require(pairing(sent))
+        #expect(pair.budget == 8192, "the configured depth survives a tight per-call cap")
+        #expect(pair.maxTokens > pair.budget)
+        #expect(pair.maxTokens <= 64_000)
+    }
+
+    @Test("A model cap too small for any legal budget emits no thinking block")
+    func noRoomEmitsNothing() throws {
+        // Cap 512 leaves 511 tokens of room — below the 1024 floor, so no legal budget exists.
+        let sent = try body(maxTokens: 512, budget: 8192, modelCap: 512)
+        #expect(sent["thinking"] == nil, "a rejected request is worse than no thinking")
     }
 }

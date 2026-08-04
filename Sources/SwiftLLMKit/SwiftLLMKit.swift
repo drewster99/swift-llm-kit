@@ -1352,6 +1352,7 @@ public final class LLMKitManager {
         let reasoningControl = catalogModel?.reasoningControl
         let modelCapabilities = catalogModel?.capabilities ?? ModelCapabilities()
         let measuredMaxThinkingBudget = catalogModel?.maxThinkingBudgetTokens
+        let modelMaxOutputTokens = catalogModel?.maxOutputTokens
 
         let providerID = modelProvider.id
         let providerName = modelProvider.name
@@ -1373,7 +1374,8 @@ public final class LLMKitManager {
                 session: session,
                 behaviorFlags: flags,
                 generalEffortSupport: generalEffortSupport,
-                measuredMaxThinkingBudget: measuredMaxThinkingBudget
+                measuredMaxThinkingBudget: measuredMaxThinkingBudget,
+                modelMaxOutputTokens: modelMaxOutputTokens
             )
         case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaModel, .alibabaCloud, .openRouter:
             // `parallel_tool_calls: true` is sent by default for every OpenAI-compatible
