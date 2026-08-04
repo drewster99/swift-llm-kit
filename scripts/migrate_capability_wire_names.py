@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """ONE-TIME migration: rewrite persisted ModelCapability keys to their clarified names.
 
+STATUS: APPLIED on 2026-08-04 (6 probe records, 1,401 of 1,667 catalog models) and shipped in
+SwiftLLMKit 0.0.158 alongside the matching rawValue pins. It is idempotent, so re-running is a
+safe no-op; it is kept as the worked example of how a wire-string change is done here.
+
 Not part of the app, and deliberately not: this converges a fixed set of files ONCE, and a
 migration living in the app is a startup cost paid forever to fix a state that exists for a day.
 Run it manually, with the app quit, then ship the matching rawValue change.
@@ -40,8 +44,9 @@ Safety
 ------
 * Refuses to run while AgentSmith is running — it would overwrite from memory.
 * `--dry-run` reports exactly what would change and writes nothing.
-* Writes a timestamped backup of every file it touches BEFORE changing anything, and restores
-  from it if verification fails for any reason.
+* Writes a timestamped backup on the FIRST change, before any file is written, and restores from
+  it if verification fails for any reason. Backing up before scanning would copy 1,414 files to
+  protect a run that turns out to have nothing to do.
 * Verifies afterwards that no legacy key survives, that no new key collided with an existing one,
   and that the record and model counts are unchanged.
 * Idempotent: a second run finds nothing to do rather than double-applying.
@@ -162,8 +167,6 @@ def main() -> int:
     # --- probe records -------------------------------------------------------------------------
     probe_files = sorted(probes_dir.glob("*.json")) if probes_dir.is_dir() else []
     changed_probes = 0
-    if probe_files:
-        back_up(probes_dir)
     for path in probe_files:
         try:
             record = json.loads(path.read_text())
@@ -173,6 +176,10 @@ def main() -> int:
         changed, clashes = migrate_probe_record(record)
         all_clashes += [f"{path.name}: {c}" for c in clashes]
         if changed:
+            # Backed up on the FIRST change rather than up front: a re-run finds nothing to do, and
+            # copying 1,414 files to protect a no-op just litters the directory with backups.
+            if not args.dry_run and not backups:
+                back_up(probes_dir)
             changed_probes += 1
             if not args.dry_run:
                 path.write_text(json.dumps(record, indent=2))
@@ -227,8 +234,12 @@ def main() -> int:
         restore()
         return 1
 
-    print("\nverified: no legacy key survives, counts unchanged")
-    print("NEXT: update the pinned rawValues in ModelCapabilities.swift to the new names, then rebuild.")
+    if changed_probes or changed_models:
+        print("\nverified: no legacy key survives, counts unchanged")
+        print("NEXT: update the pinned rawValues in ModelCapabilities.swift to the new names, "
+              "then rebuild. They must land in the SAME commit — the app reads one spelling.")
+    else:
+        print("\nnothing to migrate; the data already uses the current spellings")
     return 0
 
 
