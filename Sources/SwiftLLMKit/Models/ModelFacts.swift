@@ -41,6 +41,8 @@ public struct ModelFacts: Codable, Sendable, Equatable {
     /// HOW reasoning is switched on/off on this model. `nil` = no source has said; providers then
     /// keep their existing behaviour rather than silently disabling reasoning. See ``ReasoningControl``.
     public var reasoningControl: ReasoningControl?
+    /// Whose allowance a reasoning budget is spent from. `nil` = no source has said.
+    public var thinkingBudgetAccounting: ThinkingBudgetAccounting?
     /// Per-flag tri-state, same container reasoning as `capabilities`.
     public var behaviorFlags: BehaviorFlagsOverride
     public var deprecatedOn: Date?
@@ -107,6 +109,7 @@ public struct ModelFacts: Codable, Sendable, Equatable {
             generalEffort: generalEffort,
             reasoningEffort: reasoningEffort,
             reasoningControl: reasoningControl,
+            thinkingBudgetAccounting: thinkingBudgetAccounting,
             behaviorFlags: flags,
             deprecatedOn: deprecatedOn,
             deprecationReplacement: deprecationReplacement,
@@ -152,6 +155,7 @@ extension ModelMetadataOverride {
         facts.generalEffort = generalEffort
         facts.reasoningEffort = reasoningEffort
         facts.reasoningControl = reasoningControl
+        facts.thinkingBudgetAccounting = thinkingBudgetAccounting
         facts.hidden = hidden
         facts.isAvailable = isAvailable
         facts.isAccessDenied = isAccessDenied

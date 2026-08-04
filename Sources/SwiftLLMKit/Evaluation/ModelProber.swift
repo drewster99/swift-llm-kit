@@ -1142,6 +1142,102 @@ public enum ModelProber {
         }
     }
 
+
+    // MARK: - Thinking budget range
+
+    /// The largest reasoning token budget the endpoint accepts, and the smallest.
+    ///
+    /// Replaces the hardcoded 1024 floor (see ``ThinkingBudget``) with a measured per-model fact.
+    ///
+    /// **The ceiling is derived, never a constant.** When the budget is drawn from the output
+    /// allowance (Anthropic: `max_tokens` must EXCEED `budget_tokens`) a value above that allowance
+    /// is unreachable by construction, so searching past it buys only refusals that say nothing
+    /// about the budget. When the budget is a separate allowance the context window is the physical
+    /// bound. ``ThinkingBudgetAccounting/searchCeiling(maxOutputTokens:maxContextTokens:)`` picks
+    /// between them, and when neither limit is known this probe declines rather than inventing one.
+    ///
+    /// **An accepted absurd value reports `inconclusive`, not a number** — the same rule
+    /// ``probeMaxOutputTokens(llm:modelID:calls:maxContextTokens:allowBinarySearch:)`` follows. One
+    /// accepting call bounds nothing from above, and "at least this" was never useful.
+    ///
+    /// The Anthropic `max_tokens > budget` constraint needs no handling here: the provider's own
+    /// clamp raises `max_tokens` above whatever budget is configured, so each attempt is
+    /// automatically well-formed and a refusal is about the BUDGET rather than the pairing.
+    public static func probeThinkingBudgetRange(
+        llm: any LLMProvider,
+        modelID: String,
+        accounting: ThinkingBudgetAccounting?,
+        maxOutputTokens: Int?,
+        maxContextTokens: Int?,
+        makeProviderWithBudget: (Int) -> any LLMProvider,
+        calls: ProbeCallCounter? = nil
+    ) async -> ProbeFinding<Int> {
+        let started = Date()
+
+        /// One attempt: does the endpoint accept this budget? `nil` = it said nothing usable, which
+        /// must abort the search rather than be read as a rejection and halve the range.
+        func accepts(_ budget: Int) async -> Bool? {
+            calls?.increment()
+            do {
+                _ = try await makeProviderWithBudget(budget)
+                    .send(messages: [.user("Reply with the single word: ok")], tools: [])
+                return true
+            } catch {
+                if CapabilityProbe.classifyFailure(error).meansNoAnswer { return nil }
+                return false
+            }
+        }
+
+        guard let ceiling = (accounting ?? .drawnFromMaxOutputTokens)
+                .searchCeiling(maxOutputTokens: maxOutputTokens, maxContextTokens: maxContextTokens),
+              ceiling > ThinkingBudget.minimumTokens else {
+            return .inconclusive(
+                "no known output or context limit to bound the search — a ceiling here would be invented",
+                duration: Date().timeIntervalSince(started))
+        }
+
+        // If the whole allowance is accepted there is no ceiling to find inside it.
+        switch await accepts(ceiling) {
+        case true:
+            return .established(ceiling, "accepted a budget at the model's full \(ceiling)-token allowance",
+                                duration: Date().timeIntervalSince(started))
+        case nil:
+            return .inconclusive("the endpoint gave no usable answer at \(ceiling)",
+                                 duration: Date().timeIntervalSince(started))
+        case false:
+            break
+        }
+
+        // Binary search the accepted/rejected boundary. `low` is always known-good.
+        var low = ThinkingBudget.minimumTokens
+        var high = ceiling
+        switch await accepts(low) {
+        case false:
+            return .established(0, "rejected even the minimum budget of \(low) — no usable budget range",
+                                duration: Date().timeIntervalSince(started))
+        case nil:
+            return .inconclusive("the endpoint gave no usable answer at the \(low)-token minimum",
+                                 duration: Date().timeIntervalSince(started))
+        case true:
+            break
+        }
+
+        // Converge to within 1024 tokens: finer than the floor itself is precision the caller
+        // cannot use, and each extra step is a live API call.
+        while high - low > ThinkingBudget.minimumTokens {
+            let midpoint = low + (high - low) / 2
+            switch await accepts(midpoint) {
+            case true: low = midpoint
+            case false: high = midpoint
+            case nil:
+                return .established(low, "largest accepted budget before the endpoint stopped answering (≥ \(low))",
+                                    duration: Date().timeIntervalSince(started))
+            }
+        }
+        return .established(low, "largest accepted budget, converged within \(ThinkingBudget.minimumTokens) tokens",
+                            duration: Date().timeIntervalSince(started))
+    }
+
     // MARK: - Error → finding
 
     /// Maps a thrown error to a Bool finding for capabilities where a refusal that NAMES the

@@ -251,6 +251,9 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
     /// Override the reasoning control mechanism. Overridable because no vendor publishes it today —
     /// without a slot here the picker in the model editor would have nowhere to persist.
     public var reasoningControl: ReasoningControl?
+    /// Override the thinking-budget accounting. Overridable because it is unverified for most
+    /// providers and a wrong value silently truncates replies rather than erroring.
+    public var thinkingBudgetAccounting: ThinkingBudgetAccounting?
     /// Hide this model from pickers. Hiding is presentation, never deletion — every record
     /// underneath survives, and un-hiding is removing this one field.
     public var hidden: Bool?
@@ -271,6 +274,7 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
         generalEffort: EffortSupport? = nil,
         reasoningEffort: EffortSupport? = nil,
         reasoningControl: ReasoningControl? = nil,
+        thinkingBudgetAccounting: ThinkingBudgetAccounting? = nil,
         hidden: Bool? = nil,
         isAvailable: Bool? = nil,
         isAccessDenied: Bool? = nil
@@ -285,6 +289,7 @@ public struct ModelMetadataOverride: Codable, Sendable, Equatable {
         self.generalEffort = generalEffort
         self.reasoningEffort = reasoningEffort
         self.reasoningControl = reasoningControl
+        self.thinkingBudgetAccounting = thinkingBudgetAccounting
         self.hidden = hidden
         self.isAvailable = isAvailable
         self.isAccessDenied = isAccessDenied
