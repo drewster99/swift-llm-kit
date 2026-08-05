@@ -78,7 +78,15 @@ public enum ModelProber {
     /// Bumping this is what makes those records re-probe instead of being reused: the runner skips
     /// reuse for any record whose version is not current, and the local/downloaded merge prefers
     /// the higher version over the newer timestamp.
-    public static let proberVersion = 6
+    /// v7: two false-fact classes written under v6. `json_schema` was probed with a bare
+    /// `{"type":"object"}`, which OpenAI's validator refuses before the model sees it
+    /// ("'additionalProperties' is required to be supplied and to be false") — recorded as "does
+    /// not support json_schema" for 47 models, gpt-4o among them. And Anthropic's newest line
+    /// (opus-4-7/4-8, opus-5, sonnet-5, fable-5) was recorded as refusing every reasoning
+    /// mechanism because the candidate list lacked `thinking.type=adaptive`, the form those models
+    /// name in their own refusal. v6 `structuredOutputSupportsJSONSchema` and Anthropic reasoning
+    /// findings are suspect.
+    public static let proberVersion = 7
 
     /// Builds a probe seed from a TRI-STATE facts record — the preferred seeding path.
     ///
@@ -1186,6 +1194,16 @@ public enum ModelProber {
             // denial is how DeepSeek was marked as lacking a mode it documents.
             if lowered.contains("must contain the word") {
                 return .inconclusive("the probe's prompt failed the mode's precondition: \(detail)",
+                                     duration: Date().timeIntervalSince(started))
+            }
+            // Likewise a complaint about the SCHEMA WE SENT. It names `response_format`, so the
+            // clause below would grade it as a denial — which is how a bare `{"type":"object"}`
+            // (invalid under OpenAI's strict rules) marked 47 models as lacking json_schema.
+            // The schema is now valid; this stands so a future schema slip is inconclusive rather
+            // than a false vendor fact.
+            if lowered.contains("invalid schema") || lowered.contains("additionalproperties") {
+                return .inconclusive("the probe's own schema was rejected, which says nothing about "
+                                   + "the model: \(detail)",
                                      duration: Date().timeIntervalSince(started))
             }
             if !CapabilityProbe.classifyFailure(error).meansNoAnswer,

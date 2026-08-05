@@ -1122,3 +1122,91 @@ struct AnthropicAdaptiveThinkingTests {
             .budgetForcingOverrides(budget: 1024, pairedMaxTokens: 2048) == nil)
     }
 }
+
+/// The probed mechanism must reach the WIRE, or discovering it was decoration: a probed
+/// `.anthropicAdaptiveThinking` with no behavior flag set has to switch production emission to the
+/// adaptive form, because those models refuse the budgeted one by name.
+@Suite("A probed adaptive mechanism changes what Anthropic is sent")
+struct ProbedAdaptiveEmissionTests {
+
+    private func anthropic(reasoningControl: ReasoningControl?,
+                           thinkingBudget: Int?) throws -> AnthropicProvider {
+        AnthropicProvider(
+            configuration: ModelConfiguration(
+                name: "t", providerID: "p", modelID: "m", thinkingBudget: thinkingBudget),
+            provider: ModelProvider(
+                id: "p", name: "p", apiType: .anthropic,
+                endpoint: try #require(URL(string: "https://api.anthropic.com/v1"))),
+            readAPIKey: { "k" },
+            behaviorFlags: BehaviorFlags(),          // deliberately NOT the flag — the probe decides
+            reasoningControl: reasoningControl)
+    }
+
+    @Test("Probed adaptive emits {type: adaptive} with no budget, flag unset")
+    func probedAdaptiveEmitsAdaptive() throws {
+        let provider = try anthropic(reasoningControl: .anthropicAdaptiveThinking, thinkingBudget: 4096)
+        let body = try provider.buildRequestBody(messages: [.user("hi")], tools: [])
+        let thinking = try #require(body["thinking"] as? [String: Any])
+        #expect(thinking["type"] as? String == "adaptive")
+        #expect(thinking["budget_tokens"] == nil,
+                "a budget alongside adaptive is the 400 these models return")
+    }
+
+    @Test("A probed BUDGETED mechanism keeps the budgeted form")
+    func probedBudgetedStaysBudgeted() throws {
+        let provider = try anthropic(reasoningControl: .anthropicThinking, thinkingBudget: 4096)
+        let body = try provider.buildRequestBody(messages: [.user("hi")], tools: [])
+        let thinking = try #require(body["thinking"] as? [String: Any])
+        #expect(thinking["type"] as? String == "enabled")
+        #expect(thinking["budget_tokens"] as? Int == 4096)
+    }
+}
+
+/// The json_schema probe's own schema must be strict-valid, and a complaint about it must never be
+/// graded as a model fact. A bare {"type":"object"} fails OpenAI's validator — "'additionalProperties'
+/// is required to be supplied and to be false" — and that refusal names response_format, so it was
+/// recorded as "does not support json_schema" for 47 models, gpt-4o among them.
+@Suite("The probe's response schema is not the model's problem")
+struct ProbeResponseSchemaTests {
+
+    @Test("The shipped probe schema satisfies every strict-mode rule")
+    func probeSchemaIsStrictValid() {
+        let schema = CapabilityProbe.probeResponseSchema
+        #expect(schema["additionalProperties"] == .bool(false))
+        guard case .dictionary(let props)? = schema["properties"],
+              case .array(let required)? = schema["required"] else {
+            Issue.record("schema missing properties/required"); return
+        }
+        #expect(Set(required.compactMap { if case .string(let s) = $0 { return s } else { return nil } })
+                == Set(props.keys), "strict mode requires `required` to list every property")
+    }
+
+    private struct Failing: LLMProvider {
+        let body: String
+        func send(messages: [LLMMessage], tools: [LLMToolDefinition],
+                  overrides: LLMCallOverrides) async throws -> LLMResponse {
+            throw LLMProviderError.httpError(statusCode: 400, body: body)
+        }
+    }
+
+    @Test("The verbatim 'Invalid schema' refusal is inconclusive, not a denial")
+    func invalidSchemaComplaintIsInconclusive() async throws {
+        let real = #"{"error":{"message":"Invalid schema for response_format 'probe': In context=(), 'additionalProperties' is required to be supplied and to be false.","type":"invalid_request_error","param":"response_format"}}"#
+        let finding = await ModelProber.probeStructuredOutput(
+            .jsonSchema(name: "probe", schema: CapabilityProbe.probeResponseSchema),
+            apiType: .openAICompatible,
+            makeProviderForcing: { _ in Failing(body: real) })
+        #expect(try #require(finding).status == .inconclusive,
+                "this exact body marked 47 models as lacking json_schema")
+    }
+
+    @Test("A genuine json_schema denial still establishes false")
+    func genuineDenialStillFalse() async throws {
+        let real = #"{"error":{"message":"Invalid parameter: 'response_format' of type 'json_schema' is not supported with this model.","type":"invalid_request_error"}}"#
+        let finding = await ModelProber.probeStructuredOutput(
+            .jsonSchema(name: "probe", schema: CapabilityProbe.probeResponseSchema),
+            apiType: .openAICompatible,
+            makeProviderForcing: { _ in Failing(body: real) })
+        #expect(try #require(finding).value == false)
+    }
+}

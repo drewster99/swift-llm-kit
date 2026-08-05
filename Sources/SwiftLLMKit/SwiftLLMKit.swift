@@ -1385,6 +1385,7 @@ public final class LLMKitManager {
                 readAPIKey: readAPIKey, verboseLogging: verbose,
                 session: session,
                 behaviorFlags: flags,
+                reasoningControl: reasoningControl,
                 generalEffortSupport: generalEffortSupport,
                 measuredMaxThinkingBudget: measuredMaxThinkingBudget,
                 measuredMinThinkingBudget: measuredMinThinkingBudget,

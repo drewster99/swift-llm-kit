@@ -11,6 +11,9 @@ struct AnthropicProvider: LLMProvider {
     private let verboseLogging: Bool
     private let session: URLSession
     private let behaviorFlags: BehaviorFlags
+    /// The DISCOVERED reasoning mechanism, from the catalog (probe or override). nil = no source
+    /// has said, and the behavior flag alone decides.
+    private let reasoningControl: ReasoningControl?
     /// The model's general-effort support, resolved from the catalog at construction — the same
     /// path `behaviorFlags` travels, so effort gating is per-model data rather than an apiType
     /// branch. `nil` = unknown, which for general effort means "send it anyway" (fails open).
@@ -34,6 +37,7 @@ struct AnthropicProvider: LLMProvider {
         verboseLogging: Bool = false,
         session: URLSession = llmURLSession,
         behaviorFlags: BehaviorFlags = BehaviorFlags(),
+        reasoningControl: ReasoningControl? = nil,
         generalEffortSupport: EffortSupport? = nil,
         measuredMaxThinkingBudget: Int? = nil,
         measuredMinThinkingBudget: Int? = nil,
@@ -46,6 +50,7 @@ struct AnthropicProvider: LLMProvider {
         self.verboseLogging = verboseLogging
         self.session = session
         self.behaviorFlags = behaviorFlags
+        self.reasoningControl = reasoningControl
         self.generalEffortSupport = generalEffortSupport
         self.measuredMaxThinkingBudget = measuredMaxThinkingBudget
         self.measuredMinThinkingBudget = measuredMinThinkingBudget
@@ -166,7 +171,12 @@ struct AnthropicProvider: LLMProvider {
         // no budget_tokens. The `thinkingBudget` field is interpreted as a
         // boolean signal on adaptive-thinking models: > 0 means "thinking on,"
         // model picks depth itself (steered via `output_config.effort`).
+        // Either source suffices: the hand-set behavior flag (the only signal before the probe
+        // could discover the mechanism) or a measured `.anthropicAdaptiveThinking`. The newest
+        // models REFUSE the budgeted form by name, so sending it against a probed adaptive
+        // mechanism is a guaranteed 400.
         let usesAdaptiveThinking = behaviorFlags.requiresAdaptiveThinking
+            || reasoningControl == .anthropicAdaptiveThinking
         // Per-call overrides win over the configuration — that is what a per-call override is
         // for, and Anthropic ignored both entirely until now.
         let requestedBudget = overrides.thinkingBudgetTokens ?? configuration.thinkingBudget

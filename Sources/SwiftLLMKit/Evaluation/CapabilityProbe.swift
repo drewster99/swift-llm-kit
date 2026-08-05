@@ -112,6 +112,24 @@ public enum CapabilityProbe {
         )
     }
 
+    /// The schema the structured-output probe sends for `json_schema` mode.
+    ///
+    /// STRICT-VALID, which is not optional: OpenAI validates it before the model ever sees the
+    /// request and refuses a bare `{"type":"object"}` with *"'additionalProperties' is required to
+    /// be supplied and to be false"*. That refusal names `response_format`, so the probe graded it
+    /// as "this model does not support json_schema" — a false denial for 47 models in the
+    /// 2026-08-05 sweep, gpt-4o among them.
+    ///
+    /// One required string property rather than an empty object, so the reply is checkable rather
+    /// than trivially `{}`: every strict-mode rule is satisfied (`properties` present, `required`
+    /// listing all of them, `additionalProperties: false`).
+    public static let probeResponseSchema: [String: AnyCodable] = [
+        "type": .string("object"),
+        "properties": .dictionary(["answer": .dictionary(["type": .string("string")])]),
+        "required": .array([.string("answer")]),
+        "additionalProperties": .bool(false)
+    ]
+
     /// A random 9-character alphanumeric identifier the tool will mint.
     ///
     /// Random per run and per model so the round-trip can only be completed by actually calling
