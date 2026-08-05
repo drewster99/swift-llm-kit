@@ -123,6 +123,12 @@ public struct ModelProfile: Sendable, Codable, Equatable {
     /// Keyed by raw value rather than by the enum so a capability RETIRED from the enum leaves its
     /// records readable instead of failing the decode of everything around it.
     public var capabilityFindings: [String: ProbeFinding<Bool>]
+    /// Which mechanism the endpoint actually accepts for switching reasoning, when discovered.
+    ///
+    /// The only thing that has ever established this: no `/models` decoder writes it, so before the
+    /// mechanism probe it arrived solely from a stored override — which is why `thinking.keep`, the
+    /// one probe gated on it, could never fire.
+    public var reasoningControl: ProbeFinding<ReasoningControl>?
     /// The largest accepted reasoning token budget, when measured.
     public var maxThinkingBudgetTokens: ProbeFinding<Int>?
     /// The smallest accepted reasoning token budget, when measured.
@@ -172,6 +178,7 @@ public struct ModelProfile: Sendable, Codable, Equatable {
         case generalEffortLevels
         case reasoningEffortLevels
         case capabilityFindings
+        case reasoningControl
         case maxThinkingBudgetTokens
         case minThinkingBudgetTokens
         case callCount
@@ -205,6 +212,7 @@ public struct ModelProfile: Sendable, Codable, Equatable {
         generalEffortLevels: [String: ProbeFinding<Bool>] = [:],
         reasoningEffortLevels: [String: ProbeFinding<Bool>] = [:],
         capabilityFindings: [String: ProbeFinding<Bool>] = [:],
+        reasoningControl: ProbeFinding<ReasoningControl>? = nil,
         maxThinkingBudgetTokens: ProbeFinding<Int>? = nil,
         minThinkingBudgetTokens: ProbeFinding<Int>? = nil,
         callCount: Int = 0,
@@ -236,6 +244,7 @@ public struct ModelProfile: Sendable, Codable, Equatable {
         self.generalEffortLevels = generalEffortLevels
         self.reasoningEffortLevels = reasoningEffortLevels
         self.capabilityFindings = capabilityFindings
+        self.reasoningControl = reasoningControl
         self.maxThinkingBudgetTokens = maxThinkingBudgetTokens
         self.minThinkingBudgetTokens = minThinkingBudgetTokens
         self.callCount = callCount

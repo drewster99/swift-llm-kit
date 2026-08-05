@@ -252,6 +252,10 @@ extension ModelProfile {
             let alreadyProbed = current?.status == .established && current?.source == .probed
             if !alreadyProbed { capabilityFindings[raw] = finding }
         }
+        if let prior = prior.reasoningControl, prior.status == .established, prior.source == .probed {
+            let alreadyProbed = reasoningControl?.status == .established && reasoningControl?.source == .probed
+            if !alreadyProbed { reasoningControl = prior }
+        }
         for budget in [\ModelProfile.maxThinkingBudgetTokens, \ModelProfile.minThinkingBudgetTokens] {
             guard let priorBudget = prior[keyPath: budget],
                   priorBudget.status == .established, priorBudget.source == .probed else { continue }
@@ -290,6 +294,7 @@ extension ModelProfile {
             || capabilityFindings.values.contains { probed($0) }
             || (maxThinkingBudgetTokens.map(probed) ?? false)
             || (minThinkingBudgetTokens.map(probed) ?? false)
+            || (reasoningControl.map(probed) ?? false)
     }
 
     /// The vendor's own /models payload states this is not a chat model (chat decoded false) — a
@@ -366,6 +371,9 @@ extension ModelProfile {
         if let budget = minThinkingBudgetTokens, budget.status == .established, budget.source == .probed {
             facts.minThinkingBudgetTokens = budget.value
         }
+        if let control = reasoningControl, control.status == .established, control.source == .probed {
+            facts.reasoningControl = control.value
+        }
         if includeAccountScoped {
             facts.isAccessDenied = probed(isAccessDenied)
             // Complete-ladder gate: every known level must have an established probed answer
@@ -436,6 +444,7 @@ extension ModelProfile {
         stripLadder(&capabilityFindings)
         if var budget = maxThinkingBudgetTokens { strip(&budget); maxThinkingBudgetTokens = budget }
         if var budget = minThinkingBudgetTokens { strip(&budget); minThinkingBudgetTokens = budget }
+        if var control = reasoningControl { strip(&control); reasoningControl = control }
     }
 
     /// Strips ` (ref: <uuid>)` trace-ID suffixes from a provider error-evidence string.

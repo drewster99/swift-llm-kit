@@ -1697,6 +1697,169 @@ public enum ModelProber {
                                           reasoningTokens: tokens)
     }
 
+    // MARK: Reasoning mechanism discovery
+
+    /// One way of asking an endpoint to switch reasoning, and the body that does it.
+    private struct ReasoningMechanism {
+        let control: ReasoningControl
+        let enable: [String: AnyCodable]
+        let disable: [String: AnyCodable]
+        let label: String
+        let rejectionKeywords: [String]
+    }
+
+    private static var thinkingBlockMechanism: ReasoningMechanism {
+        .init(control: .thinkingBlock,
+              enable: ["thinking": .dictionary(["type": .string("enabled")])],
+              disable: ["thinking": .dictionary(["type": .string("disabled")])],
+              label: "thinking.type", rejectionKeywords: ["thinking", "reasoning"])
+    }
+
+    /// Anthropic's variant: `budget_tokens` is REQUIRED whenever thinking is enabled, and
+    /// `max_tokens` must exceed it. The probe's own 512-token default sits below the 1024 floor, so
+    /// both are forced — otherwise the request is malformed before the model considers it, which is
+    /// precisely how every Claude model came to be recorded as unable to reason.
+    private static var anthropicThinkingMechanism: ReasoningMechanism {
+        .init(control: .anthropicThinking,
+              enable: ["thinking": .dictionary(["type": .string("enabled"),
+                                                "budget_tokens": .int(ThinkingBudget.minimumTokens)]),
+                       "max_tokens": .int(ThinkingBudget.minimumTokens + 512)],
+              disable: ["thinking": .dictionary(["type": .string("disabled")])],
+              label: "thinking.type + budget_tokens", rejectionKeywords: ["thinking", "reasoning"])
+    }
+
+    /// OpenAI's reasoning models have no `thinking` block at all — they are switched with
+    /// `reasoning_effort`, and `"none"` is how newer ones are turned off.
+    private static var reasoningEffortMechanism: ReasoningMechanism {
+        .init(control: .reasoningEffortOnly,
+              enable: ["reasoning_effort": .string("low")],
+              disable: ["reasoning_effort": .string("none")],
+              label: "reasoning_effort", rejectionKeywords: ["reasoning_effort", "reasoning", "effort"])
+    }
+
+    private static var enableThinkingFlagMechanism: ReasoningMechanism {
+        .init(control: .enableThinkingFlag,
+              enable: ["enable_thinking": .bool(true)],
+              disable: ["enable_thinking": .bool(false)],
+              label: "enable_thinking", rejectionKeywords: ["enable_thinking", "thinking", "reasoning"])
+    }
+
+    /// Gemini nests its switch inside `generationConfig`; `mergeJSONOverrides` deep-merges
+    /// dictionaries, so the nested shape reaches the body intact. 0 is Gemini's documented "off".
+    private static var geminiThinkingMechanism: ReasoningMechanism {
+        func config(_ budget: Int) -> [String: AnyCodable] {
+            ["generationConfig": .dictionary(["thinkingConfig":
+                .dictionary(["thinkingBudget": .int(budget)])])]
+        }
+        return .init(control: .geminiThinkingConfig,
+                     enable: config(ThinkingBudget.minimumTokens), disable: config(0),
+                     label: "thinkingConfig.thinkingBudget",
+                     rejectionKeywords: ["thinkingconfig", "thinkingbudget", "thinking", "reasoning"])
+    }
+
+    /// The mechanisms worth trying for an endpoint, most likely first.
+    ///
+    /// `apiType` narrows but cannot decide: OpenAI, Moonshot and DeepSeek are all
+    /// `.openAICompatible`, and they do not share a mechanism — which is the whole reason this is
+    /// discovered rather than assumed. The `thinking` block is tried before `reasoning_effort`
+    /// there because it is the more specific mechanism: Moonshot accepts BOTH, and recording it as
+    /// effort-only would lose the block that `thinking.keep` and the budget hang off.
+    private static func reasoningMechanisms(for apiType: ProviderAPIType) -> [ReasoningMechanism] {
+        switch apiType {
+        case .anthropic:    return [anthropicThinkingMechanism]
+        case .gemini:       return [geminiThinkingMechanism]
+        case .alibabaCloud: return [enableThinkingFlagMechanism, thinkingBlockMechanism, reasoningEffortMechanism]
+        default:            return [thinkingBlockMechanism, reasoningEffortMechanism, enableThinkingFlagMechanism]
+        }
+    }
+
+    /// Which reasoning mechanism an endpoint actually speaks, and both switch directions measured
+    /// through it.
+    public struct ReasoningMechanismFindings: Sendable {
+        /// The mechanism the endpoint accepted; `nil` when none did.
+        public let control: ReasoningControl?
+        public let on: ReasoningToggleObservation
+        public let off: ReasoningToggleObservation
+    }
+
+    /// Finds the mechanism, then measures both directions through it.
+    ///
+    /// Replaces asking every endpoint the same way. Forcing a `thinking` block at OpenAI earns
+    /// `Unknown parameter: 'thinking'` — literally true and entirely misleading, because o-series
+    /// and GPT-5 reason perfectly well via `reasoning_effort`. Recording that as "reasoning cannot
+    /// be enabled" is a wrong fact about 60+ models, and it is the kind of wrong fact that looks
+    /// like a measurement.
+    ///
+    /// **Observed reasoning wins over mere acceptance.** A candidate that produces thinking tokens
+    /// settles it and the search stops; one that is merely accepted is held as a fallback and the
+    /// next candidate still gets a turn. That ordering matters because acceptance is cheap — an
+    /// endpoint that ignores unknown keys accepts every mechanism — while emitting reasoning is
+    /// something only the right one causes.
+    ///
+    /// `reasoningCanBeEnabled` is established `false` only when EVERY candidate was properly asked
+    /// and properly refused. One inconclusive candidate makes the whole answer inconclusive: not
+    /// having found the mechanism is not evidence that none exists.
+    public static func probeReasoningMechanism(
+        apiType: ProviderAPIType,
+        makeProviderForcing: @Sendable ([String: AnyCodable]) async -> any LLMProvider,
+        calls: ProbeCallCounter? = nil
+    ) async -> ReasoningMechanismFindings {
+        var demonstrated: (ReasoningMechanism, ReasoningToggleObservation)?
+        var merelyAccepted: (ReasoningMechanism, ReasoningToggleObservation)?
+        var attempts: [ProbeFinding<Bool>] = []
+
+        for mechanism in reasoningMechanisms(for: apiType) {
+            let observation = await observe(mechanism.enable, label: "\(mechanism.label) on",
+                                            keywords: mechanism.rejectionKeywords,
+                                            makeProviderForcing: makeProviderForcing, calls: calls)
+            attempts.append(observation.finding)
+            if observation.reasoningEmitted == true { demonstrated = (mechanism, observation); break }
+            if observation.finding.status == .established, observation.finding.value == true,
+               merelyAccepted == nil {
+                merelyAccepted = (mechanism, observation)
+            }
+        }
+
+        guard let (mechanism, on) = demonstrated ?? merelyAccepted else {
+            // Nothing accepted. A refusal from every mechanism we know how to ask is a real "no";
+            // an inconclusive anywhere means we may simply not have asked the right way.
+            let allRefused = !attempts.isEmpty
+                && attempts.allSatisfy { $0.status == .established && $0.value == false }
+            let finding: ProbeFinding<Bool> = allRefused
+                ? .established(false, "refused every reasoning mechanism tried: "
+                                    + reasoningMechanisms(for: apiType).map(\.label).joined(separator: ", "))
+                : .inconclusive("no reasoning mechanism was established; the endpoint neither accepted "
+                              + "nor clearly refused one")
+            let none = ReasoningToggleObservation(finding: finding, reasoningEmitted: nil, reasoningTokens: 0)
+            return ReasoningMechanismFindings(
+                control: nil, on: none,
+                off: .init(finding: .inconclusive("no mechanism to disable — none was established"),
+                           reasoningEmitted: nil, reasoningTokens: 0))
+        }
+
+        let off = await observe(mechanism.disable, label: "\(mechanism.label) off",
+                                keywords: mechanism.rejectionKeywords,
+                                makeProviderForcing: makeProviderForcing, calls: calls)
+        return ReasoningMechanismFindings(control: mechanism.control, on: on, off: off)
+    }
+
+    private static func observe(
+        _ forced: [String: AnyCodable], label: String, keywords: [String],
+        makeProviderForcing: @Sendable ([String: AnyCodable]) async -> any LLMProvider,
+        calls: ProbeCallCounter?
+    ) async -> ReasoningToggleObservation {
+        let (finding, response) = await probeForcedFieldObserving(
+            forced, description: label, rejectionKeywords: keywords,
+            makeProviderForcing: makeProviderForcing, calls: calls)
+        guard let response else {
+            return ReasoningToggleObservation(finding: finding, reasoningEmitted: nil, reasoningTokens: 0)
+        }
+        let tokens = response.usage?.reasoningTokens ?? 0
+        return ReasoningToggleObservation(finding: finding,
+                                          reasoningEmitted: tokens > 0 || response.reasoning?.isEmpty == false,
+                                          reasoningTokens: tokens)
+    }
+
     /// What the two switch directions, taken together, establish about the model.
     public struct ReasoningConclusions: Sendable {
         /// Whether the model reasons AT ALL (``ModelCapability/reasoning``).

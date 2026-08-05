@@ -908,3 +908,97 @@ struct ReasoningConclusionTests {
         #expect(c.canBeDisabled.evidence == "refused")
     }
 }
+
+/// Reasoning is switched a different way at every vendor, and `apiType` cannot decide which —
+/// OpenAI, Moonshot and DeepSeek are all `.openAICompatible` and do not agree. So the mechanism is
+/// discovered. Asking everyone for a `thinking` block earned OpenAI's "Unknown parameter" and
+/// recorded 60+ reasoning models as unable to reason.
+@Suite("Discovering how an endpoint switches reasoning")
+struct ReasoningMechanismDiscoveryTests {
+
+    /// Answers each forced body the way a named vendor would, so the search is exercised end to end.
+    private struct Endpoint: LLMProvider, @unchecked Sendable {
+        let forced: [String: AnyCodable]
+        let accepts: @Sendable (String) -> Bool          // which top-level key this vendor takes
+        let emitsReasoning: @Sendable (String) -> Bool   // and which one actually makes it think
+        let seen: Recorder
+        final class Recorder: @unchecked Sendable { var keys: [String] = [] }
+
+        func send(messages: [LLMMessage], tools: [LLMToolDefinition],
+                  overrides: LLMCallOverrides) async throws -> LLMResponse {
+            let key = forced.keys.sorted().first { $0 != "max_tokens" } ?? ""
+            seen.keys.append(key)
+            guard accepts(key) else {
+                throw LLMProviderError.httpError(statusCode: 400, body: "Unknown parameter: '\(key)'.")
+            }
+            let thinking = emitsReasoning(key)
+            return LLMResponse(text: "ok", reasoning: thinking ? "thought about it" : nil,
+                               usage: TokenUsage(inputTokens: 5, outputTokens: 2,
+                                                 reasoningTokens: thinking ? 64 : 0,
+                                                 cacheReadTokens: 0, cacheWriteTokens: 0))
+        }
+    }
+
+    private func discover(apiType: ProviderAPIType, accepts: @escaping @Sendable (String) -> Bool,
+                          emits: @escaping @Sendable (String) -> Bool)
+        async -> (ModelProber.ReasoningMechanismFindings, [String]) {
+        let rec = Endpoint.Recorder()
+        let found = await ModelProber.probeReasoningMechanism(
+            apiType: apiType,
+            makeProviderForcing: { Endpoint(forced: $0, accepts: accepts, emitsReasoning: emits, seen: rec) })
+        return (found, rec.keys)
+    }
+
+    /// The regression this exists for. OpenAI has no `thinking` block; it reasons via
+    /// `reasoning_effort`, and the old probe recorded that as "cannot enable reasoning".
+    @Test("An OpenAI reasoning model is found via reasoning_effort, not written off")
+    func openAIReasoningModelIsMeasured() async {
+        let (found, keys) = await discover(apiType: .openAICompatible,
+                                           accepts: { $0 == "reasoning_effort" },
+                                           emits: { $0 == "reasoning_effort" })
+        #expect(found.control == .reasoningEffortOnly)
+        #expect(found.on.finding.value == true, "the old probe recorded false here")
+        #expect(keys.contains("thinking"), "it still tries the block first")
+        #expect(keys.contains("reasoning_effort"))
+    }
+
+    /// Moonshot accepts BOTH, and the block is the more specific mechanism — `thinking.keep` and
+    /// the token budget hang off it, so recording effort-only would lose them.
+    @Test("A model that accepts both is recorded as the thinking-block model it is")
+    func thinkingBlockWinsWhenBothWork() async {
+        let (found, keys) = await discover(apiType: .openAICompatible,
+                                           accepts: { _ in true }, emits: { _ in true })
+        #expect(found.control == .thinkingBlock)
+        #expect(keys.first == "thinking")
+        #expect(keys.filter { $0 == "thinking" }.count == 2, "on and off through the same mechanism")
+    }
+
+    /// Acceptance is cheap — an endpoint that ignores unknown keys accepts everything — so a
+    /// candidate that actually produces thinking beats one that merely did not error.
+    @Test("A mechanism that demonstrably thinks beats one that was merely accepted")
+    func demonstratedBeatsAccepted() async {
+        let (found, _) = await discover(apiType: .openAICompatible,
+                                        accepts: { _ in true },
+                                        emits: { $0 == "reasoning_effort" })
+        #expect(found.control == .reasoningEffortOnly)
+        #expect(found.on.reasoningEmitted == true)
+    }
+
+    @Test("Anthropic is asked its own way, with the budget its API requires")
+    func anthropicUsesItsOwnShape() async {
+        let (found, keys) = await discover(apiType: .anthropic,
+                                           accepts: { $0 == "thinking" }, emits: { _ in true })
+        #expect(found.control == .anthropicThinking)
+        #expect(keys.allSatisfy { $0 == "thinking" }, "no other mechanism is tried at Anthropic")
+    }
+
+    /// A refusal from every mechanism is a real no — this is what should happen for gpt-4-turbo.
+    @Test("Refused everywhere is an established no")
+    func refusedEverywhereIsFalse() async {
+        let (found, _) = await discover(apiType: .openAICompatible,
+                                        accepts: { _ in false }, emits: { _ in false })
+        #expect(found.control == nil)
+        #expect(found.on.finding.value == false)
+        #expect(found.off.finding.status == .inconclusive, "nothing to disable")
+    }
+}

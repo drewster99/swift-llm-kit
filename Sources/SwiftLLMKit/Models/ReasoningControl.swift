@@ -48,6 +48,24 @@ public enum ReasoningControl: String, Sendable, Equatable, Hashable, Codable, Ca
     /// Gemini's `generationConfig.thinkingConfig.thinkingBudget`.
     case geminiThinkingConfig
 
+    /// Whether this mechanism carries a reasoning budget expressed IN TOKENS.
+    ///
+    /// Exhaustive so a mechanism added later cannot silently default to either answer. It gates the
+    /// budget range probes, which measure nothing on an endpoint that has no such parameter: it
+    /// ignores the field, accepts every value, and the searches converge on nonsense — a 1-token
+    /// floor and a fabricated ceiling, as happened to 72 models on 2026-08-04.
+    ///
+    /// ``reasoningEffortOnly`` is the case that matters here. OpenAI's reasoning models genuinely
+    /// reason, so "does it reason?" is the wrong question to gate a TOKEN budget on; depth there is
+    /// a named level, not a token count, and asking for one measures the endpoint's tolerance for
+    /// unknown keys.
+    public var carriesTokenBudget: Bool {
+        switch self {
+        case .thinkingBlock, .enableThinkingFlag, .anthropicThinking, .geminiThinkingConfig: return true
+        case .reasoningEffortOnly, .unsupported: return false
+        }
+    }
+
     /// Label for the per-model editor picker.
     public var editorTitle: String {
         switch self {
