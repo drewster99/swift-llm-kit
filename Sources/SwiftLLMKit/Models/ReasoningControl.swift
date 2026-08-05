@@ -66,6 +66,29 @@ public enum ReasoningControl: String, Sendable, Equatable, Hashable, Codable, Ca
         }
     }
 
+    /// The raw body fields that turn reasoning OFF for this mechanism, or nil when there is nothing
+    /// to turn off.
+    ///
+    /// Callers that need reasoning disabled for an unrelated measurement — the tool-choice probe,
+    /// which Moonshot and DeepSeek refuse while thinking is on — must send THIS rather than assume a
+    /// shape. Assuming `thinking: {type: disabled}` everywhere is what made an OpenAI endpoint
+    /// answer "Unrecognized request argument supplied: thinking" and lose the finding entirely.
+    public var reasoningDisableOverrides: [String: AnyCodable]? {
+        switch self {
+        case .thinkingBlock, .anthropicThinking:
+            return ["thinking": .dictionary(["type": .string("disabled")])]
+        case .reasoningEffortOnly:
+            return ["reasoning_effort": .string("none")]
+        case .enableThinkingFlag:
+            return ["enable_thinking": .bool(false)]
+        case .geminiThinkingConfig:
+            return ["generationConfig": .dictionary(["thinkingConfig":
+                        .dictionary(["thinkingBudget": .int(0)])])]
+        case .unsupported:
+            return nil
+        }
+    }
+
     /// The raw body fields that put a reasoning budget of `budget` on the wire for this mechanism,
     /// or nil when the mechanism has no token budget.
     ///
