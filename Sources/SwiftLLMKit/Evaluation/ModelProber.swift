@@ -45,7 +45,25 @@ public enum ModelProber {
     /// consumer with `supportsTrailingSystemMessage` forced on, instead of forcing a raw body with no
     /// base system. v3 `trailingSystemMessage` findings were measured in that isolated shape and are
     /// suspect; the caller re-probes JUST that finding when it reuses a v3 record (no full re-sweep).
-    public static let proberVersion = 4
+    ///
+    /// v5: how reasoning is switched is now DISCOVERED per endpoint rather than assumed to be a
+    /// `thinking` block, and three classes of v4 finding are known wrong as a result. Every v4
+    /// record is suspect and re-probes in full — there is no partial migration here because the
+    /// errors are not confined to one finding:
+    ///
+    /// - `reasoningCanBeEnabled` = false wherever the mechanism was not a `thinking` block. OpenAI
+    ///   answered `Unknown parameter: 'thinking'` and 60+ reasoning models were recorded as unable
+    ///   to reason.
+    /// - `reasoningCanBeEnabled` = false on ALL Anthropic models, from a request missing the
+    ///   `budget_tokens` their API requires — a malformed request read as a capability denial.
+    /// - `minThinkingBudgetTokens` / `maxThinkingBudgetTokens` on models with no budget parameter
+    ///   at all, which accept every value and made the searches converge on nonsense (72 models
+    ///   recorded a 1-token floor on 2026-08-04, gpt-4-turbo and babbage-002 among them).
+    ///
+    /// Bumping this is what makes those records re-probe instead of being reused: the runner skips
+    /// reuse for any record whose version is not current, and the local/downloaded merge prefers
+    /// the higher version over the newer timestamp.
+    public static let proberVersion = 5
 
     /// Builds a probe seed from a TRI-STATE facts record — the preferred seeding path.
     ///
