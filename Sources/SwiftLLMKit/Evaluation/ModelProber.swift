@@ -1889,6 +1889,20 @@ public enum ModelProber {
         /// decided by the order of ``reasoningMechanisms(for:)``. Recording that as an established
         /// fact would pin a request-builder branch on list order.
         public let mechanismWasDemonstrated: Bool
+        /// Whether the endpoint REFUSED at least one other candidate while accepting this one.
+        ///
+        /// The second way acceptance becomes evidence. List-order ambiguity exists only at an
+        /// endpoint that accepts everything; one that refuses shape A by name and accepts shape B
+        /// is demonstrably parsing and discriminating between them, so B is its mechanism whether
+        /// or not the probe's prompt happened to make it think. The concrete case: Anthropic's
+        /// adaptive models refuse the budgeted form ("use thinking.type.adaptive") and accept
+        /// adaptive — but chose not to think about a trivial prompt, so demonstration alone left
+        /// the mechanism unrecorded and production kept sending the form they refuse.
+        public let endpointDiscriminates: Bool
+
+        /// Whether the mechanism is ESTABLISHED — by observed reasoning, or by the endpoint
+        /// discriminating between shapes. The one predicate callers should record on.
+        public var mechanismWasEstablished: Bool { mechanismWasDemonstrated || endpointDiscriminates }
         public let on: ReasoningToggleObservation
         public let off: ReasoningToggleObservation
     }
@@ -1918,12 +1932,16 @@ public enum ModelProber {
         var demonstrated: (ReasoningMechanism, ReasoningToggleObservation)?
         var merelyAccepted: (ReasoningMechanism, ReasoningToggleObservation)?
         var attempts: [ProbeFinding<Bool>] = []
+        var sawRefusal = false
 
         for mechanism in reasoningMechanisms(for: apiType) {
             let observation = await observe(mechanism.enable, label: "\(mechanism.label) on",
                                             keywords: mechanism.rejectionKeywords,
                                             makeProviderForcing: makeProviderForcing, calls: calls)
             attempts.append(observation.finding)
+            if observation.finding.status == .established, observation.finding.value == false {
+                sawRefusal = true
+            }
             if observation.reasoningEmitted == true { demonstrated = (mechanism, observation); break }
             if observation.finding.status == .established, observation.finding.value == true,
                merelyAccepted == nil {
@@ -1950,7 +1968,7 @@ public enum ModelProber {
                 ? .established(false, "no reasoning mechanism exists to disable — every mechanism refused")
                 : .inconclusive("no mechanism to disable — none was established")
             return ReasoningMechanismFindings(
-                control: nil, mechanismWasDemonstrated: false, on: none,
+                control: nil, mechanismWasDemonstrated: false, endpointDiscriminates: false, on: none,
                 off: .init(finding: offFinding, reasoningEmitted: nil, reasoningTokens: 0))
         }
 
@@ -1959,6 +1977,7 @@ public enum ModelProber {
                                 makeProviderForcing: makeProviderForcing, calls: calls)
         return ReasoningMechanismFindings(control: mechanism.control,
                                           mechanismWasDemonstrated: demonstrated != nil,
+                                          endpointDiscriminates: sawRefusal,
                                           on: on, off: off)
     }
 

@@ -1110,8 +1110,58 @@ struct AnthropicAdaptiveThinkingTests {
         #expect(found.control == .anthropicAdaptiveThinking)
         #expect(found.on.finding.value == true, "the old list recorded these as unable to reason")
         #expect(found.mechanismWasDemonstrated)
+        #expect(found.mechanismWasEstablished)
         #expect(ModelProber.concludeReasoning(on: found.on, off: found.off,
                                               mechanism: found.control).reasons.value == true)
+    }
+
+    /// The live 2026-08-05 case: opus-5 refused the budgeted form BY NAME, accepted adaptive, and
+    /// then chose not to think about the probe's trivial prompt — so demonstration alone left the
+    /// mechanism unrecorded, and production kept sending the form the model refuses. An endpoint
+    /// that refuses one shape and accepts another is discriminating; that is evidence enough.
+    @Test("Refuse-one-accept-other establishes the mechanism without observed thinking")
+    func discriminationEstablishesWithoutThinking() async {
+        struct QuietAdaptive: LLMProvider, @unchecked Sendable {
+            let forced: [String: AnyCodable]
+            func send(messages: [LLMMessage], tools: [LLMToolDefinition],
+                      overrides: LLMCallOverrides) async throws -> LLMResponse {
+                guard case .dictionary(let thinking)? = forced["thinking"] else {
+                    throw LLMProviderError.httpError(statusCode: 400, body: "no thinking block")
+                }
+                if thinking["type"] == .string("enabled") {
+                    throw LLMProviderError.httpError(statusCode: 400, body:
+                        #"{"error":{"message":""thinking.type.enabled" is not supported for this model. Use "thinking.type.adaptive"."}}"#)
+                }
+                // Accepted — and NO reasoning in the reply: the model decided not to think.
+                return LLMResponse(text: "11",
+                                   usage: TokenUsage(inputTokens: 4, outputTokens: 1, reasoningTokens: 0,
+                                                     cacheReadTokens: 0, cacheWriteTokens: 0))
+            }
+        }
+        let found = await ModelProber.probeReasoningMechanism(
+            apiType: .anthropic, makeProviderForcing: { QuietAdaptive(forced: $0) })
+        #expect(found.control == .anthropicAdaptiveThinking)
+        #expect(found.mechanismWasDemonstrated == false)
+        #expect(found.endpointDiscriminates, "the budgeted refusal is the discrimination")
+        #expect(found.mechanismWasEstablished, "production emission keys on this")
+    }
+
+    /// The ambiguity the demonstrated-only rule exists for must SURVIVE this change: an endpoint
+    /// that accepts every shape without thinking discriminates nothing, and recording a mechanism
+    /// there would pin a request-builder branch on candidate list order.
+    @Test("Accept-everything without thinking still establishes no mechanism")
+    func tolerantEndpointStillAmbiguous() async {
+        struct AcceptsAll: LLMProvider, @unchecked Sendable {
+            let forced: [String: AnyCodable]
+            func send(messages: [LLMMessage], tools: [LLMToolDefinition],
+                      overrides: LLMCallOverrides) async throws -> LLMResponse {
+                LLMResponse(text: "11")
+            }
+        }
+        let found = await ModelProber.probeReasoningMechanism(
+            apiType: .openAICompatible, makeProviderForcing: { AcceptsAll(forced: $0) })
+        #expect(found.mechanismWasEstablished == false,
+                "no refusal and no thinking — the winner is list order, not evidence")
     }
 
     /// Adaptive takes its depth from `output_config.effort`, so there is no budget to search for.
