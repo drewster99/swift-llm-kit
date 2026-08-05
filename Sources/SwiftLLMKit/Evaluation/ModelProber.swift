@@ -84,8 +84,12 @@ public enum ModelProber {
     /// not support json_schema" for 47 models, gpt-4o among them. And Anthropic's newest line
     /// (opus-4-7/4-8, opus-5, sonnet-5, fable-5) was recorded as refusing every reasoning
     /// mechanism because the candidate list lacked `thinking.type=adaptive`, the form those models
-    /// name in their own refusal. v6 `structuredOutputSupportsJSONSchema` and Anthropic reasoning
-    /// findings are suspect.
+    /// name in their own refusal. Also under v6: `thinkingSupportsKeepAll` was acceptance-graded
+    /// with no canary, so a tolerant endpoint's junk-acceptance recorded as support; and the
+    /// reasoning observations used a prompt with nothing to think about, so mechanism discovery at
+    /// n=1 was a coin flip (gpt-5.1 recorded a mechanism, its dated alias — the same model — none).
+    /// v6 `structuredOutputSupportsJSONSchema`, Anthropic reasoning, keep, and mechanism findings
+    /// are all suspect; reuse requires an exact version match, so every v6 record re-probes.
     public static let proberVersion = 7
 
     /// Builds a probe seed from a TRI-STATE facts record — the preferred seeding path.
@@ -1766,6 +1770,7 @@ public enum ModelProber {
             forced,
             description: "thinking.type=\(enabled ? "enabled" : "disabled")",
             rejectionKeywords: ["thinking", "reasoning"],
+            prompt: reasoningProvokingPrompt,
             makeProviderForcing: makeProviderForcing, calls: calls)
         guard let response else {
             return ReasoningToggleObservation(finding: finding, reasoningEmitted: nil, reasoningTokens: 0)
@@ -1964,6 +1969,7 @@ public enum ModelProber {
     ) async -> ReasoningToggleObservation {
         let (finding, response) = await probeForcedFieldObserving(
             forced, description: label, rejectionKeywords: keywords,
+            prompt: reasoningProvokingPrompt,
             makeProviderForcing: makeProviderForcing, calls: calls)
         guard let response else {
             return ReasoningToggleObservation(finding: finding, reasoningEmitted: nil, reasoningTokens: 0)
@@ -2134,11 +2140,34 @@ public enum ModelProber {
         // vetoes even where the endpoint accepted the block. Only an absent one defers to measurement.
         let hasThinkingBlock = reasoningControl.map { $0 == .thinkingBlock } ?? acceptedThinkingBlock
         guard hasThinkingBlock else { return nil }
-        return await probeForcedField(
+        let accepted = await probeForcedField(
             ["thinking": .dictionary(["type": .string("enabled"), "keep": .string("all")])],
             description: "thinking.keep=all",
             rejectionKeywords: ["keep", "thinking"],
             makeProviderForcing: makeProviderForcing, calls: calls)
+        guard accepted.status == .established, accepted.value == true else { return accepted }
+        // CANARY: acceptance alone cannot establish this. An endpoint that ignores unknown keys
+        // inside the thinking object accepts `keep: "all"` and `keep: <garbage>` alike, and the
+        // first alone would record a vendor fact out of the endpoint's tolerance for junk. Only an
+        // endpoint that REJECTS the garbage value is demonstrably parsing `keep` — then its
+        // acceptance of "all" means something. Garbage also accepted → the field is unparsed noise
+        // here, and the honest answer is that nothing was established.
+        let canary = await probeForcedField(
+            ["thinking": .dictionary(["type": .string("enabled"), "keep": .string("zz_probe_invalid")])],
+            description: "thinking.keep=<canary>",
+            rejectionKeywords: ["keep", "thinking"],
+            makeProviderForcing: makeProviderForcing, calls: calls)
+        switch (canary.status, canary.value) {
+        case (.established, false?):
+            return .established(true, "accepted keep=all AND rejected a garbage keep value — the "
+                                    + "endpoint demonstrably parses `keep`")
+        case (.established, true?):
+            return .inconclusive("accepted keep=all but ALSO accepted a garbage keep value, so the "
+                               + "endpoint is not parsing `keep` — acceptance establishes nothing")
+        default:
+            return .inconclusive("accepted keep=all, but the canary call answered nothing, so "
+                               + "whether `keep` is parsed is unknown: \(canary.evidence ?? "")")
+        }
     }
 
     /// Whether `strict: true` is accepted on a function definition.
@@ -2232,10 +2261,20 @@ public enum ModelProber {
     /// Acceptance answers "did the endpoint take this field". For most fields that is all there is
     /// to see. For the reasoning switches it is not: the response says whether the switch actually
     /// DID anything, and a switch that is accepted and ignored is the failure worth catching.
+    /// A prompt that reliably PROVOKES thinking, for callers grading on observed reasoning.
+    ///
+    /// "Reply with the single word: ok" gives a reasoning model nothing to think about, so whether
+    /// thinking tokens appear at n=1 is a coin flip — gpt-5.1 recorded a mechanism while its dated
+    /// alias, the same model, recorded none. A small multi-step count is enough to make a model
+    /// that CAN think actually do it, while staying cheap for one that can't.
+    static let reasoningProvokingPrompt =
+        "How many prime numbers are there between 10 and 50? Think it through, then reply with just the count."
+
     private static func probeForcedFieldObserving(
         _ forced: [String: AnyCodable],
         description: String,
         rejectionKeywords: [String],
+        prompt: String = "Reply with the single word: ok",
         makeProviderForcing: @Sendable ([String: AnyCodable]) async -> any LLMProvider,
         calls: ProbeCallCounter?
     ) async -> (finding: ProbeFinding<Bool>, response: LLMResponse?) {
@@ -2243,7 +2282,7 @@ public enum ModelProber {
         calls?.increment()
         do {
             let response = try await makeProviderForcing(forced)
-                .send(messages: [.user("Reply with the single word: ok")], tools: [])
+                .send(messages: [.user(prompt)], tools: [])
             return (.established(true, "accepted \(description)", duration: Date().timeIntervalSince(started)),
                     response)
         } catch {

@@ -1210,3 +1210,52 @@ struct ProbeResponseSchemaTests {
         #expect(try #require(finding).value == false)
     }
 }
+
+/// `thinking.keep` cannot be established by acceptance alone: an endpoint that ignores unknown keys
+/// inside the thinking object accepts "all" and garbage alike. Only rejecting the garbage proves
+/// the field is parsed.
+@Suite("The keep probe's canary")
+struct ThinkingKeepCanaryTests {
+
+    /// Answers per keep-value, so each endpoint personality is one closure.
+    private struct Endpoint: LLMProvider, @unchecked Sendable {
+        let forced: [String: AnyCodable]
+        let acceptsKeep: @Sendable (String) -> Bool
+        func send(messages: [LLMMessage], tools: [LLMToolDefinition],
+                  overrides: LLMCallOverrides) async throws -> LLMResponse {
+            guard case .dictionary(let thinking)? = forced["thinking"],
+                  case .string(let keep)? = thinking["keep"] else { return LLMResponse(text: "ok") }
+            guard acceptsKeep(keep) else {
+                throw LLMProviderError.httpError(statusCode: 400,
+                    body: #"{"error":{"message":"invalid thinking.keep value"}}"#)
+            }
+            return LLMResponse(text: "ok")
+        }
+    }
+
+    private func probe(acceptsKeep: @escaping @Sendable (String) -> Bool) async -> ProbeFinding<Bool>? {
+        await ModelProber.probeThinkingKeep(
+            reasoningControl: .thinkingBlock, acceptedThinkingBlock: true,
+            makeProviderForcing: { Endpoint(forced: $0, acceptsKeep: acceptsKeep) })
+    }
+
+    @Test("Parsing endpoint: accepts 'all', rejects garbage — established true")
+    func parsingEndpointEstablishes() async {
+        let finding = await probe(acceptsKeep: { $0 == "all" })
+        #expect(finding?.value == true)
+        #expect(finding?.evidence?.contains("rejected a garbage") == true)
+    }
+
+    @Test("Tolerant endpoint: accepts everything — inconclusive, never a vendor fact")
+    func tolerantEndpointIsInconclusive() async {
+        let finding = await probe(acceptsKeep: { _ in true })
+        #expect(finding?.status == .inconclusive,
+                "acceptance of junk is tolerance, not support — this recorded 6 unverified trues")
+    }
+
+    @Test("An endpoint that rejects 'all' itself is still an established false")
+    func rejectionStillEstablishesFalse() async {
+        let finding = await probe(acceptsKeep: { _ in false })
+        #expect(finding?.value == false)
+    }
+}
