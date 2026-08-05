@@ -308,7 +308,8 @@ struct OpenAICompatibleProvider: LLMProvider {
                 if let sent = pair.budget { thinking["budget_tokens"] = sent }
             }
             if !thinking.isEmpty { body["thinking"] = thinking }
-        case .unsupported, .reasoningEffortOnly, .anthropicThinking, .geminiThinkingConfig, nil:
+        case .unsupported, .reasoningEffortOnly, .anthropicThinking, .anthropicAdaptiveThinking,
+             .geminiThinkingConfig, nil:
             // `.unsupported`/`.reasoningEffortOnly` have no on/off knob; the last two belong to providers
             // that do not route through this builder.
             break

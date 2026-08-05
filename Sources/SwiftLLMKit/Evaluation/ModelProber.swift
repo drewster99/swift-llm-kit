@@ -1794,6 +1794,16 @@ public enum ModelProber {
               label: "thinking.type + budget_tokens", rejectionKeywords: ["thinking", "reasoning"])
     }
 
+    /// Anthropic's newest line refuses the budgeted form outright and says so: *"thinking.type.enabled
+    /// is not supported for this model. Use thinking.type.adaptive and output_config.effort"*. Depth
+    /// there is the general effort ladder, so there is no budget to pair or to probe.
+    private static var anthropicAdaptiveMechanism: ReasoningMechanism {
+        .init(control: .anthropicAdaptiveThinking,
+              enable: ["thinking": .dictionary(["type": .string("adaptive")])],
+              disable: ["thinking": .dictionary(["type": .string("disabled")])],
+              label: "thinking.type=adaptive", rejectionKeywords: ["thinking", "reasoning"])
+    }
+
     /// OpenAI's reasoning models have no `thinking` block at all — they are switched with
     /// `reasoning_effort`, and `"none"` is how newer ones are turned off.
     private static var reasoningEffortMechanism: ReasoningMechanism {
@@ -1832,7 +1842,10 @@ public enum ModelProber {
     /// effort-only would lose the block that `thinking.keep` and the budget hang off.
     private static func reasoningMechanisms(for apiType: ProviderAPIType) -> [ReasoningMechanism] {
         switch apiType {
-        case .anthropic:    return [anthropicThinkingMechanism]
+        // Budgeted first, then adaptive. Both are current at Anthropic — the older models take
+        // `enabled` + `budget_tokens`, the newest take `adaptive` only — and each REFUSES the other
+        // by name, so whichever is asked first fails cleanly and the next candidate answers.
+        case .anthropic:    return [anthropicThinkingMechanism, anthropicAdaptiveMechanism]
         case .gemini:       return [geminiThinkingMechanism]
         case .alibabaCloud: return [enableThinkingFlagMechanism, thinkingBlockMechanism, reasoningEffortMechanism]
         default:            return [thinkingBlockMechanism, reasoningEffortMechanism, enableThinkingFlagMechanism]

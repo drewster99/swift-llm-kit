@@ -45,6 +45,16 @@ public enum ReasoningControl: String, Sendable, Equatable, Hashable, Codable, Ca
     /// Anthropic's `thinking` object: `{"type": "adaptive"}` or `{"type": "enabled",
     /// "budget_tokens": N}`. Depth is steered by the separate general-effort parameter.
     case anthropicThinking
+    /// Anthropic's ADAPTIVE thinking: `{"type": "adaptive"}`, with depth steered by the separate
+    /// `output_config.effort` rather than a token budget.
+    ///
+    /// A distinct mechanism, not a variant of ``anthropicThinking``: the newest Claude models refuse
+    /// `{"type": "enabled"}` outright — *"thinking.type.enabled is not supported for this model. Use
+    /// thinking.type.adaptive and output_config.effort"* — so a probe that only knows the budgeted
+    /// form records them as unable to reason at all. Observed 2026-08-05 on opus-4-7, opus-4-8,
+    /// opus-5, sonnet-5 and fable-5. It carries NO token budget, which is why it needs its own case
+    /// rather than a flag: the budget probes must skip it.
+    case anthropicAdaptiveThinking
     /// Gemini's `generationConfig.thinkingConfig.thinkingBudget`.
     case geminiThinkingConfig
 
@@ -62,7 +72,8 @@ public enum ReasoningControl: String, Sendable, Equatable, Hashable, Codable, Ca
     public var carriesTokenBudget: Bool {
         switch self {
         case .thinkingBlock, .enableThinkingFlag, .anthropicThinking, .geminiThinkingConfig: return true
-        case .reasoningEffortOnly, .unsupported: return false
+        // Adaptive takes its depth from `output_config.effort`, not a token count.
+        case .anthropicAdaptiveThinking, .reasoningEffortOnly, .unsupported: return false
         }
     }
 
@@ -73,7 +84,7 @@ public enum ReasoningControl: String, Sendable, Equatable, Hashable, Codable, Ca
     /// four of them.
     public var disableWireDescription: String {
         switch self {
-        case .thinkingBlock, .anthropicThinking: return "thinking.type=disabled"
+        case .thinkingBlock, .anthropicThinking, .anthropicAdaptiveThinking: return "thinking.type=disabled"
         case .reasoningEffortOnly:               return "reasoning_effort=none"
         case .enableThinkingFlag:                return "enable_thinking=false"
         case .geminiThinkingConfig:              return "thinkingBudget=0"
@@ -90,7 +101,7 @@ public enum ReasoningControl: String, Sendable, Equatable, Hashable, Codable, Ca
     /// answer "Unrecognized request argument supplied: thinking" and lose the finding entirely.
     public var reasoningDisableOverrides: [String: AnyCodable]? {
         switch self {
-        case .thinkingBlock, .anthropicThinking:
+        case .thinkingBlock, .anthropicThinking, .anthropicAdaptiveThinking:
             return ["thinking": .dictionary(["type": .string("disabled")])]
         case .reasoningEffortOnly:
             return ["reasoning_effort": .string("none")]
@@ -126,6 +137,8 @@ public enum ReasoningControl: String, Sendable, Equatable, Hashable, Codable, Ca
             return ["thinking": .dictionary(["type": .string("enabled"),
                                              "budget_tokens": .int(budget)]),
                     "max_tokens": .int(pairedMaxTokens)]
+        case .anthropicAdaptiveThinking:
+            return nil
         case .enableThinkingFlag:
             return ["enable_thinking": .bool(true), "thinking_budget": .int(budget)]
         case .geminiThinkingConfig:
@@ -143,7 +156,8 @@ public enum ReasoningControl: String, Sendable, Equatable, Hashable, Codable, Ca
         case .reasoningEffortOnly: return "`reasoning_effort` only"
         case .thinkingBlock: return "`thinking` block (type/keep)"
         case .enableThinkingFlag: return "`enable_thinking` + budget"
-        case .anthropicThinking: return "Anthropic `thinking`"
+        case .anthropicThinking: return "Anthropic `thinking` + budget"
+        case .anthropicAdaptiveThinking: return "Anthropic `thinking` (adaptive)"
         case .geminiThinkingConfig: return "Gemini `thinkingConfig`"
         }
     }
@@ -160,7 +174,9 @@ public enum ReasoningControl: String, Sendable, Equatable, Hashable, Codable, Ca
         case .enableThinkingFlag:
             return "Top-level `enable_thinking: true` with a separate `thinking_budget`."
         case .anthropicThinking:
-            return "Anthropic `thinking: {type: adaptive}` or `{type: enabled, budget_tokens: N}`."
+            return "Anthropic `thinking: {type: enabled, budget_tokens: N}`."
+        case .anthropicAdaptiveThinking:
+            return "Anthropic `thinking: {type: adaptive}`; depth comes from `output_config.effort`."
         case .geminiThinkingConfig:
             return "Gemini `generationConfig.thinkingConfig.thinkingBudget`."
         }

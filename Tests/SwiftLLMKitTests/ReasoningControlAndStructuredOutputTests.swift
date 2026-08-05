@@ -1078,3 +1078,47 @@ struct MalformedRequestPhraseTests {
         #expect(await toggle(body).status == .inconclusive)
     }
 }
+
+/// Anthropic runs two thinking mechanisms at once and each refuses the other BY NAME. A probe that
+/// knows only the budgeted form records the newest models as unable to reason at all.
+@Suite("Anthropic adaptive thinking")
+struct AnthropicAdaptiveThinkingTests {
+
+    /// Replays the real 2026-08-05 refusal: opus-4-7/4-8, opus-5, sonnet-5 and fable-5 all answered
+    /// this to `{"type": "enabled", "budget_tokens": 1024}`.
+    private struct AdaptiveOnly: LLMProvider, @unchecked Sendable {
+        let forced: [String: AnyCodable]
+        func send(messages: [LLMMessage], tools: [LLMToolDefinition],
+                  overrides: LLMCallOverrides) async throws -> LLMResponse {
+            guard case .dictionary(let thinking)? = forced["thinking"] else {
+                throw LLMProviderError.httpError(statusCode: 400, body: "no thinking block")
+            }
+            if thinking["type"] == .string("enabled") {
+                throw LLMProviderError.httpError(statusCode: 400, body:
+                    #"{"error":{"message":"\"thinking.type.enabled\" is not supported for this model. Use \"thinking.type.adaptive\" and \"output_config.effort\"."}}"#)
+            }
+            return LLMResponse(text: "ok", reasoning: "...",
+                               usage: TokenUsage(inputTokens: 4, outputTokens: 2, reasoningTokens: 120,
+                                                 cacheReadTokens: 0, cacheWriteTokens: 0))
+        }
+    }
+
+    @Test("A model that refuses the budgeted form is measured through adaptive, not written off")
+    func adaptiveModelIsMeasured() async {
+        let found = await ModelProber.probeReasoningMechanism(
+            apiType: .anthropic, makeProviderForcing: { AdaptiveOnly(forced: $0) })
+        #expect(found.control == .anthropicAdaptiveThinking)
+        #expect(found.on.finding.value == true, "the old list recorded these as unable to reason")
+        #expect(found.mechanismWasDemonstrated)
+        #expect(ModelProber.concludeReasoning(on: found.on, off: found.off,
+                                              mechanism: found.control).reasons.value == true)
+    }
+
+    /// Adaptive takes its depth from `output_config.effort`, so there is no budget to search for.
+    @Test("Adaptive carries no token budget")
+    func adaptiveHasNoBudget() {
+        #expect(ReasoningControl.anthropicAdaptiveThinking.carriesTokenBudget == false)
+        #expect(ReasoningControl.anthropicAdaptiveThinking
+            .budgetForcingOverrides(budget: 1024, pairedMaxTokens: 2048) == nil)
+    }
+}
