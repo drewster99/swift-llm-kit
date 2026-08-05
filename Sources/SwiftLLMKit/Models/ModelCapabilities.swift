@@ -69,6 +69,17 @@ public enum ModelCapability: String, CaseIterable, Sendable, Codable, Hashable {
     case reasoningCanBeEnabled = "reasoningCanBeEnabled"
     case reasoningCanBeDisabled = "reasoningCanBeDisabled"
     case thinkingSupportsKeepAll = "thinkingSupportsKeepAll"
+    /// NOT PROBED — vendor-declared only. Whether a reasoning budget can be given IN TOKENS.
+    ///
+    /// `ModelProber` measures the budget RANGE (min/max) but never this, and the two are not the
+    /// same question: an endpoint that has no budget parameter ignores one silently, accepts every
+    /// value, and the range search converges on nonsense. That is exactly what happened on
+    /// 2026-08-04 — 72 models with no thinking budget recorded a floor of 1 token — because the
+    /// range probes gated on `!= false` and this is never anything but absent.
+    ///
+    /// So the range probes now require positive evidence that the model reasons at all, and this
+    /// stays a vendor claim. An acceptance-graded probe for it would record `true` for every
+    /// endpoint that ignores unknown keys, which is most of them.
     case thinkingSupportsTokenBudget = "thinkingSupportsTokenBudget"
     case structuredOutputSupportsJSONObject = "structuredOutputSupportsJSONObject"
     case toolChoiceSupportsValueRequired = "toolChoiceSupportsValueRequired"
@@ -161,10 +172,10 @@ public enum ModelCapability: String, CaseIterable, Sendable, Codable, Hashable {
              .toolChoiceSupportsValueRequired, .toolChoiceSupportsValueNone,
              .toolChoiceSupportsNamedFunction, .toolDefinitionsSupportStrict,
              .reasoningCanBeEnabled, .reasoningCanBeDisabled,
-             .thinkingSupportsKeepAll, .thinkingSupportsTokenBudget,
+             .thinkingSupportsKeepAll,
              .systemMessages, .assistantPrefill, .parallelToolCalls, .reasoning:
             return true
-        case .batch, .codeExecution, .promptCaching, .computerUse,
+        case .thinkingSupportsTokenBudget, .batch, .codeExecution, .promptCaching, .computerUse,
              .audioInput, .audioOutput, .videoInput, .webSearch, .toolChoiceSupported:
             return false
         }

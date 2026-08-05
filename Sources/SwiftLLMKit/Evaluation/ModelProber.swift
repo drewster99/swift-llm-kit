@@ -1666,8 +1666,20 @@ public enum ModelProber {
         makeProviderForcing: @Sendable ([String: AnyCodable]) async -> any LLMProvider,
         calls: ProbeCallCounter? = nil
     ) async -> ReasoningToggleObservation {
+        // Enabling needs a COMPLETE block. Anthropic requires `budget_tokens` whenever thinking is
+        // enabled, and `max_tokens` strictly above it — the probe's own 512-token default is below
+        // the 1024 floor, so both have to be forced or the request is malformed before the model
+        // ever considers it. Disabling needs neither, and adding them there would only introduce
+        // new ways for the OFF direction to fail for reasons unrelated to the switch.
+        var block: [String: AnyCodable] = ["type": .string(enabled ? "enabled" : "disabled")]
+        var forced: [String: AnyCodable] = [:]
+        if enabled {
+            block["budget_tokens"] = .int(ThinkingBudget.minimumTokens)
+            forced["max_tokens"] = .int(ThinkingBudget.minimumTokens + 512)
+        }
+        forced["thinking"] = .dictionary(block)
         let (finding, response) = await probeForcedFieldObserving(
-            ["thinking": .dictionary(["type": .string(enabled ? "enabled" : "disabled")])],
+            forced,
             description: "thinking.type=\(enabled ? "enabled" : "disabled")",
             rejectionKeywords: ["thinking", "reasoning"],
             makeProviderForcing: makeProviderForcing, calls: calls)
@@ -1881,6 +1893,24 @@ public enum ModelProber {
                                         makeProviderForcing: makeProviderForcing, calls: calls).finding
     }
 
+    /// Whether a rejection is about the shape of OUR request rather than the model's capability.
+    ///
+    /// The rejection keywords only establish that the error mentioned the field being probed — and
+    /// an error saying that field was sent WRONG mentions it just as surely as one saying it is
+    /// unsupported. Anthropic answers `thinking: {"type": "enabled"}` with
+    /// `thinking.enabled.budget_tokens: Field required`, which named "thinking", matched, and
+    /// recorded every Claude model as unable to enable reasoning — a flat falsehood that would then
+    /// suppress thinking in production. Observed across all 11 Anthropic models on 2026-08-04.
+    ///
+    /// Fails toward `inconclusive`: a missed malformed-request phrase costs a re-probe, while a
+    /// missed capability rejection would cost a wrong vendor fact written into the catalog.
+    private static func describesMalformedRequest(_ loweredDetail: String) -> Bool {
+        ["field required", "is required", "required property", "missing required",
+         "must be greater than", "must be less than", "must be at least",
+         "unsupported parameter", "use `max_completion_tokens`"]
+            .contains { loweredDetail.contains($0) }
+    }
+
     /// `probeForcedField`, but hands back the RESPONSE as well as the verdict.
     ///
     /// Acceptance answers "did the endpoint take this field". For most fields that is all there is
@@ -1904,7 +1934,8 @@ public enum ModelProber {
             let detail = CapabilityProbe.rejectionDetail(error)
             let lowered = detail.lowercased()
             if !CapabilityProbe.classifyFailure(error).meansNoAnswer,
-               rejectionKeywords.contains(where: { lowered.contains($0) }) {
+               rejectionKeywords.contains(where: { lowered.contains($0) }),
+               !describesMalformedRequest(lowered) {
                 return (.established(false, detail, duration: Date().timeIntervalSince(started)), nil)
             }
             return (.inconclusive(detail, duration: Date().timeIntervalSince(started)), nil)

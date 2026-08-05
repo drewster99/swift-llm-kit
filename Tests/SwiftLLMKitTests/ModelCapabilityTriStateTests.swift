@@ -280,7 +280,7 @@ struct EmpiricallyProbedCapabilityTests {
     /// The unprobed set, restated independently of the property so a change to either has to be
     /// deliberate. Same reasoning as the wire-string table in `ChannelMessageKindTests`.
     private static let expectedUnprobed: Set<ModelCapability> = [
-        .batch, .codeExecution, .promptCaching, .computerUse,
+        .thinkingSupportsTokenBudget, .batch, .codeExecution, .promptCaching, .computerUse,
         .audioInput, .audioOutput, .videoInput, .webSearch, .toolChoiceSupported
     ]
 

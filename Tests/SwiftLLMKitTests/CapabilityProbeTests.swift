@@ -1913,3 +1913,47 @@ struct EffortLadderSeedingTests {
         #expect(seeded(facts).reasoningEffortLevels.isEmpty)
     }
 }
+
+/// A rejection that names the probed field is only an answer if it is about the FIELD, not about
+/// how we sent it. Anthropic answered `thinking: {"type": "enabled"}` with
+/// `thinking.enabled.budget_tokens: Field required` — which named "thinking", matched the rejection
+/// keywords, and recorded all 11 Claude models as unable to enable reasoning.
+@Suite("A malformed request is not a capability answer")
+struct MalformedRequestGuardTests {
+
+    private struct Failing: LLMProvider {
+        let body: String
+        func send(messages: [LLMMessage], tools: [LLMToolDefinition],
+                  overrides: LLMCallOverrides) async throws -> LLMResponse {
+            throw LLMProviderError.httpError(statusCode: 400, body: body)
+        }
+    }
+
+    private func toggle(_ body: String) async -> ProbeFinding<Bool> {
+        await ModelProber.probeReasoningToggle(enabled: true, makeProviderForcing: { _ in Failing(body: body) })
+    }
+
+    @Test("The real Anthropic rejection is inconclusive, not a capability denial")
+    func anthropicMissingBudgetIsNotADenial() async {
+        let real = #"{"type":"error","error":{"type":"invalid_request_error","message":"thinking.enabled.budget_tokens: Field required"}}"#
+        let finding = await toggle(real)
+        #expect(finding.status == .inconclusive, "recorded a false 'cannot enable reasoning' for every Claude model")
+    }
+
+    @Test("A pairing complaint is about our request too")
+    func pairingComplaintIsNotADenial() async {
+        let finding = await toggle(#"{"error":{"message":"max_tokens must be greater than thinking.budget_tokens"}}"#)
+        #expect(finding.status == .inconclusive)
+    }
+
+    /// The guard must not swallow the answers it sits next to: a genuine "this model does not do
+    /// that" still has to establish false, or it buys safety by measuring nothing.
+    @Test("A genuine capability rejection still establishes false")
+    func genuineRejectionStillCounts() async {
+        let openAI = #"{"error":{"message":"Unknown parameter: 'thinking'.","type":"invalid_request_error"}}"#
+        #expect(await toggle(openAI).value == false)
+
+        let moonshot = #"{"error":{"message":"invalid thinking: only enabled is supported for this model"}}"#
+        #expect(await toggle(moonshot).value == false)
+    }
+}
