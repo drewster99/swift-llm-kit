@@ -66,6 +66,21 @@ public enum ReasoningControl: String, Sendable, Equatable, Hashable, Codable, Ca
         }
     }
 
+    /// How this mechanism's OFF request reads on the wire, for evidence strings.
+    ///
+    /// So a verdict names the field that was actually sent. The audit trail said
+    /// `thinking.type=disabled` for all five mechanisms, describing a field that never went out for
+    /// four of them.
+    public var disableWireDescription: String {
+        switch self {
+        case .thinkingBlock, .anthropicThinking: return "thinking.type=disabled"
+        case .reasoningEffortOnly:               return "reasoning_effort=none"
+        case .enableThinkingFlag:                return "enable_thinking=false"
+        case .geminiThinkingConfig:              return "thinkingBudget=0"
+        case .unsupported:                       return "no reasoning switch"
+        }
+    }
+
     /// The raw body fields that turn reasoning OFF for this mechanism, or nil when there is nothing
     /// to turn off.
     ///

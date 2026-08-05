@@ -39,7 +39,6 @@ struct ThinkingBudgetRangeTests {
                        accept: @escaping (Int) -> Bool?) async -> (ProbeFinding<Int>, [Int]) {
         let recorder = Recorder(accept: accept)
         let finding = await ModelProber.probeThinkingBudgetRange(
-            llm: Stub(budget: 0, recorder: recorder), modelID: "m",
             accounting: accounting, maxOutputTokens: maxOutput, maxContextTokens: maxContext,
             makeProviderWithBudget: { budget, pairedMax in
                 recorder.pairings.append((budget, pairedMax))
@@ -123,7 +122,6 @@ struct ThinkingBudgetRangeTests {
     func pairsMaxTokensAboveBudget() async {
         let recorder = Recorder(accept: { $0 <= 20_000 })
         _ = await ModelProber.probeThinkingBudgetRange(
-            llm: Stub(budget: 0, recorder: recorder), modelID: "m",
             accounting: .drawnFromMaxOutputTokens, maxOutputTokens: 64_000, maxContextTokens: nil,
             makeProviderWithBudget: { budget, pairedMax in
                 recorder.pairings.append((budget, pairedMax))

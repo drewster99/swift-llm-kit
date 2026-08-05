@@ -1295,8 +1295,6 @@ public enum ModelProber {
     /// boundary, recording it as the model's intrinsic budget ceiling. `pairedMaxOutputTokens`
     /// below is passed to the factory so the caller can honour this.
     public static func probeThinkingBudgetRange(
-        llm: any LLMProvider,
-        modelID: String,
         accounting: ThinkingBudgetAccounting?,
         maxOutputTokens: Int?,
         maxContextTokens: Int?,
@@ -1334,6 +1332,11 @@ public enum ModelProber {
         let effectiveAccounting = accounting ?? .drawnFromMaxOutputTokens
         let rawCeiling = effectiveAccounting.searchCeiling(maxOutputTokens: maxOutputTokens,
                                                            maxContextTokens: maxContextTokens)
+        // Whether that ceiling is the limit this budget is actually spent from, or the other one
+        // standing in because the preferred limit is unknown.
+        let usedFallbackLimit = effectiveAccounting == .drawnFromMaxOutputTokens
+            ? maxOutputTokens == nil
+            : maxContextTokens == nil
         guard let ceiling = rawCeiling.map({
                   effectiveAccounting == .drawnFromMaxOutputTokens ? $0 - ThinkingBudget.minimumTokens : $0
               }),
@@ -1346,6 +1349,18 @@ public enum ModelProber {
         // If the whole allowance is accepted there is no ceiling to find inside it.
         switch await accepts(ceiling) {
         case true:
+            // …unless the bound came from the OTHER limit. `searchCeiling` falls back when the
+            // preferred limit is unknown, and a context window is not an output allowance: accepting
+            // it says the endpoint tolerated a number, not that the number is a thinking budget.
+            // Reporting it established is what put "1047552" against kimi-k3 — its context window
+            // minus the reservation, a measurement of a different quantity entirely.
+            guard !usedFallbackLimit else {
+                return .inconclusive("accepted \(ceiling), but that bound came from the model's "
+                                   + "\(effectiveAccounting == .drawnFromMaxOutputTokens ? "context window" : "output cap")"
+                                   + " rather than the allowance this budget is spent from — an "
+                                   + "acceptance there bounds nothing",
+                                     duration: Date().timeIntervalSince(started))
+            }
             return .established(ceiling, "accepted a budget at the model's full \(ceiling)-token allowance",
                                 duration: Date().timeIntervalSince(started))
         case nil:
@@ -1504,7 +1519,11 @@ public enum ModelProber {
                                     duration: elapsed())
             }
         }
-        return .established(high, "exactly \(high): accepted, and \(low) rejected", duration: elapsed())
+        // `low` starts at 0 as known-rejected BY ASSUMPTION (0 is not a legal budget), so when it
+        // is still 0 nothing below 1 was ever sent and the evidence must not claim otherwise.
+        return .established(high, low == 0
+            ? "exactly \(high): accepted, and nothing below 1 was attempted"
+            : "exactly \(high): accepted, and \(low) rejected", duration: elapsed())
     }
 
 
@@ -1951,7 +1970,13 @@ public enum ModelProber {
     ///   `false` that acceptance-grading recorded backwards as `true`. If reasoning was never
     ///   observable at all, the comparison has no baseline and the acceptance answer stands.
     public static func concludeReasoning(on: ReasoningToggleObservation,
-                                         off: ReasoningToggleObservation) -> ReasoningConclusions {
+                                         off: ReasoningToggleObservation,
+                                         mechanism: ReasoningControl? = nil) -> ReasoningConclusions {
+        // The evidence names the field that was actually sent. It hardcoded `thinking.type=disabled`
+        // for all five mechanisms, so a `reasoning_effort: none` or `enable_thinking: false` verdict
+        // was filed describing a field that never went on the wire — a bad audit trail in a system
+        // whose rule is that it never records what it did not establish.
+        let switchName = mechanism.map(\.disableWireDescription) ?? "the reasoning switch"
         let emitted = [on, off].first { $0.reasoningEmitted == true }
         let reasons: ProbeFinding<Bool>
         if let emitted {
@@ -1975,7 +2000,7 @@ public enum ModelProber {
         if off.reasoningEmitted == true, on.reasoningEmitted != true {
             return ReasoningConclusions(
                 reasons: reasons,
-                canBeDisabled: .established(false, "reasoning came back WITH the switch off, so the "
+                canBeDisabled: .established(false, "reasoning came back with \(switchName), so the "
                                                  + "endpoint did not honour it (nothing was observed "
                                                  + "with it on, so there is no baseline to compare)"))
         }
@@ -1984,7 +2009,8 @@ public enum ModelProber {
             return ReasoningConclusions(reasons: reasons, canBeDisabled: off.finding)
         }
         return ReasoningConclusions(reasons: reasons,
-                                    canBeDisabled: disabledVerdict(on: on, off: off))
+                                    canBeDisabled: disabledVerdict(on: on, off: off,
+                                                                   switchName: switchName))
     }
 
     /// Did the OFF switch actually stop the thinking, given that it was on before?
@@ -2000,22 +2026,23 @@ public enum ModelProber {
     /// it either way would be inventing a fact. Establishing `false` there would be the worse
     /// error — it is the answer production acts on.
     private static func disabledVerdict(on: ReasoningToggleObservation,
-                                        off: ReasoningToggleObservation) -> ProbeFinding<Bool> {
+                                        off: ReasoningToggleObservation,
+                                        switchName: String) -> ProbeFinding<Bool> {
         // Anthropic folds thinking into `outputTokens` and reports `reasoningTokens` as 0, so there
         // is no baseline to take a ratio against. There the signal is binary: thinking text came
         // back or it did not.
         guard on.reasoningTokens > 0 else {
             return off.reasoningEmitted == true
-                ? .established(false, "reasoning content still came back with thinking.type=disabled "
+                ? .established(false, "reasoning content still came back with \(switchName) "
                                     + "— the endpoint accepted the switch and then ignored it")
-                : .established(true, "reasoning content stopped with thinking.type=disabled, having "
+                : .established(true, "reasoning content stopped with \(switchName), having "
                                    + "been present with it enabled")
         }
         // A reply that returned thinking TEXT is reasoning whatever the token accounting says, so
         // it cannot be ratio'd away: zero billed tokens alongside visible thinking is the endpoint
         // ignoring the switch, not the thinking collapsing.
         if off.reasoningEmitted == true, off.reasoningTokens == 0 {
-            return .established(false, "thinking content still came back with thinking.type=disabled "
+            return .established(false, "thinking content still came back with \(switchName) "
                                      + "even though no thinking tokens were billed — the switch was "
                                      + "accepted and then ignored")
         }
@@ -2090,10 +2117,20 @@ public enum ModelProber {
     /// also constrains the schema itself (no open-ended objects), so the probe tool is declared
     /// with an explicit closed schema — otherwise a rejection would be about the SCHEMA rather than
     /// about `strict`, and would be recorded as the wrong fact.
+    /// Returns nil for provider families with no `strict` concept, rather than spending a call on a
+    /// rejection that says nothing — the same contract `probeToolChoice` and `probeStructuredOutput`
+    /// already follow. This one always spent it.
     public static func probeStrictToolDefinitions(
+        apiType: ProviderAPIType,
         makeProviderForcing: @Sendable ([String: AnyCodable]) async -> any LLMProvider,
         calls: ProbeCallCounter? = nil
-    ) async -> ProbeFinding<Bool> {
+    ) async -> ProbeFinding<Bool>? {
+        // `strict` rides on an OpenAI-shaped `tools` array; Anthropic and Gemini use different tool
+        // envelopes entirely, so forcing one there measures the envelope, not `strict`.
+        switch apiType {
+        case .anthropic, .gemini: return nil
+        default: break
+        }
         let strictTool: AnyCodable = .dictionary([
             "type": .string("function"),
             "function": .dictionary([
