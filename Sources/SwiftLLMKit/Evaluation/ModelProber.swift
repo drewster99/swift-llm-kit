@@ -46,6 +46,21 @@ public enum ModelProber {
     /// base system. v3 `trailingSystemMessage` findings were measured in that isolated shape and are
     /// suspect; the caller re-probes JUST that finding when it reuses a v3 record (no full re-sweep).
     ///
+    /// v6: the budget probes went through PRODUCTION emission, so the value probed was not the value
+    /// sent. Two consequences, both of which wrote fabricated numbers into the catalog under v5:
+    /// production gates the budget field on `thinkingSupportsTokenBudget`, which nothing
+    /// establishes, so for thinking-block models no budget reached the wire at all and every value
+    /// was "accepted" — the recorded ceilings are the reservation arithmetic (kimi-k3's 1,047,552 is
+    /// its context window minus 1024). And `ThinkingBudget.effective` floors the value, so the
+    /// minimum search could not see below 1024 and converged on a fabricated 1, which then LOWERED
+    /// the production floor and changed what the next run measured. Every v5 `maxThinkingBudgetTokens`
+    /// / `minThinkingBudgetTokens` is suspect.
+    ///
+    /// Also v6: `probeToolChoice` forced a `thinking` block at endpoints with no such field, so all
+    /// three tool_choice findings came back inconclusive for 45 models in the local corpus; and
+    /// `describesMalformedRequest` listed "unsupported parameter", OpenAI's wording for a genuine
+    /// denial.
+    ///
     /// v5: how reasoning is switched is now DISCOVERED per endpoint rather than assumed to be a
     /// `thinking` block, and three classes of v4 finding are known wrong as a result. Every v4
     /// record is suspect and re-probes in full — there is no partial migration here because the
@@ -63,7 +78,7 @@ public enum ModelProber {
     /// Bumping this is what makes those records re-probe instead of being reused: the runner skips
     /// reuse for any record whose version is not current, and the local/downloaded merge prefers
     /// the higher version over the newer timestamp.
-    public static let proberVersion = 5
+    public static let proberVersion = 6
 
     /// Builds a probe seed from a TRI-STATE facts record — the preferred seeding path.
     ///
@@ -1207,10 +1222,18 @@ public enum ModelProber {
     ///
     ///   When thinking CANNOT be disabled, a remaining refusal is a true and useful `false`: the
     ///   option is unusable on that model in every configuration it has.
+    /// `disableReasoningWith` carries the DISCOVERED mechanism's own disable payload, or nil to send
+    /// none. It replaced a `Bool` that made this function assume one vendor's wire shape for every
+    /// endpoint: it hardcoded `thinking: {type: disabled}`, so an OpenAI model — which has no
+    /// `thinking` field — answered `Unrecognized request argument supplied: thinking`, and because
+    /// that message names neither `tool_choice` nor any of its values the result fell through to
+    /// inconclusive. Three paid calls per model, three capabilities that could never be established,
+    /// and 45 records in the local corpus in exactly that state. This function's own doc argues the
+    /// point for `tool_choice` and then violated it one field over.
     public static func probeToolChoice(
         _ choice: LLMToolChoice,
         apiType: ProviderAPIType,
-        disableThinkingFirst: Bool = false,
+        disableReasoningWith: [String: AnyCodable]? = nil,
         makeProviderForcing: @Sendable ([String: AnyCodable]) async -> any LLMProvider,
         calls: ProbeCallCounter? = nil
     ) async -> ProbeFinding<Bool>? {
@@ -1221,9 +1244,7 @@ public enum ModelProber {
             // FORCED: production emission is gated per option, so re-probing an option already
             // recorded false would send nothing and grade the ordinary success as support.
             var forced: [String: AnyCodable] = ["tool_choice": forcedWireValue]
-            if disableThinkingFirst {
-                forced["thinking"] = .dictionary(["type": .string("disabled")])
-            }
+            for (key, value) in disableReasoningWith ?? [:] { forced[key] = value }
             _ = try await makeProviderForcing(forced)
                 .send(messages: [.user("Reply with the single word: ok")],
                       tools: [CapabilityProbe.makeProbeTool()])
@@ -1235,7 +1256,7 @@ public enum ModelProber {
             // could not be turned off first, the option really is unusable on this model and the
             // `false` stands; otherwise the measurement is confounded and establishes nothing.
             let blamesAnotherMode = lowered.contains("incompatible with") || lowered.contains("thinking mode")
-            if blamesAnotherMode && !disableThinkingFirst {
+            if blamesAnotherMode && disableReasoningWith == nil {
                 return .inconclusive(
                     "refused for a reason other than the option itself, and thinking was not disabled first: \(detail)",
                     duration: Date().timeIntervalSince(started))
@@ -1289,8 +1310,16 @@ public enum ModelProber {
         func accepts(_ budget: Int) async -> Bool? {
             calls?.increment()
             do {
-                // Always above the budget, so a refusal is about the BUDGET, not the pairing.
-                _ = try await makeProviderWithBudget(budget, budget + ThinkingBudget.minimumTokens)
+                // Pair only where the budget is SPENT FROM the output allowance. For a `.separate`
+                // allowance the ceiling is the context window, so `budget + 1024` asks for a
+                // max_tokens far above any output cap — every attempt then fails on the pairing
+                // rather than the budget, and the search converges on the output boundary and
+                // records it as the thinking ceiling. The exact confound this function's docstring
+                // warns about, in the other direction.
+                let pairedMax = effectiveAccounting == .drawnFromMaxOutputTokens
+                    ? budget + ThinkingBudget.minimumTokens
+                    : ThinkingBudget.minimumTokens
+                _ = try await makeProviderWithBudget(budget, pairedMax)
                     .send(messages: [.user("Reply with the single word: ok")], tools: [])
                 return true
             } catch {
@@ -1796,6 +1825,15 @@ public enum ModelProber {
     public struct ReasoningMechanismFindings: Sendable {
         /// The mechanism the endpoint accepted; `nil` when none did.
         public let control: ReasoningControl?
+        /// Whether that mechanism was DEMONSTRATED (its request produced reasoning) or merely
+        /// ACCEPTED without error.
+        ///
+        /// The two are not the same evidence and the caller must be able to tell them apart. A model
+        /// that reasons unconditionally — the norm across the OpenAI-compatible family — emits
+        /// reasoning whatever it is sent, so every candidate "demonstrates" and the winner is
+        /// decided by the order of ``reasoningMechanisms(for:)``. Recording that as an established
+        /// fact would pin a request-builder branch on list order.
+        public let mechanismWasDemonstrated: Bool
         public let on: ReasoningToggleObservation
         public let off: ReasoningToggleObservation
     }
@@ -1849,16 +1887,24 @@ public enum ModelProber {
                 : .inconclusive("no reasoning mechanism was established; the endpoint neither accepted "
                               + "nor clearly refused one")
             let none = ReasoningToggleObservation(finding: finding, reasoningEmitted: nil, reasoningTokens: 0)
+            // When every mechanism was properly asked and properly REFUSED, the OFF direction is
+            // settled too: there is no switch here to turn off. Reporting it inconclusive left
+            // `reasoningCanBeDisabled` nil, and callers reading `?.value != false` then treated a
+            // model with no reasoning at all as one whose reasoning might be disableable.
+            let offFinding: ProbeFinding<Bool> = (finding.status == .established && finding.value == false)
+                ? .established(false, "no reasoning mechanism exists to disable — every mechanism refused")
+                : .inconclusive("no mechanism to disable — none was established")
             return ReasoningMechanismFindings(
-                control: nil, on: none,
-                off: .init(finding: .inconclusive("no mechanism to disable — none was established"),
-                           reasoningEmitted: nil, reasoningTokens: 0))
+                control: nil, mechanismWasDemonstrated: false, on: none,
+                off: .init(finding: offFinding, reasoningEmitted: nil, reasoningTokens: 0))
         }
 
         let off = await observe(mechanism.disable, label: "\(mechanism.label) off",
                                 keywords: mechanism.rejectionKeywords,
                                 makeProviderForcing: makeProviderForcing, calls: calls)
-        return ReasoningMechanismFindings(control: mechanism.control, on: on, off: off)
+        return ReasoningMechanismFindings(control: mechanism.control,
+                                          mechanismWasDemonstrated: demonstrated != nil,
+                                          on: on, off: off)
     }
 
     private static func observe(
@@ -1921,6 +1967,18 @@ public enum ModelProber {
 
         // Only meaningful when reasoning was OBSERVABLE with the switch on: otherwise its absence
         // with the switch off says nothing about the switch.
+        // Reasoning OBSERVED with the switch off refutes the switch outright — no baseline needed,
+        // and this must be checked before the baseline guard below. Without it the function read
+        // that same observation to establish `reasons = true` and then ignored it here, so a model
+        // that skipped thinking on the ON call and did it on the OFF call was recorded as "the
+        // switch works" against direct evidence that it did not.
+        if off.reasoningEmitted == true, on.reasoningEmitted != true {
+            return ReasoningConclusions(
+                reasons: reasons,
+                canBeDisabled: .established(false, "reasoning came back WITH the switch off, so the "
+                                                 + "endpoint did not honour it (nothing was observed "
+                                                 + "with it on, so there is no baseline to compare)"))
+        }
         guard on.reasoningEmitted == true,
               off.finding.status == .established, off.finding.value == true else {
             return ReasoningConclusions(reasons: reasons, canBeDisabled: off.finding)
@@ -2086,9 +2144,18 @@ public enum ModelProber {
     /// Fails toward `inconclusive`: a missed malformed-request phrase costs a re-probe, while a
     /// missed capability rejection would cost a wrong vendor fact written into the catalog.
     private static func describesMalformedRequest(_ loweredDetail: String) -> Bool {
+        // Deliberately does NOT list "unsupported parameter": that is OpenAI's canonical wording for
+        // a genuine capability denial ("Unsupported parameter: 'temperature' is not supported with
+        // this model" — 34 such bodies in the local corpus, every one a real fact). Listing it would
+        // downgrade exactly the answers these probes exist to collect, and would also kill the
+        // mechanism probe's all-refused → established(false) branch.
+        //
+        // The max_completion_tokens case is matched on its shape-specific tail instead, with the
+        // quoting OpenAI actually uses (single quotes, not backticks — the backticked form matched
+        // nothing).
         ["field required", "is required", "required property", "missing required",
          "must be greater than", "must be less than", "must be at least",
-         "unsupported parameter", "use `max_completion_tokens`"]
+         "use 'max_completion_tokens'"]
             .contains { loweredDetail.contains($0) }
     }
 

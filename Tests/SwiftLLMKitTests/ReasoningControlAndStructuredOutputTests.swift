@@ -999,6 +999,82 @@ struct ReasoningMechanismDiscoveryTests {
                                         accepts: { _ in false }, emits: { _ in false })
         #expect(found.control == nil)
         #expect(found.on.finding.value == false)
-        #expect(found.off.finding.status == .inconclusive, "nothing to disable")
+        // Every mechanism asked and refused settles BOTH directions: there is no switch here to
+        // turn off. Reporting this inconclusive left `reasoningCanBeDisabled` nil, and a caller
+        // reading `?.value != false` then treated a model with no reasoning at all as one whose
+        // reasoning might be disableable — which is how the tool-choice probe came to force a
+        // `thinking` block at endpoints that have none.
+        #expect(found.off.finding.value == false)
+        #expect(found.mechanismWasDemonstrated == false)
+    }
+}
+
+/// The budget probes must FORCE their field. Going through production emission meant the value
+/// probed was not the value sent — the defect that put fabricated budgets in the shipped catalog.
+@Suite("A budget probe sends what it asks for")
+struct BudgetForcingOverrideTests {
+
+    @Test("Mechanisms that carry a token budget produce one, and those that don't produce none")
+    func onlyBudgetCarryingMechanismsForce() {
+        for control in ReasoningControl.allCases {
+            let forced = control.budgetForcingOverrides(budget: 4096, pairedMaxTokens: 5120)
+            #expect((forced != nil) == control.carriesTokenBudget,
+                    "\(control.rawValue): forcing and carriesTokenBudget must agree")
+        }
+    }
+
+    /// The value has to arrive verbatim: `ThinkingBudget.effective` floors anything below 1024, so a
+    /// probe asking 1023 through production sent 1024 and could never measure the real floor.
+    @Test("The requested budget reaches the body unfloored")
+    func budgetIsNotFloored() {
+        let forced = ReasoningControl.anthropicThinking.budgetForcingOverrides(budget: 1, pairedMaxTokens: 1025)
+        guard case .dictionary(let thinking)? = forced?["thinking"] else {
+            Issue.record("no thinking block"); return
+        }
+        #expect(thinking["budget_tokens"] == .int(1), "a floored 1024 here is the circularity")
+        #expect(forced?["max_tokens"] == .int(1025))
+    }
+
+    /// A separate allowance needs no pairing; forcing one would cap the reply rather than the budget.
+    @Test("Only output-drawn mechanisms pair a max_tokens")
+    func onlyDrawnMechanismsPair() {
+        #expect(ReasoningControl.thinkingBlock
+            .budgetForcingOverrides(budget: 100, pairedMaxTokens: 200)?["max_tokens"] == .int(200))
+        #expect(ReasoningControl.enableThinkingFlag
+            .budgetForcingOverrides(budget: 100, pairedMaxTokens: 200)?["max_tokens"] == nil)
+        #expect(ReasoningControl.geminiThinkingConfig
+            .budgetForcingOverrides(budget: 100, pairedMaxTokens: 200)?["max_tokens"] == nil)
+    }
+}
+
+/// `describesMalformedRequest` must not swallow the vendor's own capability denials.
+@Suite("A capability denial is not a malformed request")
+struct MalformedRequestPhraseTests {
+
+    private struct Failing: LLMProvider {
+        let body: String
+        func send(messages: [LLMMessage], tools: [LLMToolDefinition],
+                  overrides: LLMCallOverrides) async throws -> LLMResponse {
+            throw LLMProviderError.httpError(statusCode: 400, body: body)
+        }
+    }
+
+    private func toggle(_ body: String) async -> ProbeFinding<Bool> {
+        await ModelProber.probeReasoningToggle(enabled: true, makeProviderForcing: { _ in Failing(body: body) })
+    }
+
+    /// OpenAI's canonical denial wording. 34 bodies in the local corpus use it, every one a real
+    /// fact — listing it as "malformed" downgraded exactly the answers these probes collect.
+    @Test("'Unsupported parameter' is a denial and still establishes false")
+    func unsupportedParameterIsADenial() async {
+        let body = #"{"error":{"message":"Unsupported parameter: 'thinking' is not supported with this model."}}"#
+        #expect(await toggle(body).value == false)
+    }
+
+    /// The genuinely-malformed cases must still be caught.
+    @Test("A missing required field is still inconclusive")
+    func missingFieldStillInconclusive() async {
+        let body = #"{"error":{"message":"thinking.enabled.budget_tokens: Field required"}}"#
+        #expect(await toggle(body).status == .inconclusive)
     }
 }

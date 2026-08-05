@@ -66,6 +66,38 @@ public enum ReasoningControl: String, Sendable, Equatable, Hashable, Codable, Ca
         }
     }
 
+    /// The raw body fields that put a reasoning budget of `budget` on the wire for this mechanism,
+    /// or nil when the mechanism has no token budget.
+    ///
+    /// Exists so the budget probes can FORCE the field instead of going through production emission.
+    /// They were the only probes in the library that didn't, and both consequences were live:
+    /// production gates the field on `thinkingSupportsTokenBudget`, which nothing establishes — so
+    /// for `.thinkingBlock` models no budget reached the wire at all and every value was "accepted",
+    /// converging on the reservation arithmetic (kimi-k3 recorded 1,047,552 = its context window
+    /// minus the reservation). And `ThinkingBudget.effective` floors the value, so a probe asking
+    /// for 1023 sent 1024, the bisection walked down to a fabricated floor of 1, and that 1 was
+    /// written to the catalog where it LOWERED the production floor — making the next run measure
+    /// something different again. A probe whose input is filtered by the thing it is measuring
+    /// cannot measure it.
+    ///
+    /// `pairedMaxTokens` is emitted only where the budget is drawn from the output allowance; a
+    /// separate allowance needs no pairing and forcing one would cap the reply instead.
+    public func budgetForcingOverrides(budget: Int, pairedMaxTokens: Int) -> [String: AnyCodable]? {
+        switch self {
+        case .anthropicThinking, .thinkingBlock:
+            return ["thinking": .dictionary(["type": .string("enabled"),
+                                             "budget_tokens": .int(budget)]),
+                    "max_tokens": .int(pairedMaxTokens)]
+        case .enableThinkingFlag:
+            return ["enable_thinking": .bool(true), "thinking_budget": .int(budget)]
+        case .geminiThinkingConfig:
+            return ["generationConfig": .dictionary(["thinkingConfig":
+                        .dictionary(["thinkingBudget": .int(budget)])])]
+        case .reasoningEffortOnly, .unsupported:
+            return nil
+        }
+    }
+
     /// Label for the per-model editor picker.
     public var editorTitle: String {
         switch self {
