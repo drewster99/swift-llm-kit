@@ -65,6 +65,27 @@ struct ThinkingBudgetRangeTests {
         #expect(attempts == [expectedCeiling], "one call settles it — nothing higher is reachable")
     }
 
+    /// `searchCeiling` stands the OTHER limit in when the preferred one is unknown, and a context
+    /// window is not an output allowance. Accepting it says the endpoint tolerated a number, not
+    /// that the number is a thinking budget — which is how kimi-k2.7-code (no published output cap)
+    /// came to carry 261,120: its context window minus the reservation.
+    @Test("A ceiling borrowed from the other limit is inconclusive, not a measurement")
+    func borrowedCeilingIsInconclusive() async {
+        let (finding, _) = await probe(maxOutput: nil, maxContext: 262_144) { _ in true }
+        #expect(finding.status == .inconclusive)
+        #expect(finding.value == nil, "a context window must not be recorded as a budget ceiling")
+        #expect(finding.evidence?.contains("context window") == true)
+    }
+
+    /// The same acceptance IS a measurement when the bound is the model's own output allowance —
+    /// the Anthropic case, which must keep working.
+    @Test("A ceiling from the model's own allowance still establishes")
+    func ownAllowanceCeilingStillEstablishes() async {
+        let (finding, _) = await probe(maxOutput: 64_000) { _ in true }
+        #expect(finding.value == 64_000 - ThinkingBudget.minimumTokens)
+        #expect(finding.status == .established)
+    }
+
     @Test("A separate allowance is NOT reduced — nothing has to be paired with it")
     func separateAllowanceKeepsFullCeiling() async {
         let (finding, attempts) = await probe(

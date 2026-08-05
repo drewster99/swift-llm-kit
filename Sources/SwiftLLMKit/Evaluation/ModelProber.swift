@@ -1213,8 +1213,8 @@ public enum ModelProber {
     /// `"required"` at Anthropic — which requires `{"type": "any"}` — is rejected for the shape,
     /// the rejection names `tool_choice`, and it would be recorded as "this model cannot force a
     /// tool call". Flatly wrong for Claude, and it exports as shipped data.
-    /// - Parameter disableThinkingFirst: force `thinking: {type: disabled}` alongside the choice.
-    ///   Pass this whenever the model is KNOWN to allow it. Both Moonshot and DeepSeek reject
+    /// - Parameter disableReasoningWith: the DISCOVERED mechanism's own disable payload, sent
+    ///   alongside the choice; nil sends none. Both Moonshot and DeepSeek reject
     ///   `required` and named-function choices "incompatible with thinking enabled", so a probe run
     ///   with thinking on measures that incompatibility rather than the option — every model was
     ///   recorded as unable to force a tool call, which then makes the emission gate suppress a
