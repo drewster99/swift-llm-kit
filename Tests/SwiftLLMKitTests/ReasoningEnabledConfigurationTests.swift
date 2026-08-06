@@ -115,8 +115,34 @@ struct ReasoningEnabledConfigurationTests {
         #expect(state(nil, 4096).label == "on")
         #expect(state(false, 4096).label == "off")
         #expect(state(nil, nil).label == "off")
-        // ON with no budget emits nothing — the resolver says so instead of claiming "on".
-        #expect(state(true, nil).label == "unknown")
+        // ON with no budget seeds the minimum at emission — so the resolver says ON, seeded.
+        #expect(state(true, nil).label == "on")
+        // A budget capability measured FALSE withholds the block (emission fails open on unknown,
+        // closed only on a measured false) — the resolver mirrors it.
+        #expect(ReasoningControl.plannedThinkingState(
+            control: .anthropicThinking,
+            capabilities: ModelCapabilities(states: [.thinkingSupportsTokenBudget: false]),
+            reasoningEnabled: true, thinkingBudget: 4096,
+            reasoningEffort: nil, reasoningEffortSupport: nil).label == "unknown")
+    }
+
+    @Test("Anthropic: configured ON with no budget seeds the minimum, matching per-call ON")
+    func anthropicConfiguredOnSeedsMinimum() throws {
+        let body = try anthropic(reasoningEnabled: true, thinkingBudget: nil)
+            .buildRequestBody(messages: [.user("hi")], tools: [], overrides: LLMCallOverrides())
+        let thinking = try #require(body["thinking"] as? [String: Any])
+        #expect(thinking["budget_tokens"] as? Int == ThinkingBudget.minimumTokens)
+    }
+
+    @Test("Planned state: a bare budget on a thinkingBlock model is sent typeless, not silent")
+    func plannedStateThinkingBlockBareBudget() {
+        let state = ReasoningControl.plannedThinkingState(
+            control: .thinkingBlock,
+            capabilities: ModelCapabilities([.thinkingSupportsTokenBudget]),
+            reasoningEnabled: nil, thinkingBudget: 2048,
+            reasoningEffort: nil, reasoningEffortSupport: nil)
+        #expect(state.label == "unknown")
+        #expect(state.detail.contains("budget_tokens"))
     }
 
     @Test("Planned state gates directions on the measured switchability, like emission")
@@ -143,7 +169,9 @@ struct ReasoningEnabledConfigurationTests {
                 reasoningEnabled: false, thinkingBudget: nil,
                 reasoningEffort: nil, reasoningEffortSupport: effortSupport)
         }
-        #expect(state(effortSupport: nil).label == "off")
+        // A NIL support means `reasoning_effort` is not measured-supported: emission fails
+        // closed and sends nothing, so the honest answer is unknown — not "off".
+        #expect(state(effortSupport: nil).label == "unknown")
         #expect(state(effortSupport: EffortSupport(levels: ["low", "high"])).label == "unknown")
         #expect(state(effortSupport: EffortSupport(levels: ["none", "high"])).label == "off")
         // And with no off request it is always on.

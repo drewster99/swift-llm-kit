@@ -182,6 +182,14 @@ struct AnthropicProvider: LLMProvider {
         let requestedBudget = overrides.thinkingBudgetTokens ?? configuration.thinkingBudget
         let thinkingEnabled = overrides.reasoningEnabled ?? configuration.reasoningEnabled
             ?? ((requestedBudget ?? 0) > 0)
+        // An explicit ON with no budget seeds the API minimum: Anthropic's manual thinking
+        // cannot be on without `budget_tokens`, and an On that emits nothing is not on. One
+        // seed for the per-call and configuration switches alike — the previous per-call-only
+        // seed lived in the emission branch, BELOW the pairing whose guard required a real
+        // requestedBudget, so it could never actually emit (dead since it was written).
+        let effectiveBudget = requestedBudget
+            ?? ((overrides.reasoningEnabled ?? configuration.reasoningEnabled) == true
+                ? ThinkingBudget.minimumTokens : nil)
 
         // When MANUAL extended thinking is enabled, max_tokens must exceed
         // budget_tokens (which is itself floored at 1024 by Anthropic). Clamp
@@ -190,7 +198,7 @@ struct AnthropicProvider: LLMProvider {
         // apply.
         // One shared pairing routine with `prepareRequest` — see `ThinkingBudget.pairing`.
         let thinkingPair: (maxTokens: Int, budget: Int?)? = {
-            guard thinkingEnabled, !usesAdaptiveThinking, let budget = requestedBudget, budget > 0 else { return nil }
+            guard thinkingEnabled, !usesAdaptiveThinking, let budget = effectiveBudget, budget > 0 else { return nil }
             return ThinkingBudget.pairing(
                 requestedBudget: budget,
                 requestedMax: maxOutputTokensOverride ?? configuration.maxTokens,
@@ -270,8 +278,7 @@ struct AnthropicProvider: LLMProvider {
                 // Adaptive thinking — model decides depth, no budget_tokens.
                 // Steered via `output_config.effort` below if user set it.
                 body["thinking"] = ["type": "adaptive"] as [String: Any]
-            } else if let budget = requestedBudget ?? (overrides.reasoningEnabled == true ? ThinkingBudget.minimumTokens : nil),
-                      budget > 0 {
+            } else if let budget = effectiveBudget, budget > 0 {
                 // Already clamped against both the measured ceiling and the room under
                 // `max_tokens`; `nil` means no legal budget exists, so emit no thinking block
                 // rather than one the endpoint will reject.

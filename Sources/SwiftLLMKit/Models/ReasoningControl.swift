@@ -246,16 +246,21 @@ extension ReasoningControl {
             return .unsupported
 
         case .reasoningEffortOnly:
-            if reasoningEffort == "none" {
+            // `reasoning_effort` emission fails CLOSED: nothing goes on the wire unless support
+            // is KNOWN (`isSupported == true`). Every branch here mirrors that gate.
+            let effortSendable = reasoningEffortSupport?.isSupported == true
+            if reasoningEffort == "none", effortSendable {
                 return .off("reasoning_effort: none")
             }
             if reasoningEffort == nil, reasoningEnabled == false {
-                if reasoningEffortSupport?.rejects("none") != true {
+                if effortSendable, reasoningEffortSupport?.rejects("none") != true {
                     return .off("reasoning_effort: none")
                 }
-                return .unknown("off requested, but the model's ladder rejects \"none\" — nothing sent")
+                return .unknown(effortSendable
+                    ? "off requested, but the model's ladder rejects \"none\" — nothing sent"
+                    : "off requested, but reasoning_effort is not measured-supported — nothing sent")
             }
-            if let reasoningEffort {
+            if let reasoningEffort, effortSendable {
                 return .on("always reasons — depth reasoning_effort: \(reasoningEffort)")
             }
             return .on("always reasons — depth is the model's default")
@@ -263,10 +268,19 @@ extension ReasoningControl {
         case .anthropicThinking:
             let enabled = reasoningEnabled ?? (budget > 0)
             if enabled {
+                // Emission fails OPEN on an unknown budget capability and withholds the block
+                // only on a measured false — mirror exactly.
+                guard capabilities.state(of: .thinkingSupportsTokenBudget) != false else {
+                    return .unknown("budget measured unsupported — block not sent, model default applies")
+                }
                 if budget > 0 {
                     return .on("thinking block, budget \(budget.formatted()) tokens")
                 }
-                return .unknown("on requested but no budget set — block not sent, model default applies")
+                if reasoningEnabled == true {
+                    // ON with no budget seeds the minimum — an On that emits nothing is not on.
+                    return .on("thinking block, minimum budget \(ThinkingBudget.minimumTokens.formatted()) tokens (seeded)")
+                }
+                return .unknown("no budget set — block not sent, model default applies")
             }
             return .off("no thinking block sent")
 
@@ -286,6 +300,10 @@ extension ReasoningControl {
                 }
                 return .unknown("\(wants ? "on" : "off") requested, but the model was not measured "
                                 + "switchable \(wants ? "on" : "off") — nothing sent, model default applies")
+            }
+            if budget > 0, capabilities.state(of: .thinkingSupportsTokenBudget) == true {
+                return .unknown("thinking.budget_tokens \(budget.formatted()) sent with no type — "
+                                + "the model decides on/off")
             }
             return .unknown("nothing sent — model default applies")
 
