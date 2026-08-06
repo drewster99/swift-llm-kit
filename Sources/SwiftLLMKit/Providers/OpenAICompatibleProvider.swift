@@ -261,7 +261,8 @@ struct OpenAICompatibleProvider: LLMProvider {
             // The per-call override WINS over the configured budget — that is what a per-call
             // override is for, and previously `reasoningEnabled: false` could not turn off a model
             // whose configuration carried a positive budget.
-            let wantsReasoning = overrides.reasoningEnabled ?? ((requestedBudget ?? 0) > 0)
+            let wantsReasoning = overrides.reasoningEnabled ?? configuration.reasoningEnabled
+                ?? ((requestedBudget ?? 0) > 0)
             // Each DIRECTION is gated by its own capability, and the legacy fallback is exempt from
             // both — it exists precisely for models whose capabilities nothing has recorded, so
             // requiring a known-true there would suppress the very behaviour it preserves.
@@ -275,7 +276,7 @@ struct OpenAICompatibleProvider: LLMProvider {
                                                        measuredMinimum: measuredMinThinkingBudget) {
                     body["thinking_budget"] = sent
                 }
-            } else if overrides.reasoningEnabled == false, directionAllowed {
+            } else if (overrides.reasoningEnabled ?? configuration.reasoningEnabled) == false, directionAllowed {
                 // Only an EXPLICIT off is stated; an absent budget is silence, not a request to
                 // disable.
                 body["enable_thinking"] = false
@@ -283,7 +284,7 @@ struct OpenAICompatibleProvider: LLMProvider {
         case .thinkingBlock:
             // `{"type": "enabled"|"disabled"}`, optionally with `keep`.
             var thinking: [String: Any] = [:]
-            if let wantsReasoning = overrides.reasoningEnabled {
+            if let wantsReasoning = overrides.reasoningEnabled ?? configuration.reasoningEnabled {
                 let gate: ModelCapability = wantsReasoning ? .reasoningCanBeEnabled : .reasoningCanBeDisabled
                 if modelCapabilities.state(of: gate) == true {
                     thinking["type"] = wantsReasoning ? "enabled" : "disabled"
@@ -326,7 +327,17 @@ struct OpenAICompatibleProvider: LLMProvider {
         // inbound requests). Empty string normalized to nil.
         let effectiveEffort: String? = {
             if let override = reasoningEffortOverride, !override.isEmpty { return override }
-            return configuration.reasoningEffort
+            if let configured = configuration.reasoningEffort { return configured }
+            // An explicit thinking-off on an effort-only model has exactly one wire form:
+            // `reasoning_effort: "none"` — there is no thinking block or flag to withhold.
+            // Gated on the ladder not KNOWN-rejecting "none" (fails open on an unknown ladder,
+            // like the general-effort field: a clear API error beats a silently-ignored switch).
+            if (overrides.reasoningEnabled ?? configuration.reasoningEnabled) == false,
+               control == .reasoningEffortOnly,
+               reasoningEffortSupport?.rejects("none") != true {
+                return "none"
+            }
+            return nil
         }()
         // Fails CLOSED, unlike Anthropic's general effort above: a non-reasoning model rejects
         // `reasoning_effort` with HTTP 400, so silence must mean "don't send it".

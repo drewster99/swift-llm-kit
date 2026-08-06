@@ -180,7 +180,8 @@ struct AnthropicProvider: LLMProvider {
         // Per-call overrides win over the configuration — that is what a per-call override is
         // for, and Anthropic ignored both entirely until now.
         let requestedBudget = overrides.thinkingBudgetTokens ?? configuration.thinkingBudget
-        let thinkingEnabled = overrides.reasoningEnabled ?? ((requestedBudget ?? 0) > 0)
+        let thinkingEnabled = overrides.reasoningEnabled ?? configuration.reasoningEnabled
+            ?? ((requestedBudget ?? 0) > 0)
 
         // When MANUAL extended thinking is enabled, max_tokens must exceed
         // budget_tokens (which is itself floored at 1024 by Anthropic). Clamp

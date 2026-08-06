@@ -20,6 +20,9 @@ public struct ModelConfigurationOverride: Codable, Sendable, Equatable {
     public var maxContextTokens: Int?
     /// Extended-thinking token budget (Anthropic / Alibaba). `nil` inherits (off / model default).
     public var thinkingBudget: Int?
+    /// The thinking SWITCH: force reasoning on or off per the model's discovered mechanism.
+    /// `nil` inherits the model/provider default. See ``ModelConfiguration/reasoningEnabled``.
+    public var reasoningEnabled: Bool?
     /// Adaptive-thinking effort hint. `nil` inherits the model/provider default.
     /// GENERAL effort override (Anthropic `output_config.effort`).
     public var effort: String?
@@ -37,6 +40,7 @@ public struct ModelConfigurationOverride: Codable, Sendable, Equatable {
         maxOutputTokens: Int? = nil,
         maxContextTokens: Int? = nil,
         thinkingBudget: Int? = nil,
+        reasoningEnabled: Bool? = nil,
         effort: String? = nil,
         reasoningEffort: String? = nil,
         extendedCacheTTL: Bool? = nil,
@@ -47,6 +51,7 @@ public struct ModelConfigurationOverride: Codable, Sendable, Equatable {
         self.maxOutputTokens = maxOutputTokens
         self.maxContextTokens = maxContextTokens
         self.thinkingBudget = thinkingBudget
+        self.reasoningEnabled = reasoningEnabled
         self.effort = effort
         self.reasoningEffort = reasoningEffort
         self.extendedCacheTTL = extendedCacheTTL
@@ -58,7 +63,7 @@ public struct ModelConfigurationOverride: Codable, Sendable, Equatable {
     /// override should not be persisted (it is indistinguishable from having no entry at all).
     public var isEmpty: Bool {
         temperature == nil && maxOutputTokens == nil && maxContextTokens == nil
-            && thinkingBudget == nil && effort == nil && reasoningEffort == nil
+            && thinkingBudget == nil && reasoningEnabled == nil && effort == nil && reasoningEffort == nil
             && extendedCacheTTL == nil && streaming == nil
             && (extraJSONOverrides?.isEmpty ?? true)
     }
@@ -79,6 +84,7 @@ public struct ModelConfigurationOverride: Codable, Sendable, Equatable {
             maxOutputTokens: maxOutputTokens ?? modelInfo.maxOutputTokens ?? 4096,
             maxContextTokens: maxContextTokens ?? modelInfo.maxInputTokens ?? 128_000,
             thinkingBudget: thinkingBudget,
+            reasoningEnabled: reasoningEnabled,
             effort: effort,
             reasoningEffort: reasoningEffort,
             extendedCacheTTL: extendedCacheTTL ?? false,
@@ -117,6 +123,25 @@ public struct ModelConfigurationOverride: Codable, Sendable, Equatable {
                 ?? "this parameter, which the model does not support"
             out.append(OverrideWarning(field: field, message: "Not among the model's \(detail)."))
         }
+        // The thinking switch: warn when the forced direction is measured IMPOSSIBLE — emission
+        // will withhold the field, so the setting is inert. Unknown direction facts warn nothing.
+        if let wants = reasoningEnabled,
+           modelInfo.capabilities.state(of: wants ? .reasoningCanBeEnabled : .reasoningCanBeDisabled) == false {
+            out.append(OverrideWarning(field: .reasoningEnabled,
+                message: "The model was measured unable to switch reasoning \(wants ? "on" : "off"); nothing will be sent."))
+        }
+        // Budget against the MEASURED range; emission clamps, so out-of-range means "not what
+        // you asked for" rather than an error — still worth saying.
+        if let v = thinkingBudget, v > 0 {
+            if let known = modelInfo.maxThinkingBudgetTokens, v > known {
+                out.append(OverrideWarning(field: .thinkingBudget,
+                    message: "Above the measured maximum thinking budget (\(known.formatted()) tokens); the send is clamped."))
+            }
+            if let floor = modelInfo.minThinkingBudgetTokens, v < floor {
+                out.append(OverrideWarning(field: .thinkingBudget,
+                    message: "Below the measured minimum thinking budget (\(floor.formatted()) tokens); the send is floored."))
+            }
+        }
         return out
     }
 }
@@ -124,7 +149,8 @@ public struct ModelConfigurationOverride: Codable, Sendable, Equatable {
 /// A non-blocking advisory that one overridden field is outside the model's known/expected range.
 public struct OverrideWarning: Sendable, Equatable, Identifiable {
     public enum Field: String, Sendable, CaseIterable {
-        case temperature, maxOutputTokens, maxContextTokens, effort, reasoningEffort
+        case temperature, maxOutputTokens, maxContextTokens, effort, reasoningEffort, reasoningEnabled,
+             thinkingBudget
     }
     public let field: Field
     public let message: String

@@ -182,3 +182,152 @@ public enum ReasoningControl: String, Sendable, Equatable, Hashable, Codable, Ca
         }
     }
 }
+
+// MARK: - Planned thinking state (display resolution)
+
+/// What a configuration will ACTUALLY do about thinking on the next request — the four-state
+/// truth a settings UI must show, distinct from what the user asked for.
+///
+/// `on`/`off` mean an explicit signal (or a mechanism-known default) decides the state;
+/// `unsupported` means the model has no reasoning to switch; `unknown` means the honest answer
+/// is "whatever the model does by default" — either the mechanism is unrecorded, or the
+/// requested direction is not measured as switchable so nothing will be sent. The associated
+/// detail is DISPLAY text only; never branch on it.
+public enum PlannedThinkingState: Sendable, Equatable {
+    case on(String)
+    case off(String)
+    case unsupported
+    case unknown(String)
+
+    /// Short display form: "on", "off", "unsupported", "unknown".
+    public var label: String {
+        switch self {
+        case .on: return "on"
+        case .off: return "off"
+        case .unsupported: return "unsupported"
+        case .unknown: return "unknown"
+        }
+    }
+
+    /// The explanatory detail, empty for `unsupported`.
+    public var detail: String {
+        switch self {
+        case .on(let d), .off(let d), .unknown(let d): return d
+        case .unsupported: return ""
+        }
+    }
+}
+
+extension ReasoningControl {
+    /// Resolves what the given thinking settings will do on the wire for a model with this
+    /// (possibly unrecorded) mechanism — the DISPLAY COMPANION of the emission switches in
+    /// `AnthropicProvider`, `OpenAICompatibleProvider.prepareRequest`, and `GeminiProvider`.
+    /// It exists so settings UI cannot drift from emission by reimplementing these rules;
+    /// any change to an emission switch must be mirrored here, and vice versa.
+    ///
+    /// `control` nil = no source has recorded the mechanism (callers coalesce
+    /// `requiresAdaptiveThinking` themselves when they honor that legacy flag). Directions are
+    /// gated on the same probed capabilities emission gates on, so "forced on but not measured
+    /// switchable" reports the honest outcome — nothing sent, model default — not the wish.
+    public static func plannedThinkingState(
+        control: ReasoningControl?,
+        capabilities: ModelCapabilities,
+        reasoningEnabled: Bool?,
+        thinkingBudget: Int?,
+        reasoningEffort: String?,
+        reasoningEffortSupport: EffortSupport?
+    ) -> PlannedThinkingState {
+        let budget = thinkingBudget ?? 0
+        guard let control else {
+            return .unknown("mechanism unrecorded — model default applies")
+        }
+        switch control {
+        case .unsupported:
+            return .unsupported
+
+        case .reasoningEffortOnly:
+            if reasoningEffort == "none" {
+                return .off("reasoning_effort: none")
+            }
+            if reasoningEffort == nil, reasoningEnabled == false {
+                if reasoningEffortSupport?.rejects("none") != true {
+                    return .off("reasoning_effort: none")
+                }
+                return .unknown("off requested, but the model's ladder rejects \"none\" — nothing sent")
+            }
+            if let reasoningEffort {
+                return .on("always reasons — depth reasoning_effort: \(reasoningEffort)")
+            }
+            return .on("always reasons — depth is the model's default")
+
+        case .anthropicThinking:
+            let enabled = reasoningEnabled ?? (budget > 0)
+            if enabled {
+                if budget > 0 {
+                    return .on("thinking block, budget \(budget.formatted()) tokens")
+                }
+                return .unknown("on requested but no budget set — block not sent, model default applies")
+            }
+            return .off("no thinking block sent")
+
+        case .anthropicAdaptiveThinking:
+            let enabled = reasoningEnabled ?? (budget > 0)
+            return enabled
+                ? .on("adaptive — the model picks its own depth")
+                : .off("no thinking block sent")
+
+        case .thinkingBlock:
+            if let wants = reasoningEnabled {
+                let gate: ModelCapability = wants ? .reasoningCanBeEnabled : .reasoningCanBeDisabled
+                if capabilities.state(of: gate) == true {
+                    return wants ? .on("thinking.type: enabled"
+                                       + (budget > 0 ? ", budget \(budget.formatted())" : ""))
+                                 : .off("thinking.type: disabled")
+                }
+                return .unknown("\(wants ? "on" : "off") requested, but the model was not measured "
+                                + "switchable \(wants ? "on" : "off") — nothing sent, model default applies")
+            }
+            return .unknown("nothing sent — model default applies")
+
+        case .enableThinkingFlag:
+            let wants = reasoningEnabled ?? (budget > 0)
+            let gate: ModelCapability = wants ? .reasoningCanBeEnabled : .reasoningCanBeDisabled
+            let allowed = capabilities.state(of: gate) == true
+            if wants {
+                if allowed {
+                    let budgetNote = budget > 0
+                        && capabilities.state(of: .thinkingSupportsTokenBudget) == true
+                        ? ", thinking_budget \(budget.formatted())" : ""
+                    return .on("enable_thinking: true\(budgetNote)")
+                }
+                return .unknown("on requested, but the model was not measured switchable on — "
+                                + "nothing sent, model default applies")
+            }
+            if reasoningEnabled == false {
+                return allowed
+                    ? .off("enable_thinking: false")
+                    : .unknown("off requested, but the model was not measured switchable off — "
+                               + "nothing sent, model default applies")
+            }
+            return .unknown("nothing sent — model default applies")
+
+        case .geminiThinkingConfig:
+            let budgetSupported = capabilities.state(of: .thinkingSupportsTokenBudget) == true
+            func gated(_ state: PlannedThinkingState) -> PlannedThinkingState {
+                budgetSupported ? state
+                    : .unknown("thinkingConfig not measured-supported — nothing sent, model default applies")
+            }
+            switch reasoningEnabled {
+            case false:
+                return gated(.off("thinkingConfig.thinkingBudget: 0"))
+            case true:
+                let sent = budget > 0 ? budget : ThinkingBudget.minimumTokens
+                return gated(.on("thinkingConfig.thinkingBudget: \(sent.formatted())"))
+            case nil:
+                if budget > 0 { return gated(.on("thinkingConfig.thinkingBudget: \(budget.formatted())")) }
+                if thinkingBudget == 0 { return gated(.off("thinkingConfig.thinkingBudget: 0")) }
+                return .unknown("nothing sent — model default (dynamic thinking) applies")
+            }
+        }
+    }
+}

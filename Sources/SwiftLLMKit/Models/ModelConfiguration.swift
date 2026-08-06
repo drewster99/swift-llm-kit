@@ -33,6 +33,17 @@ public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
     /// adaptive thinking", budget == 0 / nil means "thinking off." Use
     /// ``effort`` to control depth on adaptive-thinking models.
     public var thinkingBudget: Int?
+    /// Whether the model should reason/think — the tri-state THINKING SWITCH, distinct from
+    /// ``thinkingBudget`` (depth) and honored per the model's discovered ``ReasoningControl``
+    /// mechanism: the `thinking` block's `enabled`/`disabled`, `enable_thinking` true/false,
+    /// Gemini's `thinkingBudget: 0` off-form, adaptive thinking's on-signal, or — for
+    /// effort-only reasoning models — `reasoning_effort: "none"` as the off-form.
+    ///
+    /// `nil` = say nothing and let the model/provider default stand. Each direction is still
+    /// gated at emission on the probed `reasoningCanBeEnabled` / `reasoningCanBeDisabled`
+    /// facts, so a setting a model cannot honor is withheld rather than sent to certain 400.
+    /// The per-call ``LLMCallOverrides/reasoningEnabled`` wins over this when both are set.
+    public var reasoningEnabled: Bool?
     /// GENERAL effort — how much work the model does overall, independent of reasoning.
     ///
     /// Emitted on Anthropic requests as top-level `output_config: {effort: <value>}`. It is NOT a
@@ -76,6 +87,7 @@ public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
         maxOutputTokens: Int = 4096,
         maxContextTokens: Int = 128_000,
         thinkingBudget: Int? = nil,
+        reasoningEnabled: Bool? = nil,
         effort: String? = nil,
         reasoningEffort: String? = nil,
         extendedCacheTTL: Bool = false,
@@ -92,6 +104,7 @@ public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
         self.maxOutputTokens = maxOutputTokens
         self.maxContextTokens = maxContextTokens
         self.thinkingBudget = thinkingBudget
+        self.reasoningEnabled = reasoningEnabled
         self.effort = effort
         self.reasoningEffort = reasoningEffort
         self.extendedCacheTTL = extendedCacheTTL
@@ -123,6 +136,7 @@ public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
         maxOutputTokens = try container.decode(Int.self, forKey: .maxOutputTokens)
         maxContextTokens = try container.decode(Int.self, forKey: .maxContextTokens)
         thinkingBudget = try container.decodeIfPresent(Int.self, forKey: .thinkingBudget)
+        reasoningEnabled = try container.decodeIfPresent(Bool.self, forKey: .reasoningEnabled)
         effort = try container.decodeIfPresent(String.self, forKey: .effort)
         reasoningEffort = try container.decodeIfPresent(String.self, forKey: .reasoningEffort)
         extendedCacheTTL = try container.decodeIfPresent(Bool.self, forKey: .extendedCacheTTL) ?? false
@@ -136,7 +150,7 @@ public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
     /// 0.0.21; its legacy decode lives in `LegacyCodingKeys` below.
     private enum CodingKeys: String, CodingKey {
         case id, name, providerID, modelID, temperature
-        case maxOutputTokens, maxContextTokens, thinkingBudget, effort, reasoningEffort, extendedCacheTTL
+        case maxOutputTokens, maxContextTokens, thinkingBudget, reasoningEnabled, effort, reasoningEffort, extendedCacheTTL
         case streaming, isValid, validationError, extraJSONOverrides
     }
 

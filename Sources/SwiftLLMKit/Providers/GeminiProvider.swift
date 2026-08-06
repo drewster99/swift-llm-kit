@@ -168,7 +168,7 @@ struct GeminiProvider: LLMProvider {
         // per-call override wins, and an explicit `reasoningEnabled: false` sends 0, which is
         // Gemini's documented way to turn thinking off.
         let geminiBudget: Int? = {
-            switch overrides.reasoningEnabled {
+            switch overrides.reasoningEnabled ?? configuration.reasoningEnabled {
             case false:
                 return 0                                    // Gemini's documented "off"
             case true:

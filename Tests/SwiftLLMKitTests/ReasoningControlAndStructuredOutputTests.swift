@@ -266,7 +266,7 @@ struct HandWrittenCodableCoverageTests {
     func modelConfigurationCoverage() throws {
         let config = ModelConfiguration(
             name: "c", providerID: "p", modelID: "m", temperature: 0.5,
-            maxOutputTokens: 100, maxContextTokens: 1000, thinkingBudget: 2048,
+            maxOutputTokens: 100, maxContextTokens: 1000, thinkingBudget: 2048, reasoningEnabled: true,
             effort: "high", reasoningEffort: "low", extendedCacheTTL: true, streaming: false,
             extraJSONOverrides: ["k": .string("v")])
         // `isValid`/`validationError` are runtime state, not persisted configuration.
