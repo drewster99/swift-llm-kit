@@ -81,6 +81,12 @@ struct OllamaProvider: LLMProvider {
         // Ollama doesn't have an effort enum and its chat options don't
         // expose frequency_penalty / presence_penalty. Those fields on
         // `overrides` are silently discarded.
+        // `reasoningEnabled` (either layer) is likewise NOT emitted. Ollama's top-level
+        // `think` flag is a distinct mechanism with no ReasoningControl case, and Ollama
+        // rejects `think: true` on models that don't support thinking — an ungated emit
+        // would 400 requests that work today, and gating needs the probe/catalog story a
+        // new mechanism case implies (resolver branch, disable-overrides, budget gates).
+        // Until that case exists, callers can reach `think` via extraJSONOverrides.
 
         // Documents are REFUSED, not dropped. Ollama's chat API carries `images` and nothing
         // else — there is no document/PDF field — and `encodeMessage` accordingly has no

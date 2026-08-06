@@ -39,10 +39,13 @@ public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
     /// Gemini's `thinkingBudget: 0` off-form, adaptive thinking's on-signal, or — for
     /// effort-only reasoning models — `reasoning_effort: "none"` as the off-form.
     ///
-    /// `nil` = say nothing and let the model/provider default stand. Each direction is still
-    /// gated at emission on the probed `reasoningCanBeEnabled` / `reasoningCanBeDisabled`
-    /// facts, so a setting a model cannot honor is withheld rather than sent to certain 400.
-    /// The per-call ``LLMCallOverrides/reasoningEnabled`` wins over this when both are set.
+    /// `nil` = say nothing and let the model/provider default stand. What emission does with a
+    /// setting the model cannot honor varies by MECHANISM: the `thinking` block and
+    /// `enable_thinking` withhold an unmeasured direction (probed `reasoningCanBeEnabled` /
+    /// `reasoningCanBeDisabled` facts); effort-only models can state off only when the ladder
+    /// accepts `"none"`; Anthropic and Gemini honor the switch directly. `plannedThinkingState`
+    /// is the per-mechanism truth. The per-call ``LLMCallOverrides/reasoningEnabled`` wins over
+    /// this when both are set.
     public var reasoningEnabled: Bool?
     /// GENERAL effort — how much work the model does overall, independent of reasoning.
     ///

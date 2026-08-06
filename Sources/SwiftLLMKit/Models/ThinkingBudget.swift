@@ -17,6 +17,15 @@ public enum ThinkingBudget {
     /// The smallest budget the supporting APIs document. A per-model measurement supersedes it.
     public static let minimumTokens = 1024
 
+    /// The value an editor seeds when the user first overrides the thinking budget: the model's
+    /// measured floor (never below the documented one), clamped to the measured ceiling so a
+    /// fresh override can never be born already out of range and self-warning.
+    public static func overrideSeed(measuredMinimum: Int?, measuredMaximum: Int?) -> Int {
+        let floor = max(measuredMinimum ?? minimumTokens, minimumTokens)
+        guard let measuredMaximum else { return floor }
+        return min(floor, measuredMaximum)
+    }
+
     /// How far above the documented floor the minimum search is willing to look.
     ///
     /// An ASSUMPTION, and the probe reports it as one rather than recording the cap as a result: no

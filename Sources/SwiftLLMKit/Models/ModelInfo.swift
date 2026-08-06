@@ -359,3 +359,12 @@ extension ModelInfo: Codable {
         // Legacy fields intentionally not written — new format only.
     }
 }
+
+public extension ModelInfo {
+    /// The reasoning mechanism EMISSION will act on: the recorded control, or the hand-set
+    /// adaptive behavior flag that predates the probe's ability to discover the mechanism.
+    /// One definition, so display surfaces cannot coalesce it differently from the providers.
+    var effectiveReasoningControl: ReasoningControl? {
+        reasoningControl ?? (behaviorFlags.requiresAdaptiveThinking ? .anthropicAdaptiveThinking : nil)
+    }
+}

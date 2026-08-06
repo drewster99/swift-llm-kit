@@ -190,9 +190,9 @@ public enum ReasoningControl: String, Sendable, Equatable, Hashable, Codable, Ca
 ///
 /// `on`/`off` mean an explicit signal (or a mechanism-known default) decides the state;
 /// `unsupported` means the model has no reasoning to switch; `unknown` means the honest answer
-/// is "whatever the model does by default" — either the mechanism is unrecorded, or the
-/// requested direction is not measured as switchable so nothing will be sent. The associated
-/// detail is DISPLAY text only; never branch on it.
+/// is "whatever the model does by default" — either the mechanism is unrecorded on an apiType
+/// with no legacy fallback, or the requested direction is not measured as switchable so nothing
+/// will be sent. The associated detail is DISPLAY text only; never branch on it.
 public enum PlannedThinkingState: Sendable, Equatable {
     case on(String)
     case off(String)
@@ -216,29 +216,80 @@ public enum PlannedThinkingState: Sendable, Equatable {
         case .unsupported: return ""
         }
     }
+
+    /// Everything ``ReasoningControl/plannedThinkingState(_:)`` needs about one model and one
+    /// settings snapshot. A struct rather than a parameter list because the resolver must also
+    /// see the provider's `apiType`: emission does not stop at an unrecorded mechanism —
+    /// Anthropic's manual path and Gemini's `thinkingConfig` are control-independent, and
+    /// Alibaba Cloud coalesces nil to `enable_thinking` with the capability gates exempt.
+    ///
+    /// A configured `reasoning_effort` rides independently of the mechanism and is depth, not
+    /// on/off — it is deliberately NOT folded into this state; effort chips display it.
+    public struct Inputs: Sendable, Equatable {
+        public var control: ReasoningControl?
+        public var apiType: ProviderAPIType?
+        public var capabilities: ModelCapabilities
+        public var reasoningEnabled: Bool?
+        public var thinkingBudget: Int?
+        public var reasoningEffort: String?
+        public var reasoningEffortSupport: EffortSupport?
+
+        public init(control: ReasoningControl?, apiType: ProviderAPIType?,
+                    capabilities: ModelCapabilities, reasoningEnabled: Bool?,
+                    thinkingBudget: Int?, reasoningEffort: String?,
+                    reasoningEffortSupport: EffortSupport?) {
+            self.control = control
+            self.apiType = apiType
+            self.capabilities = capabilities
+            self.reasoningEnabled = reasoningEnabled
+            self.thinkingBudget = thinkingBudget
+            self.reasoningEffort = reasoningEffort
+            self.reasoningEffortSupport = reasoningEffortSupport
+        }
+
+        /// The canonical construction from a catalog record — the adaptive-flag coalescing
+        /// lives in ``ModelInfo/effectiveReasoningControl`` so no caller reimplements it.
+        public init(model: ModelInfo, apiType: ProviderAPIType?,
+                    reasoningEnabled: Bool?, thinkingBudget: Int?, reasoningEffort: String?) {
+            self.init(control: model.effectiveReasoningControl, apiType: apiType,
+                      capabilities: model.capabilities, reasoningEnabled: reasoningEnabled,
+                      thinkingBudget: thinkingBudget, reasoningEffort: reasoningEffort,
+                      reasoningEffortSupport: model.reasoningEffort)
+        }
+    }
 }
 
 extension ReasoningControl {
-    /// Resolves what the given thinking settings will do on the wire for a model with this
-    /// (possibly unrecorded) mechanism — the DISPLAY COMPANION of the emission switches in
-    /// `AnthropicProvider`, `OpenAICompatibleProvider.prepareRequest`, and `GeminiProvider`.
-    /// It exists so settings UI cannot drift from emission by reimplementing these rules;
-    /// any change to an emission switch must be mirrored here, and vice versa.
+    /// The mechanism emission falls back to when none is recorded — the display twin of the
+    /// legacy branches in the providers. Anthropic and Gemini emission never consult the
+    /// control at all; Alibaba coalesces nil to `enable_thinking` with the gates exempt.
+    private static func legacyFallbackControl(for apiType: ProviderAPIType?) -> ReasoningControl? {
+        switch apiType {
+        case .anthropic:    return .anthropicThinking
+        case .alibabaCloud: return .enableThinkingFlag
+        case .gemini:       return .geminiThinkingConfig
+        default:            return nil
+        }
+    }
+
+    /// Resolves what the given thinking settings will do on the wire — the DISPLAY COMPANION of
+    /// the emission switches in `AnthropicProvider`, `OpenAICompatibleProvider.prepareRequest`,
+    /// `GeminiProvider`, and `LLMKitManager.prepareRequest`. It exists so settings UI cannot
+    /// drift from emission by reimplementing these rules; any change to an emission switch must
+    /// be mirrored here, and vice versa.
     ///
-    /// `control` nil = no source has recorded the mechanism (callers coalesce
-    /// `requiresAdaptiveThinking` themselves when they honor that legacy flag). Directions are
+    /// A RECORDED mechanism is resolved strictly; an unrecorded one falls back per apiType the
+    /// same way emission does, with Alibaba's capability-gate exemption mirrored. Directions are
     /// gated on the same probed capabilities emission gates on, so "forced on but not measured
     /// switchable" reports the honest outcome — nothing sent, model default — not the wish.
-    public static func plannedThinkingState(
-        control: ReasoningControl?,
-        capabilities: ModelCapabilities,
-        reasoningEnabled: Bool?,
-        thinkingBudget: Int?,
-        reasoningEffort: String?,
-        reasoningEffortSupport: EffortSupport?
-    ) -> PlannedThinkingState {
-        let budget = thinkingBudget ?? 0
-        guard let control else {
+    public static func plannedThinkingState(_ inputs: PlannedThinkingState.Inputs) -> PlannedThinkingState {
+        let budget = inputs.thinkingBudget ?? 0
+        let capabilities = inputs.capabilities
+        let reasoningEnabled = inputs.reasoningEnabled
+        let reasoningEffort = inputs.reasoningEffort
+        let reasoningEffortSupport = inputs.reasoningEffortSupport
+        let isLegacyFallback = inputs.control == nil
+        guard let control = inputs.control ?? legacyFallbackControl(for: inputs.apiType) else {
             return .unknown("mechanism unrecorded — model default applies")
         }
         switch control {
@@ -266,21 +317,22 @@ extension ReasoningControl {
             return .on("always reasons — depth is the model's default")
 
         case .anthropicThinking:
+            // Reached for RECORDED budgeted mechanisms and for unrecorded Anthropic models
+            // alike — the provider's manual path never consults the control, and its gates
+            // (fail-open `!= false` on the budget capability) are identical either way, so no
+            // legacy exemption is needed here.
             let enabled = reasoningEnabled ?? (budget > 0)
             if enabled {
-                // Emission fails OPEN on an unknown budget capability and withholds the block
-                // only on a measured false — mirror exactly.
                 guard capabilities.state(of: .thinkingSupportsTokenBudget) != false else {
                     return .unknown("budget measured unsupported — block not sent, model default applies")
                 }
                 if budget > 0 {
                     return .on("thinking block, budget \(budget.formatted()) tokens")
                 }
-                if reasoningEnabled == true {
-                    // ON with no budget seeds the minimum — an On that emits nothing is not on.
-                    return .on("thinking block, minimum budget \(ThinkingBudget.minimumTokens.formatted()) tokens (seeded)")
-                }
-                return .unknown("no budget set — block not sent, model default applies")
+                // Reachable only through an explicit ON — a nil switch needs budget > 0 to
+                // count as enabled — and emission seeds the minimum for exactly that case
+                // (an explicit legacy 0 included: ON beats the old off-spelling).
+                return .on("thinking block, minimum budget \(ThinkingBudget.minimumTokens.formatted()) tokens (seeded)")
             }
             return .off("no thinking block sent")
 
@@ -294,8 +346,12 @@ extension ReasoningControl {
             if let wants = reasoningEnabled {
                 let gate: ModelCapability = wants ? .reasoningCanBeEnabled : .reasoningCanBeDisabled
                 if capabilities.state(of: gate) == true {
-                    return wants ? .on("thinking.type: enabled"
-                                       + (budget > 0 ? ", budget \(budget.formatted())" : ""))
+                    // The budget goes on the wire only on a measured-true budget capability —
+                    // mirror that gate rather than claiming a field the request may not carry.
+                    let budgetNote = budget > 0
+                        && capabilities.state(of: .thinkingSupportsTokenBudget) == true
+                        ? ", budget \(budget.formatted())" : ""
+                    return wants ? .on("thinking.type: enabled" + budgetNote)
                                  : .off("thinking.type: disabled")
                 }
                 return .unknown("\(wants ? "on" : "off") requested, but the model was not measured "
@@ -310,11 +366,14 @@ extension ReasoningControl {
         case .enableThinkingFlag:
             let wants = reasoningEnabled ?? (budget > 0)
             let gate: ModelCapability = wants ? .reasoningCanBeEnabled : .reasoningCanBeDisabled
-            let allowed = capabilities.state(of: gate) == true
+            // The legacy Alibaba fallback is EXEMPT from the capability gates, exactly as
+            // emission exempts it — no Alibaba model has its capabilities recorded, and a
+            // strict gate here would report "nothing sent" while `enable_thinking` goes out.
+            let allowed = isLegacyFallback || capabilities.state(of: gate) == true
             if wants {
                 if allowed {
                     let budgetNote = budget > 0
-                        && capabilities.state(of: .thinkingSupportsTokenBudget) == true
+                        && (isLegacyFallback || capabilities.state(of: .thinkingSupportsTokenBudget) == true)
                         ? ", thinking_budget \(budget.formatted())" : ""
                     return .on("enable_thinking: true\(budgetNote)")
                 }
@@ -330,6 +389,8 @@ extension ReasoningControl {
             return .unknown("nothing sent — model default applies")
 
         case .geminiThinkingConfig:
+            // Reached for recorded and fallback controls alike — Gemini emission never consults
+            // the control and its fail-closed budget-capability gate is identical either way.
             let budgetSupported = capabilities.state(of: .thinkingSupportsTokenBudget) == true
             func gated(_ state: PlannedThinkingState) -> PlannedThinkingState {
                 budgetSupported ? state
@@ -343,7 +404,7 @@ extension ReasoningControl {
                 return gated(.on("thinkingConfig.thinkingBudget: \(sent.formatted())"))
             case nil:
                 if budget > 0 { return gated(.on("thinkingConfig.thinkingBudget: \(budget.formatted())")) }
-                if thinkingBudget == 0 { return gated(.off("thinkingConfig.thinkingBudget: 0")) }
+                if inputs.thinkingBudget == 0 { return gated(.off("thinkingConfig.thinkingBudget: 0")) }
                 return .unknown("nothing sent — model default (dynamic thinking) applies")
             }
         }

@@ -123,21 +123,36 @@ public struct ModelConfigurationOverride: Codable, Sendable, Equatable {
                 ?? "this parameter, which the model does not support"
             out.append(OverrideWarning(field: field, message: "Not among the model's \(detail)."))
         }
-        // The thinking switch: warn when the forced direction is measured IMPOSSIBLE — emission
-        // will withhold the field, so the setting is inert. Unknown direction facts warn nothing.
-        if let wants = reasoningEnabled,
-           modelInfo.capabilities.state(of: wants ? .reasoningCanBeEnabled : .reasoningCanBeDisabled) == false {
-            out.append(OverrideWarning(field: .reasoningEnabled,
-                message: "The model was measured unable to switch reasoning \(wants ? "on" : "off"); nothing will be sent."))
+        // The thinking switch: warn when an explicit request provably won't reach the wire,
+        // via the SAME resolver the settings UI shows — the warning cannot disagree with
+        // emission. `.unknown` on a RECORDED mechanism means "nothing sent, model default";
+        // `.unsupported` means there is no switch at all. An unrecorded mechanism warns
+        // nothing: the legacy fallbacks honor the switch, and warnings fire only on evidence.
+        if reasoningEnabled != nil, let control = modelInfo.reasoningControl {
+            switch ReasoningControl.plannedThinkingState(PlannedThinkingState.Inputs(
+                control: control, apiType: nil, capabilities: modelInfo.capabilities,
+                reasoningEnabled: reasoningEnabled, thinkingBudget: thinkingBudget,
+                reasoningEffort: reasoningEffort, reasoningEffortSupport: modelInfo.reasoningEffort)) {
+            case .unknown(let detail):
+                out.append(OverrideWarning(field: .reasoningEnabled, message: detail + "."))
+            case .unsupported:
+                out.append(OverrideWarning(field: .reasoningEnabled,
+                    message: "The model exposes no reasoning control; nothing will be sent."))
+            case .on, .off:
+                break
+            }
         }
         // Budget against the MEASURED range; emission clamps, so out-of-range means "not what
         // you asked for" rather than an error — still worth saying.
+        // `else if`: an inverted measured range (max 0 recorded when even the minimum was
+        // rejected, min from the separate floor probe) would otherwise fire both, and
+        // OverrideWarning's id is its field — two warnings, one Identifiable id. The ceiling
+        // message wins: a 0 ceiling means no budget is usable at all, subsuming the floor.
         if let v = thinkingBudget, v > 0 {
             if let known = modelInfo.maxThinkingBudgetTokens, v > known {
                 out.append(OverrideWarning(field: .thinkingBudget,
                     message: "Above the measured maximum thinking budget (\(known.formatted()) tokens); the send is clamped."))
-            }
-            if let floor = modelInfo.minThinkingBudgetTokens, v < floor {
+            } else if let floor = modelInfo.minThinkingBudgetTokens, v < floor {
                 out.append(OverrideWarning(field: .thinkingBudget,
                     message: "Below the measured minimum thinking budget (\(floor.formatted()) tokens); the send is floored."))
             }

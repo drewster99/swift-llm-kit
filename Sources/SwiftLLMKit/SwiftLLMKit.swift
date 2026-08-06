@@ -1152,31 +1152,40 @@ public final class LLMKitManager {
         switch provider.apiType {
         case .anthropic:
             body["max_tokens"] = config.maxOutputTokens
-            // Anthropic thinking: adaptive (Opus 4.7/4.8) vs manual (older
-            // models). Mirrors AnthropicProvider.buildRequestBody. The
-            // `thinkingBudget` field acts as a boolean signal on adaptive
-            // models (>0 = on, 0/nil = off); manual models use it as the
-            // token budget. temperature pinned to 1.0 when thinking is on
-            // (both modes — Anthropic-thinking convention).
-            let thinkingEnabled = (config.thinkingBudget ?? 0) > 0
+            // Anthropic thinking: adaptive vs manual. Mirrors AnthropicProvider.buildRequestBody
+            // — same switch chain (configuration layer only; a base body has no per-call
+            // overrides), same explicit-ON minimum-budget seed, same pairing, same
+            // probed-adaptive routing. A gate that differed here would mean the same
+            // configuration produced two different requests. The thinking SWITCH is mirrored
+            // for this branch only: other apiTypes' base bodies do not carry `reasoningEnabled`
+            // — use the `LLMProvider.send` path for mechanism-driven emission.
+            let thinkingEnabled = config.reasoningEnabled ?? ((config.thinkingBudget ?? 0) > 0)
             if thinkingEnabled {
                 body["temperature"] = 1.0
-                if prepFlags.requiresAdaptiveThinking {
+                let usesAdaptiveThinking = prepFlags.requiresAdaptiveThinking
+                    || prepModelInfo?.reasoningControl == .anthropicAdaptiveThinking
+                if usesAdaptiveThinking {
                     body["thinking"] = ["type": "adaptive"] as [String: Any]
-                } else if let budget = config.thinkingBudget, budget > 0 {
-                    // The SAME pairing the provider applies. This path had no pairing at all, so it
-                    // could emit `max_tokens == budget_tokens` — a request Anthropic rejects — and
-                    // once `effective` became optional it was putting an `Int?` into `[String: Any]`,
-                    // which serializes as `budget_tokens: null`.
-                    let pair = ThinkingBudget.pairing(
-                        requestedBudget: budget,
-                        requestedMax: config.maxTokens,
-                        modelMaxOutputTokens: prepModelInfo?.maxOutputTokens,
-                        measuredMaximum: prepModelInfo?.maxThinkingBudgetTokens,
-                        measuredMinimum: prepModelInfo?.minThinkingBudgetTokens)
-                    body["max_tokens"] = pair.maxTokens
-                    if let sent = pair.budget {
-                        body["thinking"] = ["type": "enabled", "budget_tokens": sent] as [String: Any]
+                } else {
+                    // ON with no usable budget seeds the API minimum — the provider's seed.
+                    let effectiveBudget = config.thinkingBudget.flatMap { $0 > 0 ? $0 : nil }
+                        ?? (config.reasoningEnabled == true ? ThinkingBudget.minimumTokens : nil)
+                    if let budget = effectiveBudget {
+                        // The SAME pairing the provider applies. This path had no pairing at all, so it
+                        // could emit `max_tokens == budget_tokens` — a request Anthropic rejects — and
+                        // once `effective` became optional it was putting an `Int?` into `[String: Any]`,
+                        // which serializes as `budget_tokens: null`.
+                        let pair = ThinkingBudget.pairing(
+                            requestedBudget: budget,
+                            requestedMax: config.maxTokens,
+                            modelMaxOutputTokens: prepModelInfo?.maxOutputTokens,
+                            measuredMaximum: prepModelInfo?.maxThinkingBudgetTokens,
+                            measuredMinimum: prepModelInfo?.minThinkingBudgetTokens)
+                        body["max_tokens"] = pair.maxTokens
+                        if let sent = pair.budget,
+                           prepModelInfo?.capabilities.state(of: .thinkingSupportsTokenBudget) != false {
+                            body["thinking"] = ["type": "enabled", "budget_tokens": sent] as [String: Any]
+                        }
                     }
                 }
             }

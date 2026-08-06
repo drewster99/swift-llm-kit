@@ -187,7 +187,16 @@ struct AnthropicProvider: LLMProvider {
         // seed for the per-call and configuration switches alike — the previous per-call-only
         // seed lived in the emission branch, BELOW the pairing whose guard required a real
         // requestedBudget, so it could never actually emit (dead since it was written).
-        let effectiveBudget = requestedBudget
+        //
+        // Deliberately fail-open on models whose mechanism is UNRECORDED but which only accept
+        // the adaptive form (newest Claude): the seed emits the budgeted block and the API answers
+        // with a 400 that names the fix. Skipping the seed on an unknown mechanism would instead
+        // reintroduce the dead switch this replaced — ON silently doing nothing on every unprobed
+        // model, which is nearly all of them. Probe the mechanism or set requiresAdaptiveThinking
+        // to route ON to the adaptive form.
+        // An explicit 0 is the legacy off-signal, not a depth request — with the switch ON it
+        // seeds the minimum, matching Gemini's ON-beats-zero rule.
+        let effectiveBudget = requestedBudget.flatMap { $0 > 0 ? $0 : nil }
             ?? ((overrides.reasoningEnabled ?? configuration.reasoningEnabled) == true
                 ? ThinkingBudget.minimumTokens : nil)
 

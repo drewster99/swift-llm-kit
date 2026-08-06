@@ -294,6 +294,10 @@ struct OpenAICompatibleProvider: LLMProvider {
                 thinking["keep"] = "all"
             }
             if let budget = requestedBudget, budget > 0,
+               // Never beside an explicit off: {type: disabled, budget_tokens} is contradictory,
+               // and a bare budget after a REFUSED off invites the thinking the caller declined.
+               // `!= false` keeps the deliberate nil-switch typeless-budget send.
+               (overrides.reasoningEnabled ?? configuration.reasoningEnabled) != false,
                modelCapabilities.state(of: .thinkingSupportsTokenBudget) == true {
                 // Pair against the output cap when this model spends its thinking from that
                 // allowance. Emitting a budget with no `max_tokens` relationship is precisely the
@@ -327,6 +331,14 @@ struct OpenAICompatibleProvider: LLMProvider {
         // inbound requests). Empty string normalized to nil.
         let effectiveEffort: String? = {
             if let override = reasoningEffortOverride, !override.isEmpty { return override }
+            // A PER-CALL off outranks the CONFIGURED depth — the override layer always beats
+            // the configuration layer. Same-layer conflicts deliberately stay effort-wins
+            // (configured off beside a configured effort still sends the effort, below).
+            if overrides.reasoningEnabled == false,
+               control == .reasoningEffortOnly,
+               reasoningEffortSupport?.rejects("none") != true {
+                return "none"
+            }
             if let configured = configuration.reasoningEffort { return configured }
             // An explicit thinking-off on an effort-only model has exactly one wire form:
             // `reasoning_effort: "none"` — there is no thinking block or flag to withhold.
