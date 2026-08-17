@@ -427,7 +427,9 @@ struct OllamaProvider: LLMProvider {
 
     // MARK: - Response parsing
 
-    private func parseResponse(data: Data) throws -> LLMResponse {
+    // Internal rather than private, matching the Anthropic / Gemini / OpenAI
+    // adapters, so response parsing is reachable from tests.
+    func parseResponse(data: Data) throws -> LLMResponse {
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             let preview = String(data: data.prefix(500), encoding: .utf8) ?? "(non-utf8, \(data.count) bytes)"
             logger.error("Response is not a JSON object: \(preview, privacy: .public)")
@@ -525,7 +527,8 @@ struct OllamaProvider: LLMProvider {
                 return LLMResponse(
                     text: remainingText.isEmpty ? nil : remainingText,
                     toolCalls: parsedCalls,
-                    usage: tokenUsage
+                    usage: tokenUsage,
+                    finishReason: json["done_reason"] as? String
                 )
             }
         }
@@ -545,10 +548,14 @@ struct OllamaProvider: LLMProvider {
             finalText = cleaned.isEmpty ? nil : cleaned
         }
 
+        // Ollama's vocabulary for `finishReason` is `done_reason`: "stop",
+        // "length", "load", "unload". Passed through verbatim, like every other
+        // adapter — see `LLMResponse.finishReason`.
         return LLMResponse(
             text: finalText?.isEmpty == true ? nil : finalText,
             toolCalls: finalToolCalls,
-            usage: tokenUsage
+            usage: tokenUsage,
+            finishReason: json["done_reason"] as? String
         )
     }
 

@@ -511,7 +511,8 @@ struct GeminiProvider: LLMProvider {
             if candidate["content"] == nil {
                 return LLMResponse(
                     text: "[Gemini error: \(finishReason)] \(finishMessage)",
-                    toolCalls: []
+                    toolCalls: [],
+                    finishReason: finishReason
                 )
             }
         }
@@ -618,11 +619,15 @@ struct GeminiProvider: LLMProvider {
             continuation = nil
         }
 
+        // Gemini's vocabulary for `finishReason`: "STOP", "MAX_TOKENS", "SAFETY",
+        // "RECITATION", "MALFORMED_FUNCTION_CALL", etc. Passed through verbatim,
+        // like every other adapter — see `LLMResponse.finishReason`.
         return LLMResponse(
             text: text?.isEmpty == true ? nil : text,
             toolCalls: toolCalls,
             usage: tokenUsage,
-            continuation: continuation
+            continuation: continuation,
+            finishReason: finishReason
         )
     }
 

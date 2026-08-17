@@ -139,4 +139,22 @@ public struct LLMResponse: Sendable, Equatable {
         self.continuation = continuation
         self.finishReason = finishReason
     }
+
+    /// True when generation stopped because it ran into the output-token ceiling
+    /// rather than finishing on its own — the text is cut off mid-sentence.
+    ///
+    /// `finishReason` is deliberately verbatim, so each provider spells this
+    /// differently: OpenAI and Ollama say `"length"`, Anthropic `"max_tokens"`,
+    /// Gemini `"MAX_TOKENS"`. Knowing that table is provider knowledge, which
+    /// belongs here rather than in every caller that needs to ask the question.
+    ///
+    /// `false` when the provider reported no finish reason: silence isn't
+    /// evidence of truncation, and guessing would make the flag untrustworthy.
+    public var hitOutputTokenLimit: Bool {
+        guard let finishReason else { return false }
+        switch finishReason.lowercased() {
+        case "length", "max_tokens": return true
+        default: return false
+        }
+    }
 }

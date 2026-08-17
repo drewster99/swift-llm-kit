@@ -627,12 +627,16 @@ struct AnthropicProvider: LLMProvider {
             ? nil
             : ProviderContinuation(anthropicThinkingBlocks: thinkingBlocks)
 
+        // Anthropic's vocabulary for `finishReason`: "end_turn", "max_tokens",
+        // "stop_sequence", "tool_use", "refusal", "pause_turn". Passed through
+        // verbatim, like every other adapter — see `LLMResponse.finishReason`.
         return LLMResponse(
             text: text?.isEmpty == true ? nil : text,
             toolCalls: toolCalls,
             reasoning: reasoning,
             usage: tokenUsage,
-            continuation: continuation
+            continuation: continuation,
+            finishReason: json["stop_reason"] as? String
         )
     }
 
