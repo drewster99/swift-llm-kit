@@ -192,12 +192,13 @@ struct BuiltInProviderMappingTests {
         "builtin.moonshot": "moonshot",                  // 22 entries, all kimi-* under "moonshot"
         "builtin.meta-model-api": nil,                   // Meta Model API (Muse Spark) — not in LiteLLM
         "builtin.huggingface": nil,                      // LiteLLM catalogues none
-        "builtin.lmstudio": nil                          // local, arbitrary models
+        "builtin.lmstudio": nil,                         // local, arbitrary models
+        "builtin.codex-chatgpt": nil                     // billed to a ChatGPT subscription; no per-token price exists
     ]
 
     @Test("The bundled provider JSON decodes (guards the silent-empty failure mode)")
     func bundledJSONDecodes() {
-        #expect(BuiltInProviders.all.count == 18)
+        #expect(BuiltInProviders.all.count == 19)
     }
 
     @Test("Every built-in maps to the litellm_provider value its models actually use")
@@ -304,7 +305,8 @@ struct BuiltInProviderEndpointPresetParityTests {
             BuiltInProviders.ID.huggingFace, BuiltInProviders.ID.lmStudio,
             BuiltInProviders.ID.metaModel, BuiltInProviders.ID.mistral, BuiltInProviders.ID.moonshot,
             BuiltInProviders.ID.ollama, BuiltInProviders.ID.ollamaCloud,
-            BuiltInProviders.ID.zAI, BuiltInProviders.ID.zAICoding
+            BuiltInProviders.ID.zAI, BuiltInProviders.ID.zAICoding,
+            BuiltInProviders.ID.codexChatGPT
         ]
         for id in declared {
             #expect(BuiltInProviders.preset(id: id) != nil, "ID constant \(id) has no bundled preset")

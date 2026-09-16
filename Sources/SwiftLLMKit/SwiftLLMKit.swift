@@ -709,6 +709,10 @@ public final class LLMKitManager {
         case .anthropic, .openAICompatible, .mistral, .gemini, .huggingFace,
              .xAI, .zAI, .metaModel, .alibabaCloud, .openRouter:
             return false
+        case .codexChatGPT:
+            // Keyless by design: the credential is the CLI's, so "configured" means a signed-in
+            // `~/.codex/auth.json` exists, not that the Keychain holds anything.
+            return CodexAuthStore().isPresent
         }
     }
 
@@ -1069,6 +1073,47 @@ public final class LLMKitManager {
         return prepareRequest(configuration: config, provider: provider)
     }
 
+    /// The Codex equivalent of ``prepareRequest(configuration:provider:)``.
+    ///
+    /// Auth is read from the CLI's credential file WITHOUT refreshing: the enclosing function is
+    /// documented as unable to fail, and a refresh is async. A near-expiry token therefore yields a
+    /// request that 401s — acceptable here because this path feeds the capability prober, not the
+    /// agent loop, and `CodexResponsesProvider` (which can await) is what real traffic goes through.
+    private func prepareCodexRequest(
+        configuration config: ModelConfiguration,
+        provider: ModelProvider
+    ) -> PreparedRequest {
+        let tokens = CodexAuthStore().load()
+        let base = provider.endpoint.appendingPathComponent("responses")
+        var url = base
+        if var components = URLComponents(url: base, resolvingAgainstBaseURL: false) {
+            components.queryItems = [URLQueryItem(
+                name: "client_version", value: CodexResponsesProvider.defaultClientVersion)]
+            url = components.url ?? base
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.setValue("responses=v1", forHTTPHeaderField: "OpenAI-Beta")
+        request.setValue(
+            "codex_cli_rs/\(CodexResponsesProvider.defaultClientVersion)",
+            forHTTPHeaderField: "User-Agent")
+        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        if let tokens {
+            request.setValue("Bearer \(tokens.accessToken)", forHTTPHeaderField: "Authorization")
+            request.setValue(tokens.accountId, forHTTPHeaderField: "chatgpt-account-id")
+        }
+
+        // Responses vocabulary, not chat/completions: `max_output_tokens`, and no `temperature` —
+        // the models behind this endpoint reject it.
+        var body: [String: Any] = ["model": config.modelID, "store": false, "stream": true]
+        if config.maxOutputTokens > 0 { body["max_output_tokens"] = config.maxOutputTokens }
+
+        return PreparedRequest(
+            urlRequest: request, baseBody: body, providerType: .codexChatGPT, streaming: true)
+    }
+
     /// Prepares a request from a configuration and a `ModelProvider` the caller already holds.
     /// **This is the implementation**; the other overloads resolve something and funnel here.
     /// It looks nothing up, so it cannot fail and does not throw.
@@ -1076,6 +1121,13 @@ public final class LLMKitManager {
         configuration config: ModelConfiguration,
         provider: ModelProvider
     ) -> PreparedRequest {
+        // Short-circuited rather than threaded through the three switches below: the Codex endpoint
+        // differs in URL, auth headers AND body shape, so a fall-through would assemble a
+        // chat/completions request that this endpoint cannot answer. Tokens are read WITHOUT
+        // refreshing — this function is documented as unable to fail, and refresh is async.
+        if provider.apiType == .codexChatGPT {
+            return prepareCodexRequest(configuration: config, provider: provider)
+        }
         let apiKey = keychain.apiKey(forProviderID: provider.id)
 
         // Build URL
@@ -1085,6 +1137,9 @@ public final class LLMKitManager {
             url = provider.endpoint.ensureAnthropicV1().appendingPathComponent("messages")
         case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaModel, .alibabaCloud, .openRouter:
             url = provider.endpoint.appendingPathComponent("chat/completions")
+        case .codexChatGPT:
+            // Unreachable: `prepareRequest` short-circuits this apiType to `prepareCodexRequest`.
+            url = provider.endpoint.appendingPathComponent("responses")
         case .ollama:
             url = provider.endpoint.appendingPathComponent("chat")
         case .gemini:
@@ -1129,6 +1184,9 @@ public final class LLMKitManager {
             }
         case .gemini:
             // API key already in URL query parameter
+            break
+        case .codexChatGPT:
+            // Unreachable: `prepareRequest` short-circuits this apiType to `prepareCodexRequest`.
             break
         }
 
@@ -1241,6 +1299,9 @@ public final class LLMKitManager {
                 genConfig["temperature"] = temperature
             }
             body["generationConfig"] = genConfig
+        case .codexChatGPT:
+            // Unreachable: `prepareRequest` short-circuits this apiType to `prepareCodexRequest`.
+            break
         }
 
         return PreparedRequest(
@@ -1400,6 +1461,15 @@ public final class LLMKitManager {
                 measuredMinThinkingBudget: measuredMinThinkingBudget,
                 modelMaxOutputTokens: modelMaxOutputTokens,
                 modelCapabilities: modelCapabilities
+            )
+        case .codexChatGPT:
+            // Keyless: the credential is the `codex` CLI's ChatGPT session, resolved (and refreshed)
+            // inside the provider, so `readAPIKey` is not consulted at all for this apiType.
+            return CodexResponsesProvider(
+                configuration: config, provider: modelProvider,
+                verboseLogging: verbose,
+                modelMaxOutputTokens: modelMaxOutputTokens,
+                session: session
             )
         case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaModel, .alibabaCloud, .openRouter:
             // `parallel_tool_calls: true` is sent by default for every OpenAI-compatible

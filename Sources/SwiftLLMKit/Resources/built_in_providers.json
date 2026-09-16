@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "_comment": "liteLLMProviderName matches the `litellm_provider` FIELD in LiteLLM's model_prices_and_context_window.json — never a key prefix. null means LiteLLM catalogues no models for this provider.",
-  "_comment_deepseek_endpoint": "DeepSeek's documented base URL is the bare host; `/v1` exists only for OpenAI-SDK compatibility and denotes no version. Both resolve (verified: /models and /v1/models each 401 rather than 404), so the bare form is kept — it is what the endpoint preset has always used, and the two must agree for adoption to fire.",
-  "_comment_variants": "A built-in's endpoint is FIXED (only the API key is user-editable), so every endpoint a user might need is its own preset — regional and variant endpoints included. Each entry's endpoint must match its ProviderAPIType.endpointPresets entry byte-for-byte, because seedBuiltInProviders() adopts a user's custom provider into a built-in slot only on an exact (apiType, endpoint) match. BuiltInProviderEndpointPresetParityTests enforces the 1:1 correspondence. Variants share the parent's liteLLMProviderName because they serve the same catalogue.",
+  "_comment": "liteLLMProviderName matches the `litellm_provider` FIELD in LiteLLM's model_prices_and_context_window.json \u2014 never a key prefix. null means LiteLLM catalogues no models for this provider.",
+  "_comment_deepseek_endpoint": "DeepSeek's documented base URL is the bare host; `/v1` exists only for OpenAI-SDK compatibility and denotes no version. Both resolve (verified: /models and /v1/models each 401 rather than 404), so the bare form is kept \u2014 it is what the endpoint preset has always used, and the two must agree for adoption to fire.",
+  "_comment_variants": "A built-in's endpoint is FIXED (only the API key is user-editable), so every endpoint a user might need is its own preset \u2014 regional and variant endpoints included. Each entry's endpoint must match its ProviderAPIType.endpointPresets entry byte-for-byte, because seedBuiltInProviders() adopts a user's custom provider into a built-in slot only on an exact (apiType, endpoint) match. BuiltInProviderEndpointPresetParityTests enforces the 1:1 correspondence. Variants share the parent's liteLLMProviderName because they serve the same catalogue.",
   "providers": [
     {
       "id": "builtin.anthropic",
@@ -147,6 +147,14 @@
       "endpoint": "https://api.z.ai/api/coding/paas/v4",
       "popular": false,
       "liteLLMProviderName": "zai"
+    },
+    {
+      "id": "builtin.codex-chatgpt",
+      "displayName": "ChatGPT Subscription (Codex)",
+      "apiType": "codexChatGPT",
+      "endpoint": "https://chatgpt.com/backend-api/codex",
+      "popular": false,
+      "liteLLMProviderName": null
     }
   ]
 }

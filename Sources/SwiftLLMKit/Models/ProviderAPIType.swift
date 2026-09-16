@@ -14,6 +14,10 @@ public enum ProviderAPIType: String, Codable, Sendable, CaseIterable, Equatable 
     case metaModel
     case alibabaCloud
     case openRouter
+    /// The Codex backend's Responses endpoint, authenticated with a ChatGPT SUBSCRIPTION credential
+    /// rather than an API key. Separate from `openAICompatible` because the token is scope-gated to
+    /// this endpoint and the wire shape is the Responses API, not chat/completions.
+    case codexChatGPT
 
     // MARK: - Forgiving Codable
     //
@@ -52,6 +56,7 @@ public enum ProviderAPIType: String, Codable, Sendable, CaseIterable, Equatable 
         case .metaModel: return "Meta Model API"
         case .alibabaCloud: return "Alibaba Cloud"
         case .openRouter: return "OpenRouter"
+        case .codexChatGPT: return "ChatGPT Subscription (Codex)"
         }
     }
     /// The valid temperature range for this provider's API.
@@ -67,6 +72,10 @@ public enum ProviderAPIType: String, Codable, Sendable, CaseIterable, Equatable 
         case .ollama, .lmStudio:
             // Ollama/LM Studio accept wide ranges; models may clip internally
             return 0...5
+        case .codexChatGPT:
+            // Nominal. The Codex provider never SENDS a temperature — the endpoint serves reasoning
+            // models that reject it — so this exists only to satisfy callers that ask for a range.
+            return 0...2
         }
     }
 
@@ -115,6 +124,8 @@ public enum ProviderAPIType: String, Codable, Sendable, CaseIterable, Equatable 
             ]
         case .openRouter:
             return [EndpointPreset("OpenRouter", "https://openrouter.ai/api/v1")]
+        case .codexChatGPT:
+            return [EndpointPreset("Codex (ChatGPT subscription)", "https://chatgpt.com/backend-api/codex")]
         }
     }
 

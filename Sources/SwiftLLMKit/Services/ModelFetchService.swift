@@ -49,6 +49,17 @@ public struct ModelFetchService: Sendable {
             modelsURL = provider.endpoint.strippingAnthropicV1().appendingPathComponent("v1/models")
         case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaModel, .alibabaCloud, .openRouter:
             modelsURL = provider.endpoint.appendingPathComponent("models")
+        case .codexChatGPT:
+            // The Codex backend 400s a models request without `client_version`.
+            let base = provider.endpoint.appendingPathComponent("models")
+            if var components = URLComponents(url: base, resolvingAgainstBaseURL: false) {
+                components.queryItems = (components.queryItems ?? []) + [
+                    URLQueryItem(name: "client_version", value: CodexResponsesProvider.defaultClientVersion)
+                ]
+                modelsURL = components.url ?? base
+            } else {
+                modelsURL = base
+            }
         case .gemini:
             // API key goes in the `x-goog-api-key` header below (not the query
             // string) so it doesn't appear in verbose request logs.
@@ -78,6 +89,13 @@ public struct ModelFetchService: Sendable {
                 request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
             }
             request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        case .codexChatGPT:
+            // The caller supplies the ChatGPT OAuth ACCESS TOKEN here, not an API key. Verified
+            // that `/models` accepts a bare Bearer — neither `chatgpt-account-id` nor the codex
+            // User-Agent is required, unlike `/responses`.
+            if let apiKey, !apiKey.isEmpty {
+                request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            }
         case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaModel, .alibabaCloud, .openRouter:
             if let apiKey, !apiKey.isEmpty {
                 request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -136,6 +154,8 @@ public struct ModelFetchService: Sendable {
             decoded = try decodeMistralFacts(from: data)
         case .gemini:
             decoded = try decodeGeminiFacts(from: data)
+        case .codexChatGPT:
+            decoded = try decodeCodexFacts(from: data)
         }
 
         // Deduplicate by model ID. Some APIs return the same model ID multiple
@@ -653,6 +673,68 @@ public struct ModelFetchService: Sendable {
             .sorted { $0.modelID < $1.modelID }
     }
 
+    // MARK: - Codex (ChatGPT subscription)
+
+    /// Decodes `chatgpt.com/backend-api/codex/models`.
+    ///
+    /// Shape differs from every other listing here: `{"models": [...]}` keyed by `slug` rather than
+    /// `id`, with capability metadata stated outright instead of inferred from pricing.
+    ///
+    /// **Pricing is stated as EXPLICIT ZERO, never left nil.** These models are billed to a ChatGPT
+    /// subscription, so a turn genuinely costs nothing at the margin — but `CostBoard.costOf`
+    /// returns 0 when a pricing lookup FAILS too, which would make "free" and "we don't know"
+    /// indistinguishable. A present-but-zero `ModelPricing` says the first; absence says the second.
+    private func decodeCodexFacts(from data: Data) throws -> [DecodedModelFacts] {
+        struct Response: Decodable {
+            struct Model: Decodable {
+                struct ReasoningLevel: Decodable { let effort: String }
+                let slug: String
+                let displayName: String?
+                let description: String?
+                let contextWindow: Int?
+                let maxContextWindow: Int?
+                let inputModalities: [String]?
+                let supportedReasoningLevels: [ReasoningLevel]?
+                let visibility: String?
+
+                enum CodingKeys: String, CodingKey {
+                    case slug, description, visibility
+                    case displayName = "display_name"
+                    case contextWindow = "context_window"
+                    case maxContextWindow = "max_context_window"
+                    case inputModalities = "input_modalities"
+                    case supportedReasoningLevels = "supported_reasoning_levels"
+                }
+            }
+            let models: [Model]
+        }
+
+        let decoded = try JSONDecoder().decode(Response.self, from: data)
+        return decoded.models.map { model in
+            var facts = ModelFacts()
+            facts.displayName = model.displayName
+            facts.modelDescription = model.description
+            facts.maxInputTokens = model.maxContextWindow ?? model.contextWindow
+            // Stated, not inferred: the listing names its modalities outright.
+            if let modalities = model.inputModalities {
+                facts.capabilities.vision = modalities.contains("image")
+            }
+            // Every model on this endpoint is a reasoning model reached through the Responses API,
+            // and each states its own ladder — which runs deeper than the usual low/medium/high:
+            // `xhigh`, `max` and `ultra` appear, and the set VARIES per model.
+            if let levels = model.supportedReasoningLevels, !levels.isEmpty {
+                facts.reasoningEffort = .levels(levels.map(\.effort))
+            }
+            // `visibility: "hide"` marks internal entries (gpt-reserve, codex-auto-review). Hiding
+            // is presentation, not deletion — the record survives and un-hiding is one field.
+            if let visibility = model.visibility { facts.hidden = (visibility == "hide") }
+            facts.isFree = true
+            facts.pricing = ModelPricing(
+                base: PricingTier(input: 0, output: 0, cacheRead: 0, cacheWrite: 0))
+            return DecodedModelFacts(modelID: model.slug, facts: facts)
+        }
+    }
+
     // MARK: - Test seams
 
     /// Tri-state test seam: decodes a captured payload into per-model facts for the given apiType,
@@ -668,6 +750,7 @@ public struct ModelFetchService: Sendable {
         case .openAICompatible, .lmStudio, .zAI, .metaModel, .alibabaCloud: return try decodeOpenAIFacts(from: data)
         case .mistral: return try decodeMistralFacts(from: data)
         case .gemini: return try decodeGeminiFacts(from: data)
+        case .codexChatGPT: return try decodeCodexFacts(from: data)
         }
     }
 

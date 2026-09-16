@@ -39,6 +39,7 @@ public enum BuiltInProviders {
         public static let gemini = "builtin.gemini"
         public static let openai = "builtin.openai"
         public static let openRouter = "builtin.openrouter"
+        public static let codexChatGPT = "builtin.codex-chatgpt"
         public static let xAI = "builtin.xai"
         public static let alibabaCloud = "builtin.alibabacloud"
         public static let alibabaCloudBeijing = "builtin.alibabacloud-beijing"
