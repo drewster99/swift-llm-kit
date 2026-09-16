@@ -525,4 +525,74 @@ struct BundledProbeSeedTests {
         #expect(!(stripped.profile.vision.evidence ?? "").contains("ref:"))
         #expect((stripped.profile.isAvailable.evidence ?? "").contains("retired"), "the human-readable message must survive")
     }
+
+    /// The guard the two above should have been all along.
+    ///
+    /// `strippedForExport` clears FOUR things; the assertions above name two. The two it does not
+    /// name (`generalEffortLevels`, `reasoningEffortLevels`) were the most recently added to the
+    /// stripper, and they are exactly what shipped un-stripped when the 2026-08-07 refresh skipped
+    /// the export path: 1373 records carried reasoning ladders that nothing complained about.
+    ///
+    /// Asking whether each record ALREADY equals its own stripped form cannot fall behind, because
+    /// extending the stripper extends this by construction. A hand-maintained list of fields is the
+    /// thing that failed.
+    @Test("Every seed record already equals its own strippedForExport")
+    func seedIsFullyExportStripped() {
+        let seed = ProbeRecordStore.bundledSeedRecords()
+        #expect(!seed.isEmpty)
+        // COUNTED, not collected: handing the offending records to `#expect` renders all of them
+        // into the failure message — 16MB of console for a one-line problem, which is a failure
+        // nobody can read. The count plus one sample key is what a reader actually needs.
+        let unstrippedCount = seed.count { $0 != $0.strippedForExport }
+        let sample = seed.first { $0 != $0.strippedForExport }.map(\.key.storageKey) ?? "none"
+        #expect(unstrippedCount == 0, """
+            \(unstrippedCount) of \(seed.count) bundled records are not export-stripped (e.g. \
+            \(sample)) — the seed was written without going through `exportableProbeRecords()`. \
+            Regenerate: REGENERATE_PROBE_SEED=1 swift test --filter regenerateBundledSeed
+            """)
+    }
+
+    /// Rewrites `Sources/SwiftLLMKit/Resources/bundled_probe_records.json` as its own export-stripped
+    /// form. Disabled unless `REGENERATE_PROBE_SEED=1`.
+    ///
+    /// A test rather than a script because it uses the PRODUCTION stripper: a second implementation
+    /// (a Python pass over the JSON, say) would have to re-derive the trace-ref regex and the field
+    /// list, and the two would drift — producing a seed that satisfies the guard above while
+    /// differing from what a real export emits.
+    ///
+    /// It re-probes NOTHING. Every finding is carried through untouched except the four the stripper
+    /// clears, all of which are account-scoped or per-request and must not ship.
+    @Test("Regenerate the bundled seed, export-stripped (REGENERATE_PROBE_SEED=1)",
+          .enabled(if: ProcessInfo.processInfo.environment["REGENERATE_PROBE_SEED"] == "1"))
+    func regenerateBundledSeed() throws {
+        // .../Tests/SwiftLLMKitTests/ProbeRecordStoreTests.swift → repo root
+        let seedURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/SwiftLLMKit/Resources/bundled_probe_records.json")
+
+        let data = try Data(contentsOf: seedURL)
+        let elements = try #require(
+            try JSONSerialization.jsonObject(with: data) as? [Any], "seed must be a JSON array")
+
+        // Decoded STRICTLY, unlike `bundledSeedRecords()`, which skips what it cannot read. Skipping
+        // is right when loading a seed a future build wrote; here it would silently drop records
+        // from the file we are about to overwrite.
+        let decoder = JSONDecoder()
+        var records: [ProbeRecord] = []
+        for element in elements {
+            let elementData = try JSONSerialization.data(withJSONObject: element)
+            records.append(try decoder.decode(ProbeRecord.self, from: elementData))
+        }
+        #expect(records.count == elements.count, "every element must decode — none may be dropped")
+
+        let stripped = records.map(\.strippedForExport)
+            .sorted { $0.key.storageKey < $1.key.storageKey }
+        let encoder = JSONEncoder()
+        // Byte-shape matched to `ProbeRecordStore.save` so the diff is content, not formatting.
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(stripped).write(to: seedURL, options: .atomic)
+
+        #expect(stripped.count == elements.count, "record count must be preserved")
+        #expect(stripped.allSatisfy { $0 == $0.strippedForExport })
+    }
 }
