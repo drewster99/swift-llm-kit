@@ -15,13 +15,13 @@ struct CodexAuthTests {
 
     /// A syntactically real JWT with the claims we read. Unsigned — nothing here verifies signatures,
     /// and the server re-verifies anyway.
-    static func makeJWT(exp: Date?, accountID: String? = "acct-123", plan: String? = "prolite") -> String {
+    static func makeJWT(exp: Date?, accountID: String? = "acct-123", plan: String? = "prolite") throws -> String {
         var auth: [String: Any] = [:]
         if let accountID { auth["chatgpt_account_id"] = accountID }
         if let plan { auth["chatgpt_plan_type"] = plan }
         var claims: [String: Any] = ["https://api.openai.com/auth": auth]
         if let exp { claims["exp"] = exp.timeIntervalSince1970 }
-        let payload = try! JSONSerialization.data(withJSONObject: claims)
+        let payload = try JSONSerialization.data(withJSONObject: claims)
         func b64url(_ d: Data) -> String {
             d.base64EncodedString()
                 .replacingOccurrences(of: "+", with: "-")
@@ -46,9 +46,9 @@ struct CodexAuthTests {
     // MARK: Claims
 
     @Test("Claims are read from the token, and an opaque token degrades to nil everywhere")
-    func jwtClaims() {
+    func jwtClaims() throws {
         let exp = Date(timeIntervalSince1970: 1_800_000_000)
-        let jwt = Self.makeJWT(exp: exp)
+        let jwt = try Self.makeJWT(exp: exp)
         #expect(CodexJWT.accountId(jwt) == "acct-123")
         #expect(CodexJWT.planType(jwt) == "prolite")
         #expect(CodexJWT.expiry(jwt)?.timeIntervalSince1970 == exp.timeIntervalSince1970)
@@ -63,24 +63,24 @@ struct CodexAuthTests {
     }
 
     @Test("A token with no exp claim is treated as needing refresh, not as valid forever")
-    func missingExpiryNeedsRefresh() {
+    func missingExpiryNeedsRefresh() throws {
         let tokens = CodexAuthTokens(
-            accessToken: Self.makeJWT(exp: nil), refreshToken: "r", accountId: "a")
+            accessToken: try Self.makeJWT(exp: nil), refreshToken: "r", accountId: "a")
         #expect(tokens.expiry == nil)
         #expect(tokens.needsRefresh(within: 300) == true)
     }
 
     @Test("The refresh window boundary is honored on both sides")
-    func refreshWindowBoundary() {
+    func refreshWindowBoundary() throws {
         let now = Date(timeIntervalSince1970: 1_000_000)
-        func tokens(expiringIn seconds: TimeInterval) -> CodexAuthTokens {
+        func tokens(expiringIn seconds: TimeInterval) throws -> CodexAuthTokens {
             CodexAuthTokens(
-                accessToken: Self.makeJWT(exp: now.addingTimeInterval(seconds)),
+                accessToken: try Self.makeJWT(exp: now.addingTimeInterval(seconds)),
                 refreshToken: "r", accountId: "a")
         }
-        #expect(tokens(expiringIn: 301).needsRefresh(within: 300, now: now) == false)
-        #expect(tokens(expiringIn: 299).needsRefresh(within: 300, now: now) == true)
-        #expect(tokens(expiringIn: -60).needsRefresh(within: 300, now: now) == true, "already expired")
+        #expect(try tokens(expiringIn: 301).needsRefresh(within: 300, now: now) == false)
+        #expect(try tokens(expiringIn: 299).needsRefresh(within: 300, now: now) == true)
+        #expect(try tokens(expiringIn: -60).needsRefresh(within: 300, now: now) == true, "already expired")
     }
 
     // MARK: The file
@@ -129,12 +129,12 @@ struct CodexAuthTests {
             accessToken: "new", idToken: "newid", refreshToken: "newr",
             accountId: "acct", lastRefresh: Date(timeIntervalSince1970: 1_700_000_000)))
 
-        let root = try JSONSerialization.jsonObject(
-            with: Data(contentsOf: store.url)) as! [String: Any]
+        let root = try #require(try JSONSerialization.jsonObject(
+            with: Data(contentsOf: store.url)) as? [String: Any])
         #expect(root["auth_mode"] as? String == "chatgpt")
         #expect(root["some_future_field"] != nil, "an unknown top-level key must survive")
         #expect(root["OPENAI_API_KEY"] is NSNull)
-        let tokens = root["tokens"] as! [String: Any]
+        let tokens = try #require(root["tokens"] as? [String: Any])
         #expect(tokens["access_token"] as? String == "new")
         #expect(tokens["refresh_token"] as? String == "newr")
         #expect(tokens["a_token_field_we_do_not_model"] as? String == "keep me",
@@ -145,7 +145,7 @@ struct CodexAuthTests {
     @Test("Save then load round-trips")
     func saveLoadRoundTrip() throws {
         let store = Self.tempStore()
-        let jwt = Self.makeJWT(exp: Date(timeIntervalSince1970: 1_900_000_000))
+        let jwt = try Self.makeJWT(exp: Date(timeIntervalSince1970: 1_900_000_000))
         try store.save(CodexAuthTokens(
             accessToken: jwt, idToken: "id", refreshToken: "r", accountId: "acct"))
         let back = try #require(store.load())
@@ -169,8 +169,9 @@ struct CodexAuthTests {
         }
         func handle(_ request: URLRequest) async throws -> (Data, URLResponse) {
             calls += 1
-            let response = HTTPURLResponse(
-                url: request.url!, statusCode: status, httpVersion: nil, headerFields: headers)!
+            let url = try #require(request.url)
+            let response = try #require(HTTPURLResponse(
+                url: url, statusCode: status, httpVersion: nil, headerFields: headers))
             return (try JSONSerialization.data(withJSONObject: body), response)
         }
     }
@@ -186,7 +187,7 @@ struct CodexAuthTests {
         let store = Self.tempStore()
         let now = Date()
         try store.save(CodexAuthTokens(
-            accessToken: Self.makeJWT(exp: now.addingTimeInterval(3600)),
+            accessToken: try Self.makeJWT(exp: now.addingTimeInterval(3600)),
             refreshToken: "r", accountId: "acct"))
         let spy = TransportSpy(body: ["access_token": "SHOULD-NOT-BE-USED"])
         let coordinator = CodexAuthCoordinator(
@@ -202,9 +203,9 @@ struct CodexAuthTests {
         let store = Self.tempStore()
         let now = Date()
         try store.save(CodexAuthTokens(
-            accessToken: Self.makeJWT(exp: now.addingTimeInterval(60)),
+            accessToken: try Self.makeJWT(exp: now.addingTimeInterval(60)),
             idToken: "old-id", refreshToken: "old-r", accountId: "acct"))
-        let fresh = Self.makeJWT(exp: now.addingTimeInterval(86_400), accountID: "acct-fresh")
+        let fresh = try Self.makeJWT(exp: now.addingTimeInterval(86_400), accountID: "acct-fresh")
         let spy = TransportSpy(body: ["access_token": fresh, "refresh_token": "new-r"])
         let coordinator = CodexAuthCoordinator(
             store: store, transport: { try await spy.handle($0) })
@@ -225,9 +226,9 @@ struct CodexAuthTests {
         let store = Self.tempStore()
         let now = Date()
         try store.save(CodexAuthTokens(
-            accessToken: Self.makeJWT(exp: now), idToken: "keep-me",
+            accessToken: try Self.makeJWT(exp: now), idToken: "keep-me",
             refreshToken: "keep-this", accountId: "acct"))
-        let spy = TransportSpy(body: ["access_token": Self.makeJWT(exp: now.addingTimeInterval(9999))])
+        let spy = TransportSpy(body: ["access_token": try Self.makeJWT(exp: now.addingTimeInterval(9999))])
         let coordinator = CodexAuthCoordinator(
             store: store, transport: { try await spy.handle($0) })
 
@@ -241,8 +242,8 @@ struct CodexAuthTests {
         let store = Self.tempStore()
         let now = Date()
         try store.save(CodexAuthTokens(
-            accessToken: Self.makeJWT(exp: now), refreshToken: "r", accountId: "acct"))
-        let spy = TransportSpy(body: ["access_token": Self.makeJWT(exp: now.addingTimeInterval(9999))])
+            accessToken: try Self.makeJWT(exp: now), refreshToken: "r", accountId: "acct"))
+        let spy = TransportSpy(body: ["access_token": try Self.makeJWT(exp: now.addingTimeInterval(9999))])
         let coordinator = CodexAuthCoordinator(
             store: store, transport: { try await spy.handle($0) })
 
@@ -261,7 +262,7 @@ struct CodexAuthTests {
         let store = Self.tempStore()
         let now = Date()
         try store.save(CodexAuthTokens(
-            accessToken: Self.makeJWT(exp: now), refreshToken: "r", accountId: "acct"))
+            accessToken: try Self.makeJWT(exp: now), refreshToken: "r", accountId: "acct"))
         let spy = TransportSpy(body: ["error": "invalid_grant"], status: 400,
                                headers: ["Retry-After": "42"])
         let coordinator = CodexAuthCoordinator(
@@ -285,7 +286,7 @@ struct CodexAuthTests {
         let store = Self.tempStore()
         let now = Date()
         try store.save(CodexAuthTokens(
-            accessToken: Self.makeJWT(exp: now), refreshToken: "r", accountId: "acct"))
+            accessToken: try Self.makeJWT(exp: now), refreshToken: "r", accountId: "acct"))
         let spy = TransportSpy(body: ["token_type": "bearer"])
         let coordinator = CodexAuthCoordinator(
             store: store, transport: { try await spy.handle($0) })

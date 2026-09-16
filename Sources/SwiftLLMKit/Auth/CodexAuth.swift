@@ -1,6 +1,8 @@
 import Foundation
 import os
 
+private let logger = Logger(subsystem: "SwiftLLMKit", category: "CodexAuth")
+
 /// ChatGPT-subscription credentials for the Codex backend, read from the `codex` CLI's own
 /// `auth.json` rather than obtained by implementing OAuth ourselves.
 ///
@@ -209,7 +211,7 @@ public actor CodexAuthCoordinator {
     /// failure rather than treating it as a transient error worth retrying.
     public static let defaultClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
 
-    public static let defaultTokenURL = URL(string: "https://auth.openai.com/oauth/token")!
+    public static let defaultTokenURL = "https://auth.openai.com/oauth/token"
 
     /// Performs the token request. Injected so refresh — including the single-flight behaviour — is
     /// testable without a network or a real credential.
@@ -217,9 +219,8 @@ public actor CodexAuthCoordinator {
 
     private let store: CodexAuthStore
     private let clientID: String
-    private let tokenURL: URL
+    private let tokenURL: String
     private let transport: Transport
-    private let logger = Logger(subsystem: "SwiftLLMKit", category: "CodexAuth")
 
     /// The refresh currently in flight, if any. Concurrent callers await this one rather than
     /// starting their own.
@@ -228,7 +229,7 @@ public actor CodexAuthCoordinator {
     public init(
         store: CodexAuthStore = CodexAuthStore(),
         clientID: String = CodexAuthCoordinator.defaultClientID,
-        tokenURL: URL = CodexAuthCoordinator.defaultTokenURL,
+        tokenURL: String = CodexAuthCoordinator.defaultTokenURL,
         transport: @escaping Transport = { try await URLSession.shared.data(for: $0) }
     ) {
         self.store = store
@@ -257,7 +258,13 @@ public actor CodexAuthCoordinator {
 
     /// Exchanges the refresh token for a fresh access token and writes the result back to disk.
     private func performRefresh(_ current: CodexAuthTokens) async throws -> CodexAuthTokens {
-        var request = URLRequest(url: tokenURL)
+        // Validated here rather than force-unwrapped at the constant: this package force-unwraps
+        // nowhere, and a typo should surface as a typed error naming the bad value, not a crash.
+        guard let endpoint = URL(string: tokenURL) else {
+            throw LLMProviderError.invalidRequest(
+                detail: "Codex token endpoint is not a valid URL: \(tokenURL)")
+        }
+        var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.httpBody = try JSONSerialization.data(withJSONObject: [
@@ -276,7 +283,7 @@ public actor CodexAuthCoordinator {
             throw LLMProviderError.httpError(
                 statusCode: http.statusCode,
                 body: String(data: data, encoding: .utf8) ?? "",
-                url: tokenURL,
+                url: endpoint,
                 retryAfter: LLMProviderError.parseRetryAfter(http.value(forHTTPHeaderField: "Retry-After")))
         }
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
