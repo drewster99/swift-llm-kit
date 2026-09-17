@@ -165,11 +165,18 @@ struct CodexResponsesTests {
 
     @Test("A tool call is assembled from its added event and argument deltas")
     func parsesToolCall() throws {
+        // Carries BOTH `item_id` and `output_index` on the deltas, exactly as a live stream does.
+        // An earlier fixture supplied only `output_index`, which hid a real defect: this side keyed
+        // by `item.id` and that side by `item_id`, so the two never joined and the call arrived
+        // with empty arguments. Fixtures that are sparser than the wire prove less than they look.
         let sse = """
-            data: {"type":"response.output_item.added","output_index":0,\
-            "item":{"type":"function_call","id":"fc_1","call_id":"call_xyz","name":"get_weather"}}
-            data: {"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\\"city\\":"}
-            data: {"type":"response.function_call_arguments.delta","output_index":0,"delta":"\\"Paris\\"}"}
+            data: {"type":"response.output_item.added","output_index":0,"sequence_number":1,\
+            "item":{"type":"function_call","id":"fc_1","call_id":"call_xyz","name":"get_weather",\
+            "arguments":"","status":"in_progress"}}
+            data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,\
+            "delta":"{\\"city\\":"}
+            data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,\
+            "delta":"\\"Paris\\"}"}
             data: {"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":2}}}
             """
         let response = try CodexResponsesProvider.parseStream(sse)
@@ -186,8 +193,8 @@ struct CodexResponsesTests {
         let sse = """
             data: {"type":"response.output_item.added","output_index":0,\
             "item":{"type":"function_call","id":"fc_1","call_id":"c1","name":"f"}}
-            data: {"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\\"a\\":"}
-            data: {"type":"response.function_call_arguments.done","output_index":0,"arguments":"{\\"a\\":1}"}
+            data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,"delta":"{\\"a\\":"}
+            data: {"type":"response.function_call_arguments.done","item_id":"fc_1","output_index":0,"arguments":"{\\"a\\":1}"}
             data: {"type":"response.completed","response":{}}
             """
         let response = try CodexResponsesProvider.parseStream(sse)

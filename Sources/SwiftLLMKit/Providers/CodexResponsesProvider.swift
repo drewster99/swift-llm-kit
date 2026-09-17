@@ -274,8 +274,12 @@ struct CodexResponsesProvider: LLMProvider {
 
             switch type {
             case "response.output_item.added":
+                // Keyed by the ITEM's own id, which is what the delta events carry as `item_id`.
+                // A real stream sends BOTH `item_id` and `output_index` on deltas, so keying this
+                // side by `output_index` and the other by `item_id` silently produced two different
+                // keys — the arguments never joined their call and every tool call arrived as `{}`.
                 guard let item = event["item"] as? [String: Any],
-                      let itemID = event["output_index"].map({ "\($0)" }) ?? item["id"] as? String
+                      let itemID = (item["id"] as? String) ?? event["output_index"].map({ "\($0)" })
                 else { continue }
                 if item["type"] as? String == "function_call" {
                     let name = item["name"] as? String ?? ""
