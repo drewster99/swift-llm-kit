@@ -83,7 +83,8 @@ struct CodexResponsesProvider: LLMProvider {
             messages: messages,
             tools: tools,
             overrides: overrides,
-            maxOutputTokens: modelMaxOutputTokens)
+            configuredMaxOutputTokens: configuration.maxOutputTokens,
+            modelMaxOutputTokens: modelMaxOutputTokens)
         guard JSONSerialization.isValidJSONObject(body) else {
             throw LLMProviderError.invalidRequest(detail: "Codex request body is not valid JSON")
         }
@@ -133,7 +134,8 @@ struct CodexResponsesProvider: LLMProvider {
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
         overrides: LLMCallOverrides,
-        maxOutputTokens: Int? = nil
+        configuredMaxOutputTokens: Int,
+        modelMaxOutputTokens: Int? = nil
     ) -> [String: Any] {
         var body: [String: Any] = [
             "model": model,
@@ -152,7 +154,19 @@ struct CodexResponsesProvider: LLMProvider {
             // reasoning turn streams nothing until the answer lands.
             body["reasoning"] = ["effort": effort, "summary": "auto"]
         }
-        if let maxOutputTokens, maxOutputTokens > 0 { body["max_output_tokens"] = maxOutputTokens }
+        // NO output-token cap is sent, and that is not an omission.
+        //
+        // This endpoint rejects the field outright:
+        //     400 {"detail":"Unsupported parameter: max_output_tokens"}
+        // (verified against the live backend 2026-09-17). So neither the user's configured limit
+        // nor `LLMCallOverrides.maxOutputTokens` — documented as "honored by every provider" —
+        // can be honored here. They are accepted as parameters and deliberately ignored, because
+        // the alternative is a 400 on every single call.
+        //
+        // Worth stating plainly because the previous code LOOKED like it sent a cap and only
+        // worked by accident: it read the model's catalog ceiling, no Codex model publishes one,
+        // so the field was never emitted. Making it honor the configuration — the obviously
+        // correct change — broke every request.
         return body
     }
 
