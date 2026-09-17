@@ -309,3 +309,52 @@ struct CodexResponsesTests {
         #expect(hidden.facts.reasoningEffort == nil, "an empty ladder states nothing")
     }
 }
+
+/// The link between "a model is assigned to this provider" and "the Codex client is what runs it".
+///
+/// Everything else in this file tests translation in isolation; if the factory hands back an
+/// `OpenAICompatibleProvider` for this apiType, all of it is dead code and every call 401s on an
+/// endpoint the token cannot reach.
+@Suite("Codex provider factory")
+struct CodexProviderFactoryTests {
+
+    @Test("The codexChatGPT apiType constructs the Codex client, not the OpenAI-compatible one")
+    @MainActor
+    func factoryReturnsCodexProvider() throws {
+        // A unique app identifier so this gets its own storage directory rather than the
+        // developer's real one.
+        let kit = LLMKitManager(
+            appIdentifier: "test.codex.factory.\(UUID().uuidString)",
+            keychainServicePrefix: "test.codex.factory")
+        let provider = ModelProvider(
+            id: "builtin.codex-chatgpt",
+            name: "ChatGPT Subscription (Codex)",
+            apiType: .codexChatGPT,
+            endpoint: try #require(URL(string: "https://chatgpt.com/backend-api/codex")))
+        let config = ModelConfiguration(
+            name: "t", providerID: provider.id, modelID: "gpt-5.5")
+
+        let built = kit.makeProvider(configuration: config, provider: provider)
+        #expect(built is CodexResponsesProvider, "got \(type(of: built))")
+    }
+
+    @Test("Every other apiType still gets the provider it had")
+    @MainActor
+    func otherAPITypesUnchanged() throws {
+        let kit = LLMKitManager(
+            appIdentifier: "test.codex.factory.\(UUID().uuidString)",
+            keychainServicePrefix: "test.codex.factory")
+        func built(_ apiType: ProviderAPIType, _ endpoint: String) throws -> any LLMProvider {
+            let provider = ModelProvider(id: "p", name: "p", apiType: apiType,
+                                        endpoint: try #require(URL(string: endpoint)))
+            return kit.makeProvider(
+                configuration: ModelConfiguration(name: "t", providerID: "p", modelID: "m"),
+                provider: provider)
+        }
+        // Adding a case to the factory's switch must not have captured anyone else's traffic.
+        #expect(try built(.anthropic, "https://api.anthropic.com") is AnthropicProvider)
+        #expect(try built(.openAICompatible, "https://api.openai.com/v1") is OpenAICompatibleProvider)
+        #expect(try built(.ollama, "http://localhost:11434") is OllamaProvider)
+    }
+}
+
