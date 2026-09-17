@@ -785,7 +785,12 @@ public final class LLMKitManager {
     /// in ``metadataCompositions`` for the inspector; the materialized `ModelInfo` is what the
     /// rest of the app consumes, unchanged in shape.
     private func fetchAndEnrich(provider: ModelProvider) async -> (models: [ModelInfo], error: String?) {
-        let apiKey = keychain.apiKey(forProviderID: provider.id)
+        // The ChatGPT-subscription provider has no Keychain entry by design — its bearer is the
+        // `codex` CLI's access token. Read without refreshing: this is a listing, a stale token
+        // simply fails the fetch, and the user can retry after signing in again.
+        let apiKey = provider.apiType == .codexChatGPT
+            ? CodexAuthStore().load()?.accessToken
+            : keychain.apiKey(forProviderID: provider.id)
         do {
             let decodedFacts = try await fetchService.fetchModelFacts(
                 from: provider,
