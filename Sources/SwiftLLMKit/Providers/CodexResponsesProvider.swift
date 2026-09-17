@@ -104,8 +104,12 @@ struct CodexResponsesProvider: LLMProvider {
                 statusCode: http.statusCode, body: text, url: url,
                 retryAfter: LLMProviderError.parseRetryAfter(http.value(forHTTPHeaderField: "Retry-After")))
         }
-        if verboseLogging {
-            logger.debug("Codex limits: \(Self.limitHeaders(http).description, privacy: .public)")
+        // Recorded on EVERY successful call, not just when something goes wrong: these headers are
+        // how the window can be shown filling rather than discovered at the ceiling.
+        let window = CodexUsageWindow.from(headers: Self.limitHeaders(http))
+        CodexUsageMonitor.record(window)
+        if verboseLogging, let percent = window.primaryPercentUsed {
+            logger.debug("Codex window \(percent, privacy: .public)% used (\(window.limitName ?? "unnamed", privacy: .public))")
         }
         return try Self.parseStream(text)
     }
