@@ -264,7 +264,11 @@ public actor CodexAuthCoordinator {
 
     /// The refresh currently in flight, if any. Concurrent callers await this one rather than
     /// starting their own.
-    private var inFlight: Task<CodexAuthTokens, Error>?
+    ///
+    /// Tagged, because the slot is released by the refresh that took it and a LATE finisher must
+    /// never release a NEWER refresh's slot — that would let a third caller start yet another
+    /// concurrent writer of `auth.json`.
+    private var inFlight: (id: UUID, task: Task<CodexAuthTokens, Error>)?
 
     /// The last refresh FAILURE and when it happened, for the cooldown.
     ///
@@ -333,7 +337,7 @@ public actor CodexAuthCoordinator {
 
         // Joining a live refresh is always preferable to replaying a stale failure, so this comes
         // before the cooldown: the in-flight attempt is newer information than the stored error.
-        if let inFlight { return try await inFlight.value }
+        if let inFlight { return try await inFlight.task.value }
 
         if let failure = lastRefreshFailure {
             let age = now.timeIntervalSince(failure.at)
@@ -343,20 +347,75 @@ public actor CodexAuthCoordinator {
             if age >= 0, age < failureCooldown { throw failure.error }
         }
 
-        let task = Task { try await self.performRefresh(current, now: now) }
-        inFlight = task
-        defer { inFlight = nil }
-        do {
-            let refreshed = try await task.value
-            lastRefreshFailure = nil
-            lastRefreshed = refreshed
-            return refreshed
-        } catch {
-            // Only the INITIATOR records. Joiners returned above, so a burst of five roles sharing
-            // one refresh produces one failure record — which is the truth: one attempt was made.
-            lastRefreshFailure = (at: now, error: error)
-            throw error
+        // The REFRESH owns the slot and every piece of state it settles — not the caller that
+        // happened to start it.
+        //
+        // Tying either to the caller's scope makes the single-flight depend on that caller reaching
+        // its own `defer`. Today it always does, but only because of two language details nothing
+        // here pins: awaiting an unstructured task is not a cancellation point, and `Task {}` does
+        // not inherit cancellation. If either stopped holding, a cancelled initiator would free the
+        // slot with its refresh still running and the next caller would start a SECOND concurrent
+        // writer of `auth.json` — the exact race this actor exists to prevent.
+        //
+        // Doing the writes here also closes a real window: `performRefresh` saves to disk, and if
+        // that save FAILS the only record of the new token is `lastRefreshed`. Setting it from the
+        // caller left a gap between the slot opening and the value landing, in which an arriving
+        // caller saw a stale disk and no cache and refreshed all over again.
+        //
+        // Deliberately unstructured, so the refresh does NOT inherit the caller's cancellation: it
+        // is shared work. Up to five roles may be waiting on it, and abandoning it because the one
+        // caller that started it went away would fail all of them.
+        let id = UUID()
+        let task = Task { () async throws -> CodexAuthTokens in
+            defer { self.releaseInFlight(id) }
+            do {
+                let refreshed = try await self.performRefresh(current, now: now)
+                self.lastRefreshFailure = nil
+                self.lastRefreshed = refreshed
+                return refreshed
+            } catch {
+                // A cancelled attempt is not the endpoint saying no, and must not arm the cooldown:
+                // the stored error is replayed to EVERY caller for a full minute, and the consumer
+                // classifies `CancellationError` as PERMANENT — so one cancelled refresh would hard
+                // -fail every agent, unretried, for that minute.
+                if !Self.isCancellation(error) {
+                    self.lastRefreshFailure = (at: now, error: error)
+                }
+                throw error
+            }
         }
+        inFlight = (id: id, task: task)
+        // One writer above means the caller only propagates. A burst of five roles therefore
+        // produces one attempt and one record, with no initiator/joiner asymmetry to get wrong.
+        return try await task.value
+    }
+
+    /// Releases the single-flight slot, but only if it still belongs to this refresh.
+    ///
+    /// The identity check is not reachable through the current call order — one release site, and a
+    /// successor can only be created after it runs. It is kept, and tested directly, because it is
+    /// what makes a SECOND release site safe to add: a timeout that abandons a slow refresh is the
+    /// obvious next one, and without this a late finisher would then clear its successor's slot and
+    /// hand a third caller its own concurrent writer of `auth.json`.
+    ///
+    /// Internal rather than private so that guard can be tested at all; the interleaving cannot be
+    /// staged through `validTokens`, and an untested guard is one that quietly stops working.
+    func releaseInFlight(_ id: UUID) {
+        if inFlight?.id == id { inFlight = nil }
+    }
+
+    /// The in-flight slot's tag, for the test that covers `releaseInFlight`.
+    var inFlightID: UUID? { inFlight?.id }
+
+    /// Whether an error means "this attempt was abandoned" rather than "the endpoint refused".
+    ///
+    /// Both spellings matter: Swift concurrency throws `CancellationError`, while `URLSession`
+    /// reports a cancelled transfer as `URLError.cancelled`. Neither is evidence about the
+    /// credential, so neither may arm the failure cooldown.
+    private static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if let urlError = error as? URLError, urlError.code == .cancelled { return true }
+        return false
     }
 
     /// Exchanges the refresh token for a fresh access token and writes the result back to disk.
