@@ -110,8 +110,7 @@ struct CodexResponsesTests {
             model: "gpt-5.5",
             messages: [LLMMessage(role: .user, content: .text("hi"))],
             tools: [],
-            overrides: LLMCallOverrides(),
-            configuredMaxOutputTokens: 4096)
+            overrides: LLMCallOverrides())
         #expect(body["store"] as? Bool == false, "the endpoint keeps nothing between turns")
         #expect(body["stream"] as? Bool == true)
         // Deliberately absent: the endpoint 400s on `max_output_tokens`. See
@@ -128,8 +127,7 @@ struct CodexResponsesTests {
         var overrides = LLMCallOverrides()
         overrides.reasoningEffort = "xhigh"
         let body = CodexResponsesProvider.buildRequestBody(
-            model: "gpt-5.5", messages: [], tools: [], overrides: overrides,
-            configuredMaxOutputTokens: 4096)
+            model: "gpt-5.5", messages: [], tools: [], overrides: overrides)
         let reasoning = try #require(body["reasoning"] as? [String: String])
         #expect(reasoning["effort"] == "xhigh")
         // Without `summary`, a reasoning turn streams nothing until the answer lands.
@@ -138,20 +136,24 @@ struct CodexResponsesTests {
 
     @Test("No output-token cap is ever sent — the endpoint rejects the field")
     func neverSendsAnOutputCap() {
-        func body(_ overrides: LLMCallOverrides, configured: Int, model: Int? = nil) -> [String: Any] {
+        func body(_ overrides: LLMCallOverrides) -> [String: Any] {
             CodexResponsesProvider.buildRequestBody(
-                model: "gpt-5.5", messages: [], tools: [], overrides: overrides,
-                configuredMaxOutputTokens: configured, modelMaxOutputTokens: model)
+                model: "gpt-5.5", messages: [], tools: [], overrides: overrides)
         }
         // 400 {"detail":"Unsupported parameter: max_output_tokens"} — verified live 2026-09-17.
-        // Every one of these looks like it should produce a cap, and none may.
+        // The builder takes no cap argument at all, so the only way one could reach the wire is
+        // someone re-adding the field inside it. Each expectation below would catch that.
         var overridden = LLMCallOverrides()
         overridden.maxOutputTokens = 512
-        #expect(body(LLMCallOverrides(), configured: 4096)["max_output_tokens"] == nil)
-        #expect(body(overridden, configured: 4096)["max_output_tokens"] == nil)
-        #expect(body(LLMCallOverrides(), configured: 2048, model: 8192)["max_output_tokens"] == nil)
+        #expect(body(LLMCallOverrides())["max_output_tokens"] == nil)
+        #expect(body(overridden)["max_output_tokens"] == nil, "a per-call override may not leak a cap")
+        // Keyed on the PREFIX, so a rename (`max_output_token_count`, `maxOutputTokens`) is caught
+        // too — an exact-key check would go quietly green on the misspelling that 400s.
+        #expect(body(overridden).keys.filter { $0.contains("max_output") }.isEmpty)
+        #expect(body(overridden).keys.filter { $0.lowercased().contains("maxoutput") }.isEmpty)
         // The rest of the body is unaffected — this is one omitted key, not a disabled builder.
-        #expect(body(LLMCallOverrides(), configured: 4096)["model"] as? String == "gpt-5.5")
+        #expect(body(overridden)["model"] as? String == "gpt-5.5")
+        #expect(body(overridden)["input"] != nil)
     }
 
     // MARK: Inbound — SSE → LLMResponse

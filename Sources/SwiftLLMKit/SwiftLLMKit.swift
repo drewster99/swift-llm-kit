@@ -1470,10 +1470,15 @@ public final class LLMKitManager {
         case .codexChatGPT:
             // Keyless: the credential is the `codex` CLI's ChatGPT session, resolved (and refreshed)
             // inside the provider, so `readAPIKey` is not consulted at all for this apiType.
+            //
+            // And no `modelMaxOutputTokens`, unlike the Anthropic and OpenAI-compatible branches
+            // (Gemini and local Ollama don't take one either): this endpoint 400s on
+            // `max_output_tokens` ("Unsupported parameter", verified live 2026-09-17), so the
+            // provider accepts no cap and sends none. Passing one is not a no-op to restore — the
+            // parameter does not exist. See `CodexResponsesProvider.buildRequestBody`.
             return CodexResponsesProvider(
                 configuration: config, provider: modelProvider,
                 verboseLogging: verbose,
-                modelMaxOutputTokens: modelMaxOutputTokens,
                 session: session
             )
         case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaModel, .alibabaCloud, .openRouter:

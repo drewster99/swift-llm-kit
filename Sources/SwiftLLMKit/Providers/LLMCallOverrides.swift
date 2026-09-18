@@ -15,18 +15,26 @@ import Foundation
 /// - `thinkingEffort`: honored by Anthropic (adaptive thinking models) and
 ///   OpenAI-compatible (when `behaviorFlags.supportsReasoningEffort` is set);
 ///   ignored by Gemini and Ollama.
-/// - `maxOutputTokens`: honored by every provider. Anthropic clamps the value
-///   to `max(override, budget_tokens + 1)` when MANUAL extended thinking is
-///   on (API constraint).
-/// - `temperature`: honored by every provider. Anthropic forces 1.0 when
-///   extended thinking is on (overrides this field).
-/// - `topP`: honored by every provider. Anthropic ignores when extended
-///   thinking is on.
-/// - `stopSequences`: honored by every provider, each in its native field
-///   name (Anthropic `stop_sequences`, OpenAI `stop`, Gemini
+/// - `maxOutputTokens`: honored by every provider EXCEPT Codex. Anthropic
+///   clamps the value to `max(override, budget_tokens + 1)` when MANUAL
+///   extended thinking is on (API constraint).
+/// - `temperature`: honored by every provider except Codex. Anthropic forces
+///   1.0 when extended thinking is on (overrides this field).
+/// - `topP`: honored by every provider except Codex. Anthropic ignores when
+///   extended thinking is on.
+/// - `stopSequences`: honored by every provider except Codex, each in its
+///   native field name (Anthropic `stop_sequences`, OpenAI `stop`, Gemini
 ///   `stopSequences`, Ollama `stop`).
 /// - `frequencyPenalty` / `presencePenalty`: honored by OpenAI-compatible
-///   and Gemini; ignored by Anthropic and Ollama (no native field).
+///   and Gemini; ignored by Anthropic, Ollama and Codex (no native field).
+///
+/// **Codex (`.codexChatGPT`) reads exactly two of these fields** — `toolChoice`
+/// and `reasoningEffort` — and drops every other one. That is correct, not an
+/// oversight: the endpoint answers `400 {"detail":"Unsupported parameter:
+/// max_output_tokens"}` (verified live 2026-09-17), and the reasoning models it
+/// serves reject sampling knobs such as `temperature`, so sending any of them
+/// would fail the call rather than refine it. `CodexResponsesProvider` takes no
+/// cap parameter at all, so there is no plumbing to "finish".
 public struct LLMCallOverrides: Sendable, Equatable {
     public var toolChoice: LLMToolChoice?
     /// Per-call GENERAL effort (Anthropic `output_config.effort`).

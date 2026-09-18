@@ -21,24 +21,29 @@ private let logger = Logger(subsystem: "SwiftLLMKit", category: "CodexResponses"
 struct CodexResponsesProvider: LLMProvider {
     private let configuration: ModelConfiguration
     private let provider: ModelProvider
-    private let auth: CodexAuthCoordinator
+    /// Not `private`: a test asserts that every provider the factory builds holds the SAME
+    /// coordinator, which is the entire point of the default below. The struct is internal, so
+    /// widening this does not widen the package's API.
+    let auth: CodexAuthCoordinator
     private let verboseLogging: Bool
     private let session: URLSession
     private let clientVersion: String
-    private let modelMaxOutputTokens: Int?
 
     /// The Codex backend rejects `/models` without a `client_version`, and may police it on
     /// `/responses` too. Hand-maintained and undocumented; `1.0.0` is accepted as of 2026-09-16
     /// even though the shipped CLI reports 0.154.0.
     static let defaultClientVersion = "1.0.0"
 
+    /// - Parameter auth: Defaults to the process-wide coordinator for the `codex` CLI's credential
+    ///   file. **That default IS the single-flight protection** — one provider is built per agent
+    ///   role, and a per-provider coordinator lets five roles refresh at once and race each other
+    ///   writing `auth.json`. Pass one only from a test, with its own store and transport.
     init(
         configuration: ModelConfiguration,
         provider: ModelProvider,
-        auth: CodexAuthCoordinator = CodexAuthCoordinator(),
+        auth: CodexAuthCoordinator = .sharedForDefaultStore,
         verboseLogging: Bool = false,
         clientVersion: String = CodexResponsesProvider.defaultClientVersion,
-        modelMaxOutputTokens: Int? = nil,
         session: URLSession = llmURLSession
     ) {
         self.configuration = configuration
@@ -46,7 +51,6 @@ struct CodexResponsesProvider: LLMProvider {
         self.auth = auth
         self.verboseLogging = verboseLogging
         self.clientVersion = clientVersion
-        self.modelMaxOutputTokens = modelMaxOutputTokens
         self.session = session
     }
 
@@ -82,9 +86,7 @@ struct CodexResponsesProvider: LLMProvider {
             model: configuration.model,
             messages: messages,
             tools: tools,
-            overrides: overrides,
-            configuredMaxOutputTokens: configuration.maxOutputTokens,
-            modelMaxOutputTokens: modelMaxOutputTokens)
+            overrides: overrides)
         guard JSONSerialization.isValidJSONObject(body) else {
             throw LLMProviderError.invalidRequest(detail: "Codex request body is not valid JSON")
         }
@@ -133,9 +135,7 @@ struct CodexResponsesProvider: LLMProvider {
         model: String,
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
-        overrides: LLMCallOverrides,
-        configuredMaxOutputTokens: Int,
-        modelMaxOutputTokens: Int? = nil
+        overrides: LLMCallOverrides
     ) -> [String: Any] {
         var body: [String: Any] = [
             "model": model,
@@ -154,19 +154,20 @@ struct CodexResponsesProvider: LLMProvider {
             // reasoning turn streams nothing until the answer lands.
             body["reasoning"] = ["effort": effort, "summary": "auto"]
         }
-        // NO output-token cap is sent, and that is not an omission.
+        // NO output-token cap is sent, and this builder deliberately takes NO cap argument —
+        // there is nothing half-wired here for a later reader to "finish".
         //
-        // This endpoint rejects the field outright:
+        // The endpoint rejects the field outright:
         //     400 {"detail":"Unsupported parameter: max_output_tokens"}
         // (verified against the live backend 2026-09-17). So neither the user's configured limit
         // nor `LLMCallOverrides.maxOutputTokens` — documented as "honored by every provider" —
-        // can be honored here. They are accepted as parameters and deliberately ignored, because
-        // the alternative is a 400 on every single call.
+        // can be honored here, and the parameters that used to carry them were removed rather
+        // than left accepted-and-ignored, because the alternative is a 400 on every single call.
         //
-        // Worth stating plainly because the previous code LOOKED like it sent a cap and only
+        // Worth stating plainly because the code before that LOOKED like it sent a cap and only
         // worked by accident: it read the model's catalog ceiling, no Codex model publishes one,
         // so the field was never emitted. Making it honor the configuration — the obviously
-        // correct change — broke every request.
+        // correct change — broke every request. `neverSendsAnOutputCap` is the regression guard.
         return body
     }
 
@@ -292,38 +293,82 @@ struct CodexResponsesProvider: LLMProvider {
 
             switch type {
             case "response.output_item.added":
-                // Keyed by the ITEM's own id, which is what the delta events carry as `item_id`.
-                // A real stream sends BOTH `item_id` and `output_index` on deltas, so keying this
-                // side by `output_index` and the other by `item_id` silently produced two different
-                // keys — the arguments never joined their call and every tool call arrived as `{}`.
+                // Only function_call items need registering: text accumulates from its own deltas.
                 guard let item = event["item"] as? [String: Any],
-                      let itemID = (item["id"] as? String) ?? event["output_index"].map({ "\($0)" })
-                else { continue }
-                if item["type"] as? String == "function_call" {
-                    let name = item["name"] as? String ?? ""
-                    // `call_id` is what a later `function_call_output` must quote; `id` is the
-                    // stream's own handle for the item and is NOT interchangeable.
-                    let callID = item["call_id"] as? String ?? item["id"] as? String ?? itemID
-                    callByItem[itemID] = (id: callID, name: name)
-                    callOrder.append(itemID)
+                      item["type"] as? String == "function_call" else { continue }
+                // Keyed by the ITEM's own id — the SAME identity the delta events carry as
+                // `item_id`, derived by the SAME function. Keying this side by `output_index` and
+                // the other by `item_id` is what silently produced two different keys once before:
+                // the arguments never joined their call and every tool call arrived as `{}`.
+                guard let itemID = Self.itemKey(event) else {
+                    logger.error("""
+                        Codex stream: a function_call item carries no id; dropping the call rather \
+                        than filing it under its output_index, which is a different identity
+                        """)
+                    continue
+                }
+                // `call_id` is what a later `function_call_output` must quote; `id` is the
+                // stream's own handle for the item and is NOT interchangeable.
+                let callID = item["call_id"] as? String ?? itemID
+                // `callOrder` is the emission order and `callByItem` the contents; appending
+                // unconditionally would let a repeated `added` for one item emit the call twice.
+                if callByItem[itemID] == nil { callOrder.append(itemID) }
+                callByItem[itemID] = (id: callID, name: item["name"] as? String ?? "")
+
+            case "response.output_item.done":
+                // The terminal item is SELF-CONTAINED — id, `call_id`, `name` and the COMPLETE
+                // `arguments` string in one event (verified against live captures 2026-09-17). So
+                // it needs no join at all, and is preferred over the accumulation for exactly the
+                // reason `function_call_arguments.done` already is: deltas that never arrived — or
+                // never matched their call — otherwise leave `{}`, which is the precise symptom
+                // the 0.0.187 keying defect produced on every call.
+                //
+                // Every field falls back to what `added` already recorded rather than to a
+                // default. A terminal item that omits `call_id` must not downgrade a good one to
+                // the item handle: that id is what correlates the result, so preserving beats
+                // re-deriving — the same rule the model-override sheets follow.
+                guard let item = event["item"] as? [String: Any],
+                      item["type"] as? String == "function_call",
+                      let itemID = Self.itemKey(event) else { continue }
+                if callByItem[itemID] == nil { callOrder.append(itemID) }
+                callByItem[itemID] = (
+                    id: item["call_id"] as? String ?? callByItem[itemID]?.id ?? itemID,
+                    name: item["name"] as? String ?? callByItem[itemID]?.name ?? "")
+                if let arguments = item["arguments"] as? String, !arguments.isEmpty {
+                    argumentsByItem[itemID] = arguments
                 }
 
             case "response.output_text.delta":
-                guard let itemID = Self.itemKey(event), let delta = event["delta"] as? String
-                else { continue }
+                guard let delta = event["delta"] as? String else { continue }
+                // Text is the one case position is allowed to group, and the reason is that there
+                // is nothing here to cross: a text bucket is only accumulated and ordered, never
+                // matched against an item some OTHER event registered. Dropping the delta instead
+                // would silently shorten the answer with nothing downstream able to notice. The
+                // prefix keeps the positional space visibly disjoint from the id space.
+                let itemID = Self.itemKey(event)
+                    ?? (event["output_index"] as? Int).map { "position:\($0)" }
+                    ?? "position:unknown"
                 if textByItem[itemID] == nil { textOrder.append(itemID) }
                 textByItem[itemID, default: ""] += delta
 
             case "response.function_call_arguments.delta":
-                guard let itemID = Self.itemKey(event), let delta = event["delta"] as? String
-                else { continue }
+                // The payload is checked FIRST so a delta-less event is never reported as an
+                // unkeyed one: two different defects must not share one log line.
+                guard let delta = event["delta"] as? String else { continue }
+                guard let itemID = Self.itemKey(event) else {
+                    Self.logUnkeyedEvent(type, event)
+                    continue
+                }
                 argumentsByItem[itemID, default: ""] += delta
 
             case "response.function_call_arguments.done":
                 // The terminal event carries the whole argument string. Preferred over the
                 // accumulation when present — a dropped delta would otherwise yield invalid JSON.
-                guard let itemID = Self.itemKey(event), let arguments = event["arguments"] as? String
-                else { continue }
+                guard let arguments = event["arguments"] as? String else { continue }
+                guard let itemID = Self.itemKey(event) else {
+                    Self.logUnkeyedEvent(type, event)
+                    continue
+                }
                 argumentsByItem[itemID] = arguments
 
             case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
@@ -357,6 +402,15 @@ struct CodexResponsesProvider: LLMProvider {
             throw LLMProviderError.malformedResponse(detail: "Codex stream failed: \(failure)")
         }
 
+        // Arguments that never met a call. Silent before: the shipped defect produced exactly this
+        // state on EVERY call and the parser reported a healthy response with `{}` arguments.
+        for orphan in argumentsByItem.keys.sorted() where callByItem[orphan] == nil {
+            logger.error("""
+                Codex stream: argument deltas for item \(orphan, privacy: .public) never matched a \
+                function_call item — the call's arguments were dropped
+                """)
+        }
+
         let text = textOrder.compactMap { textByItem[$0] }.joined()
         let toolCalls: [LLMToolCall] = callOrder.compactMap { itemID in
             guard let call = callByItem[itemID] else { return nil }
@@ -374,12 +428,37 @@ struct CodexResponsesProvider: LLMProvider {
             finishReason: finishReason)
     }
 
-    /// Events key their item by `item_id`; a few carry only `output_index`. Either identifies the
-    /// item within one stream, which is all the accumulation needs.
+    /// The item an event is about, by the item's OWN id — the one identity both event shapes carry:
+    /// deltas spell it `item_id`, `response.output_item.added`/`.done` nest it as `item.id`.
+    ///
+    /// `output_index` is deliberately NOT a fallback tier. It is the item's POSITION, a DIFFERENT
+    /// identity, and the two event shapes prefer different fields — so a positional tier lets one
+    /// side key by id while the other keys by position, and the arguments never join their call.
+    /// That is the defect that shipped in 0.0.187 with every tool call arriving `{}`; one shared
+    /// function does not fix it, because a shared function still takes different branches on
+    /// different event shapes. Removing the tier is what makes the crossing unrepresentable.
+    ///
+    /// `item_id` is checked FIRST deliberately: if an item event ever carried both spellings with
+    /// different values, the deltas would use `item_id`, so preferring it keeps the sides agreeing.
+    ///
+    /// When the id is absent the honest answer is "unknown item", and the caller drops the event
+    /// loudly rather than filing it where it may meet the other half by luck.
     private static func itemKey(_ event: [String: Any]) -> String? {
         if let itemID = event["item_id"] as? String { return itemID }
-        if let index = event["output_index"] { return "\(index)" }
+        if let item = event["item"] as? [String: Any], let itemID = item["id"] as? String {
+            return itemID
+        }
         return nil
+    }
+
+    /// An event that could not name its item, recorded rather than swallowed. Item ids are
+    /// per-stream handles, not account-linked — unlike `chatgpt-account-id`, which is never logged.
+    private static func logUnkeyedEvent(_ type: String, _ event: [String: Any]) {
+        let position = (event["output_index"] as? Int).map(String.init) ?? "none"
+        logger.error("""
+            Codex stream: \(type, privacy: .public) carries no item id \
+            (output_index \(position, privacy: .public)) — dropped rather than keyed by position
+            """)
     }
 
     static func parseUsage(_ usage: [String: Any]?) -> TokenUsage? {

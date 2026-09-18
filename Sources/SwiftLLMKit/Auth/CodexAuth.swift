@@ -48,11 +48,29 @@ public struct CodexAuthTokens: Sendable, Equatable {
 
     /// Whether the access token is within `window` of expiring (or already has).
     ///
-    /// An UNREADABLE expiry answers `true`: a token we cannot date is one we cannot vouch for, and
-    /// refreshing a still-good token costs one request while using a dead one fails the call.
-    public func needsRefresh(within window: TimeInterval, now: Date = Date()) -> Bool {
-        guard let expiry else { return true }
-        return expiry.timeIntervalSince(now) < window
+    /// A DATEABLE token answers from its own `exp` claim and from nothing else — `lastRefresh` is
+    /// never consulted, so a token that genuinely expired can never be vouched for by a recent
+    /// refresh.
+    ///
+    /// An UNDATEABLE token (opaque, or a JWT with no `exp`) has no expiry to read, so it is dated by
+    /// the clock we do have: when we last refreshed it. It refreshes when that clock says
+    /// `undatedAfter` has passed, when there is no clock at all, or when the clock reads the future
+    /// (a backwards system-clock jump, which must not pin a credential shut).
+    ///
+    /// Answering a bare `true` for the undateable case — which is what this did until the undated
+    /// clock existed — costs ONE OAuth round trip plus one read-modify-write of `auth.json` PER LLM
+    /// CALL, forever, because refreshing an opaque token yields an equally opaque one. The trade is
+    /// deliberate: an undateable token may be served for up to `undatedAfter` after it actually
+    /// died, which fails the call the same way using a dead token always did.
+    public func needsRefresh(
+        within window: TimeInterval,
+        undatedAfter: TimeInterval = CodexAuthCoordinator.undatedRefreshInterval,
+        now: Date = Date()
+    ) -> Bool {
+        if let expiry { return expiry.timeIntervalSince(now) < window }
+        guard let lastRefresh else { return true }
+        let age = now.timeIntervalSince(lastRefresh)
+        return age < 0 || age >= undatedAfter
     }
 }
 
@@ -203,6 +221,28 @@ public actor CodexAuthCoordinator {
     /// Refresh when the access token has less than this left. Matches the Codex CLI's own window.
     public static let refreshWindow: TimeInterval = 5 * 60
 
+    /// How long an UNDATEABLE access token is trusted before it is refreshed anyway.
+    ///
+    /// The bound on both failure modes: at worst one refresh per this interval instead of one per
+    /// LLM call, and at worst a dead opaque token served for this long. Ten minutes is short next to
+    /// any plausible token lifetime (the dateable ones this backend issues run hours) and long next
+    /// to a burst of agent turns, which is the ratio that matters.
+    public static let undatedRefreshInterval: TimeInterval = 10 * 60
+
+    /// How long a FAILED refresh suppresses the next attempt.
+    ///
+    /// `lastRefresh` is stamped only on SUCCESS, so nothing else stops a failing refresh from being
+    /// re-attempted on every LLM call. The severe case is a 429 or 5xx from the TOKEN endpoint: the
+    /// consumer classifies that transient and retries `send` up to 50 times, and each retry
+    /// re-enters `validTokens` and fires another refresh POST — fifty requests per LLM call, per
+    /// role, at an endpoint already refusing them. (A revoked refresh token is a 400, classified
+    /// permanent, so it costs one POST per call rather than fifty.)
+    ///
+    /// Sized against the consumer's own retry curve (1, 2, 4, 8, 15, 15 … seconds): a minute is
+    /// several retries wide, so a blip costs at most one further real attempt per minute rather than
+    /// one per retry, while the budget still spans enough minutes to catch a recovery.
+    public static let failureCooldown: TimeInterval = 60
+
     /// The Codex CLI's public PKCE client id, used ONLY for refresh.
     ///
     /// Hardcoded and undocumented, so it can rotate without notice: `codex` 0.154.0 ships this one
@@ -226,15 +266,37 @@ public actor CodexAuthCoordinator {
     /// starting their own.
     private var inFlight: Task<CodexAuthTokens, Error>?
 
+    /// The last refresh FAILURE and when it happened, for the cooldown.
+    ///
+    /// The error is stored and re-thrown VERBATIM rather than replaced with a marker: the consumer
+    /// classifies transient vs permanent off the typed error, so a substitute would change how the
+    /// failure is retried and reported. Replaying the real one makes the suppressed calls
+    /// indistinguishable from the one that actually went out — which is the point.
+    private var lastRefreshFailure: (at: Date, error: any Error)?
+
+    /// The last token set we successfully refreshed, kept in memory.
+    ///
+    /// Exists for the case where `store.save` FAILS — a read-only `~/.codex`, a full disk. The
+    /// refreshed token is perfectly good and the call proceeds, but disk still holds the expired
+    /// one, so without this every subsequent call re-reads the stale copy and refreshes AGAIN:
+    /// one OAuth round trip per LLM call, forever, visible only in a log line. Disk stays
+    /// authoritative whenever it holds a usable token; this is consulted only when it does not.
+    private var lastRefreshed: CodexAuthTokens?
+
+    /// How long a failed refresh suppresses the next attempt. Injectable for tests only.
+    private let failureCooldown: TimeInterval
+
     public init(
         store: CodexAuthStore = CodexAuthStore(),
         clientID: String = CodexAuthCoordinator.defaultClientID,
         tokenURL: String = CodexAuthCoordinator.defaultTokenURL,
+        failureCooldown: TimeInterval = CodexAuthCoordinator.failureCooldown,
         transport: @escaping Transport = { try await URLSession.shared.data(for: $0) }
     ) {
         self.store = store
         self.clientID = clientID
         self.tokenURL = tokenURL
+        self.failureCooldown = failureCooldown
         self.transport = transport
     }
 
@@ -243,21 +305,66 @@ public actor CodexAuthCoordinator {
     /// - Throws: `LLMProviderError.invalidRequest` when no credential exists (the user has not run
     ///   `codex login`), or the refresh error when refreshing fails.
     public func validTokens(now: Date = Date()) async throws -> CodexAuthTokens {
-        guard let current = store.load() else {
+        guard var current = store.load() else {
             throw LLMProviderError.invalidRequest(
                 detail: "No ChatGPT credential found at \(store.url.path). Run `codex login` to sign in.")
         }
-        guard current.needsRefresh(within: Self.refreshWindow, now: now) else { return current }
+        // Checked BEFORE the cooldown, and that order is load-bearing: it is the whole recovery
+        // path. A user who runs `codex login` mid-cooldown puts a good token on disk, which is
+        // re-read here on the very next call and returned without consulting — or being blocked
+        // by — the stored failure. Nothing pins a user in a failed state.
+        guard current.needsRefresh(within: Self.refreshWindow, now: now) else {
+            lastRefreshFailure = nil
+            return current
+        }
 
+        // Disk is stale. If the last refresh we performed is still good, it never reached disk —
+        // serve it rather than buying the same token again on every call.
+        if let cached = lastRefreshed, !cached.needsRefresh(within: Self.refreshWindow, now: now) {
+            lastRefreshFailure = nil
+            return cached
+        }
+        // Both are stale, so refresh from whichever is NEWER: a refresh token the server rotated to
+        // us but that never reached disk must not be replaced by the one it superseded.
+        if let cached = lastRefreshed,
+           (cached.lastRefresh ?? .distantPast) > (current.lastRefresh ?? .distantPast) {
+            current = cached
+        }
+
+        // Joining a live refresh is always preferable to replaying a stale failure, so this comes
+        // before the cooldown: the in-flight attempt is newer information than the stored error.
         if let inFlight { return try await inFlight.value }
-        let task = Task { try await self.performRefresh(current) }
+
+        if let failure = lastRefreshFailure {
+            let age = now.timeIntervalSince(failure.at)
+            // `age < 0` is a backwards clock jump. Treated as cooldown EXPIRED, because the
+            // alternative is suppressing refreshes until the clock catches up — which for a
+            // year-sized jump is a year.
+            if age >= 0, age < failureCooldown { throw failure.error }
+        }
+
+        let task = Task { try await self.performRefresh(current, now: now) }
         inFlight = task
         defer { inFlight = nil }
-        return try await task.value
+        do {
+            let refreshed = try await task.value
+            lastRefreshFailure = nil
+            lastRefreshed = refreshed
+            return refreshed
+        } catch {
+            // Only the INITIATOR records. Joiners returned above, so a burst of five roles sharing
+            // one refresh produces one failure record — which is the truth: one attempt was made.
+            lastRefreshFailure = (at: now, error: error)
+            throw error
+        }
     }
 
     /// Exchanges the refresh token for a fresh access token and writes the result back to disk.
-    private func performRefresh(_ current: CodexAuthTokens) async throws -> CodexAuthTokens {
+    ///
+    /// `now` comes from the caller rather than being read here so the stamp written to
+    /// `last_refresh` — which is the undated token's only clock — agrees with the instant the
+    /// decision to refresh was made, and so a test can control both.
+    private func performRefresh(_ current: CodexAuthTokens, now: Date = Date()) async throws -> CodexAuthTokens {
         // Validated here rather than force-unwrapped at the constant: this package force-unwraps
         // nowhere, and a typo should surface as a typed error naming the bad value, not a crash.
         guard let endpoint = URL(string: tokenURL) else {
@@ -300,7 +407,7 @@ public actor CodexAuthCoordinator {
             idToken: (object["id_token"] as? String) ?? current.idToken,
             refreshToken: (object["refresh_token"] as? String) ?? current.refreshToken,
             accountId: current.accountId,
-            lastRefresh: Date()
+            lastRefresh: now
         )
         if let fresh = CodexJWT.accountId(access) { refreshed.accountId = fresh }
 
@@ -312,4 +419,48 @@ public actor CodexAuthCoordinator {
         }
         return refreshed
     }
+}
+
+// MARK: - Process-wide coordinators
+
+extension CodexAuthCoordinator {
+    /// The ONE coordinator for a given credential file, shared process-wide.
+    ///
+    /// Single-flighting is the whole point of this actor, and it only works if every caller that
+    /// reads the same `auth.json` holds the same instance: Agent Smith builds one provider PER ROLE,
+    /// so five per-provider coordinators would notice expiry in the same instant, fire five
+    /// refreshes, and race each other writing the file — the loser persisting a refresh token the
+    /// server has already rotated away, which signs the user out. Vending per path rather than one
+    /// global instance keeps the injectable store injectable.
+    ///
+    /// Keyed on the LEXICALLY standardized path, deliberately not `resolvingSymlinksInPath()`:
+    /// that resolves nothing for a component that does not exist yet, so the key for
+    /// `~/.codex/auth.json` would CHANGE the moment `codex login` created the file — minting a
+    /// second coordinator mid-process and reopening the exact race this closes.
+    ///
+    /// Process-wide, not machine-wide: the `codex` CLI itself and any second instance of the host
+    /// app are still separate writers. `CodexAuthStore.save` writes atomically, so the worst case
+    /// there is a lost update rather than a corrupt file.
+    public static func shared(forStoreAt url: URL) -> CodexAuthCoordinator {
+        let key = url.standardizedFileURL
+        return coordinators.withLock { registry in
+            if let existing = registry[key] { return existing }
+            let made = CodexAuthCoordinator(store: CodexAuthStore(url: key))
+            registry[key] = made
+            return made
+        }
+    }
+
+    /// The shared coordinator for wherever the `codex` CLI keeps its credentials right now.
+    ///
+    /// Computed, never a `static let`: `CodexAuthStore.defaultURL` reads `CODEX_HOME` on every
+    /// access, and a cached instance would keep serving a file the environment has moved away from.
+    public static var sharedForDefaultStore: CodexAuthCoordinator {
+        shared(forStoreAt: CodexAuthStore.defaultURL)
+    }
+
+    /// Never evicted — the live set is one entry per credential path, which in a real process is
+    /// exactly one.
+    private static let coordinators =
+        OSAllocatedUnfairLock<[URL: CodexAuthCoordinator]>(initialState: [:])
 }
