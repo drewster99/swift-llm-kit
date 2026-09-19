@@ -92,6 +92,23 @@ public enum ReasoningControl: String, Sendable, Equatable, Hashable, Codable, Ca
         }
     }
 
+    /// The raw body fields that put a reasoning-effort LEVEL on the wire for the given dialect.
+    ///
+    /// The mechanism is one — depth only, via a named level — but it is spelled two ways: top-level
+    /// `reasoning_effort` on chat/completions, `reasoning.effort` on the Responses endpoint the
+    /// ChatGPT-subscription provider speaks. A probe that forces the chat/completions key at that
+    /// endpoint earns `400 {"detail":"Unsupported parameter: reasoning_effort"}` for every level
+    /// and records a ladder the model accepts as entirely rejected. ONE place knows the spelling;
+    /// the ladder probe, the mechanism probe and the disable payload below all read it.
+    public static func reasoningEffortOverrides(level: String, for apiType: ProviderAPIType) -> [String: AnyCodable] {
+        switch apiType {
+        case .codexChatGPT:
+            return ["reasoning": .dictionary(["effort": .string(level)])]
+        default:
+            return ["reasoning_effort": .string(level)]
+        }
+    }
+
     /// The raw body fields that turn reasoning OFF for this mechanism, or nil when there is nothing
     /// to turn off.
     ///
@@ -99,12 +116,15 @@ public enum ReasoningControl: String, Sendable, Equatable, Hashable, Codable, Ca
     /// which Moonshot and DeepSeek refuse while thinking is on — must send THIS rather than assume a
     /// shape. Assuming `thinking: {type: disabled}` everywhere is what made an OpenAI endpoint
     /// answer "Unrecognized request argument supplied: thinking" and lose the finding entirely.
-    public var reasoningDisableOverrides: [String: AnyCodable]? {
+    ///
+    /// Takes the dialect because the effort-only mechanism is spelled per endpoint — see
+    /// ``reasoningEffortOverrides(level:for:)``.
+    public func reasoningDisableOverrides(for apiType: ProviderAPIType) -> [String: AnyCodable]? {
         switch self {
         case .thinkingBlock, .anthropicThinking, .anthropicAdaptiveThinking:
             return ["thinking": .dictionary(["type": .string("disabled")])]
         case .reasoningEffortOnly:
-            return ["reasoning_effort": .string("none")]
+            return Self.reasoningEffortOverrides(level: "none", for: apiType)
         case .enableThinkingFlag:
             return ["enable_thinking": .bool(false)]
         case .geminiThinkingConfig:

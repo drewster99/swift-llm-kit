@@ -387,6 +387,82 @@ struct CodexSerializerParityTests {
         #expect(prepared.baseBody["model"] as? String == "gpt-5.5")
     }
 
+    // MARK: Forced probes speak the dialect
+
+    @Test("A forced reasoning-effort level is spelled per dialect, and the disable payload follows it")
+    func reasoningEffortDialect() {
+        #expect(ReasoningControl.reasoningEffortOverrides(level: "high", for: .openAICompatible)
+                == ["reasoning_effort": .string("high")])
+        #expect(ReasoningControl.reasoningEffortOverrides(level: "high", for: .codexChatGPT)
+                == ["reasoning": .dictionary(["effort": .string("high")])])
+        #expect(ReasoningControl.reasoningEffortOnly.reasoningDisableOverrides(for: .codexChatGPT)
+                == ["reasoning": .dictionary(["effort": .string("none")])])
+        #expect(ReasoningControl.reasoningEffortOnly.reasoningDisableOverrides(for: .openAICompatible)
+                == ["reasoning_effort": .string("none")])
+        // The other mechanisms are not dialect-sensitive and are unchanged.
+        #expect(ReasoningControl.thinkingBlock.reasoningDisableOverrides(for: .codexChatGPT)
+                == ["thinking": .dictionary(["type": .string("disabled")])])
+        #expect(ReasoningControl.unsupported.reasoningDisableOverrides(for: .codexChatGPT) == nil)
+    }
+
+    /// Answers a forced body the way the Codex endpoint does (verified live 2026-09-19): `thinking`
+    /// and top-level `reasoning_effort` are "Unsupported parameter"; `reasoning.effort` is taken and
+    /// the reply bills reasoning tokens.
+    private struct CodexLikeEndpoint: LLMProvider, @unchecked Sendable {
+        let forced: [String: AnyCodable]
+        let seen: Recorder
+        final class Recorder: @unchecked Sendable { var bodies: [[String: AnyCodable]] = [] }
+        func send(messages: [LLMMessage], tools: [LLMToolDefinition],
+                  overrides: LLMCallOverrides) async throws -> LLMResponse {
+            seen.bodies.append(forced)
+            for key in forced.keys where key != "reasoning" && key != "tools" {
+                throw LLMProviderError.httpError(statusCode: 400, body: #"{"detail":"Unsupported parameter: \#(key)"}"#)
+            }
+            if case .array(let tools)? = forced["tools"], case .dictionary(let tool)? = tools.first, tool["name"] == nil {
+                throw LLMProviderError.httpError(statusCode: 400, body: "Missing required parameter: 'tools[0].name'.")
+            }
+            let reasons = forced["reasoning"] != nil
+            return LLMResponse(text: "ok", usage: TokenUsage(inputTokens: 5, outputTokens: 2,
+                                                             reasoningTokens: reasons ? 64 : 0))
+        }
+    }
+
+    @Test("Mechanism discovery at Codex finds reasoning.effort instead of writing the model off")
+    func mechanismDiscoveryAtCodex() async {
+        let rec = CodexLikeEndpoint.Recorder()
+        let found = await ModelProber.probeReasoningMechanism(
+            apiType: .codexChatGPT, makeProviderForcing: { CodexLikeEndpoint(forced: $0, seen: rec) })
+        // Before the dialect fix the effort candidate forced `reasoning_effort`, was refused like
+        // the others, and the sweep recorded "refused every reasoning mechanism tried".
+        #expect(found.control == .reasoningEffortOnly)
+        #expect(found.mechanismWasEstablished)
+        #expect(found.on.finding.value == true)
+        #expect(found.off.finding.value == true)
+        #expect(rec.bodies.contains { $0["reasoning"] == .dictionary(["effort": .string("low")]) })
+        #expect(rec.bodies.contains { $0["reasoning"] == .dictionary(["effort": .string("none")]) })
+        #expect(!rec.bodies.contains { $0["reasoning_effort"] != nil }, "the chat/completions key never reaches this endpoint")
+    }
+
+    @Test("The strict-tools probe forces the flat Responses tool shape at Codex")
+    func strictProbeShapeAtCodex() async throws {
+        let rec = CodexLikeEndpoint.Recorder()
+        let finding = await ModelProber.probeStrictToolDefinitions(
+            apiType: .codexChatGPT, makeProviderForcing: { CodexLikeEndpoint(forced: $0, seen: rec) })
+        #expect(finding?.value == true)
+        guard case .array(let tools)? = try #require(rec.bodies.first)["tools"],
+              case .dictionary(let tool)? = tools.first else { Issue.record("no tools forced"); return }
+        #expect(tool["name"] == .string(CapabilityProbe.probeToolName))
+        #expect(tool["strict"] == .bool(true))
+        #expect(tool["function"] == nil, "chat/completions nests the definition; Responses does not")
+        // And the chat/completions shape is untouched for everyone else.
+        let chatRec = CodexLikeEndpoint.Recorder()
+        _ = await ModelProber.probeStrictToolDefinitions(
+            apiType: .openAICompatible, makeProviderForcing: { CodexLikeEndpoint(forced: $0, seen: chatRec) })
+        guard case .array(let chatTools)? = try #require(chatRec.bodies.first)["tools"],
+              case .dictionary(let chatTool)? = chatTools.first else { Issue.record("no tools forced"); return }
+        #expect(chatTool["function"] != nil)
+    }
+
     @Test("Continuation with only Codex items is not empty, and round-trips through Codable")
     func continuationCodable() throws {
         let item = CodexReasoningItem(id: "rs_9", encryptedContent: "X", summary: ["s"])

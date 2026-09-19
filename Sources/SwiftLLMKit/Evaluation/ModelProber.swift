@@ -1828,12 +1828,15 @@ public enum ModelProber {
     }
 
     /// OpenAI's reasoning models have no `thinking` block at all — they are switched with
-    /// `reasoning_effort`, and `"none"` is how newer ones are turned off.
-    private static var reasoningEffortMechanism: ReasoningMechanism {
+    /// `reasoning_effort`, and `"none"` is how newer ones are turned off. Spelled per dialect
+    /// (`reasoning.effort` on the Responses endpoint) by ``ReasoningControl/reasoningEffortOverrides(level:for:)``,
+    /// so this candidate is never refused for its key at an endpoint that accepts the mechanism.
+    private static func reasoningEffortMechanism(for apiType: ProviderAPIType) -> ReasoningMechanism {
         .init(control: .reasoningEffortOnly,
-              enable: ["reasoning_effort": .string("low")],
-              disable: ["reasoning_effort": .string("none")],
-              label: "reasoning_effort", rejectionKeywords: ["reasoning_effort", "reasoning", "effort"])
+              enable: ReasoningControl.reasoningEffortOverrides(level: "low", for: apiType),
+              disable: ReasoningControl.reasoningEffortOverrides(level: "none", for: apiType),
+              label: apiType == .codexChatGPT ? "reasoning.effort" : "reasoning_effort",
+              rejectionKeywords: ["reasoning_effort", "reasoning", "effort"])
     }
 
     private static var enableThinkingFlagMechanism: ReasoningMechanism {
@@ -1870,8 +1873,8 @@ public enum ModelProber {
         // by name, so whichever is asked first fails cleanly and the next candidate answers.
         case .anthropic:    return [anthropicThinkingMechanism, anthropicAdaptiveMechanism]
         case .gemini:       return [geminiThinkingMechanism]
-        case .alibabaCloud: return [enableThinkingFlagMechanism, thinkingBlockMechanism, reasoningEffortMechanism]
-        default:            return [thinkingBlockMechanism, reasoningEffortMechanism, enableThinkingFlagMechanism]
+        case .alibabaCloud: return [enableThinkingFlagMechanism, thinkingBlockMechanism, reasoningEffortMechanism(for: apiType)]
+        default:            return [thinkingBlockMechanism, reasoningEffortMechanism(for: apiType), enableThinkingFlagMechanism]
         }
     }
 
@@ -2210,20 +2213,23 @@ public enum ModelProber {
         case .anthropic, .gemini: return nil
         default: break
         }
-        let strictTool: AnyCodable = .dictionary([
-            "type": .string("function"),
-            "function": .dictionary([
-                "name": .string(CapabilityProbe.probeToolName),
-                "description": .string("Returns the test identifier string."),
-                "strict": .bool(true),
-                "parameters": .dictionary([
-                    "type": .string("object"),
-                    "properties": .dictionary([:]),
-                    "required": .array([]),
-                    "additionalProperties": .bool(false)
-                ])
+        let definition: [String: AnyCodable] = [
+            "name": .string(CapabilityProbe.probeToolName),
+            "description": .string("Returns the test identifier string."),
+            "strict": .bool(true),
+            "parameters": .dictionary([
+                "type": .string("object"),
+                "properties": .dictionary([:]),
+                "required": .array([]),
+                "additionalProperties": .bool(false)
             ])
-        ])
+        ]
+        // The Responses endpoint takes the definition FLAT beside `type`; nesting it under
+        // `function` the chat/completions way is refused for the envelope ("Missing required
+        // parameter: 'tools[0].name'"), which says nothing about `strict`.
+        let strictTool: AnyCodable = apiType == .codexChatGPT
+            ? .dictionary(definition.merging(["type": .string("function")]) { $1 })
+            : .dictionary(["type": .string("function"), "function": .dictionary(definition)])
         return await probeForcedField(
             ["tools": .array([strictTool])],
             description: "strict tool definition",
