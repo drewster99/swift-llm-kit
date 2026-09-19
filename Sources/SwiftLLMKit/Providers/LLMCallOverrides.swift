@@ -28,13 +28,16 @@ import Foundation
 /// - `frequencyPenalty` / `presencePenalty`: honored by OpenAI-compatible
 ///   and Gemini; ignored by Anthropic, Ollama and Codex (no native field).
 ///
-/// **Codex (`.codexChatGPT`) reads exactly two of these fields** — `toolChoice`
-/// and `reasoningEffort` — and drops every other one. That is correct, not an
-/// oversight: the endpoint answers `400 {"detail":"Unsupported parameter:
-/// max_output_tokens"}` (verified live 2026-09-17), and the reasoning models it
-/// serves reject sampling knobs such as `temperature`, so sending any of them
-/// would fail the call rather than refine it. `CodexResponsesProvider` takes no
-/// cap parameter at all, so there is no plumbing to "finish".
+/// **Codex (`.codexChatGPT`) honors `toolChoice`, `reasoningEffort`, `reasoningEnabled`,
+/// `responseFormat`, `temperature` and `topP`, and drops `maxOutputTokens`, `stopSequences`
+/// and the penalties.** The endpoint answers `400 {"detail":"Unsupported parameter: …"}` for
+/// `max_output_tokens`, `temperature` and `top_p` (all verified live 2026-09-19), and the
+/// Responses shape has no stop or penalty fields at all. Temperature is nonetheless emitted when
+/// asked for — gated on `mustNeverSendTemperatureParam` exactly as the OpenAI-compatible provider
+/// does — so that a probe measures the endpoint's real answer and derives that flag from it,
+/// instead of a silently dropped parameter recording as "accepted". The cap is the one knob with
+/// no plumbing at all: `CodexResponsesProvider` takes no cap parameter, so there is nothing to
+/// "finish".
 public struct LLMCallOverrides: Sendable, Equatable {
     public var toolChoice: LLMToolChoice?
     /// Per-call GENERAL effort (Anthropic `output_config.effort`).

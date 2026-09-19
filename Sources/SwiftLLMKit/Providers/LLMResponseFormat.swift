@@ -48,9 +48,39 @@ public enum LLMResponseFormat: Sendable, Equatable {
     /// Ready to place at `response_format` in a `[String: Any]` request body.
     public var openAIWireValue: [String: Any] { wireValue.mapValues(\.rawValue) }
 
+    /// The Responses API spelling (the Codex endpoint): `text.format`, with the schema's name,
+    /// strictness and body FLAT on the format object rather than nested under `json_schema`.
+    /// Derived from the same two cases, so the modes cannot diverge between the two dialects.
+    public var responsesWireValue: [String: AnyCodable] {
+        switch self {
+        case .jsonObject:
+            return ["type": .string("json_object")]
+        case .jsonSchema(let name, let schema, let strict):
+            return [
+                "type": .string("json_schema"),
+                "name": .string(name),
+                "strict": .bool(strict),
+                "schema": .dictionary(schema)
+            ]
+        }
+    }
+
     /// Ready to force through `extraJSONOverrides`, for probes that must bypass the capability
     /// gate keyed on the very capability they are establishing.
     public var forcedWireValue: AnyCodable { .dictionary(wireValue) }
+
+    /// The top-level override a probe must force to send this format through THIS provider
+    /// family — `response_format` on chat/completions, `text.format` on the Responses endpoint.
+    /// A probe that forced the chat/completions key at Codex would measure a rejected unknown
+    /// parameter, not structured output.
+    public func forcedOverrides(for apiType: ProviderAPIType) -> [String: AnyCodable] {
+        switch apiType {
+        case .codexChatGPT:
+            return ["text": .dictionary(["format": .dictionary(responsesWireValue)])]
+        default:
+            return ["response_format": forcedWireValue]
+        }
+    }
 
     /// Whether this provider family has a `response_format` field at all.
     ///

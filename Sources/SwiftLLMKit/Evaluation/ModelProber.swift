@@ -1174,7 +1174,7 @@ public enum ModelProber {
             // capability this is establishing, so on an unknown it would send no `response_format`
             // at all — and then grade a model that merely followed the prompt's wording as
             // supporting it. Every probe in this file forces for the same reason.
-            let response = try await makeProviderForcing(["response_format": mode.forcedWireValue])
+            let response = try await makeProviderForcing(mode.forcedOverrides(for: apiType))
                 .send(messages: [.user(
                           "Answer in one short English sentence: what colour is the sky? "
                           + "(This request is sent in json mode; answer the question regardless.)")],

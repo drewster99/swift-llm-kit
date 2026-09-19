@@ -28,6 +28,17 @@ struct CodexResponsesProvider: LLMProvider {
     private let verboseLogging: Bool
     private let session: URLSession
     private let clientVersion: String
+    /// Per-model request-forming knobs, resolved from the catalog at construction — the same path
+    /// the OpenAI-compatible provider reads them by, never re-derived from `apiType` in here.
+    private let behaviorFlags: BehaviorFlags
+    /// The model's reasoning-effort support. Read fail-OPEN here (sent unless KNOWN unsupported),
+    /// unlike the chat/completions provider: every model this endpoint serves is a reasoning model
+    /// reached through the Responses API, so an unrecorded ladder is far more likely a model the
+    /// listing has not been seeded for than a model that rejects the field.
+    private let reasoningEffortSupport: EffortSupport?
+    /// Capabilities gating the knobs whose wrong emission is an HTTP 400 (structured output,
+    /// tool_choice options).
+    private let modelCapabilities: ModelCapabilities
 
     /// The Codex backend rejects `/models` without a `client_version`, and may police it on
     /// `/responses` too. Hand-maintained and undocumented; `1.0.0` is accepted as of 2026-09-16
@@ -44,7 +55,10 @@ struct CodexResponsesProvider: LLMProvider {
         auth: CodexAuthCoordinator = .sharedForDefaultStore,
         verboseLogging: Bool = false,
         clientVersion: String = CodexResponsesProvider.defaultClientVersion,
-        session: URLSession = llmURLSession
+        session: URLSession = llmURLSession,
+        behaviorFlags: BehaviorFlags = BehaviorFlags(),
+        reasoningEffortSupport: EffortSupport? = nil,
+        modelCapabilities: ModelCapabilities = ModelCapabilities()
     ) {
         self.configuration = configuration
         self.provider = provider
@@ -52,6 +66,9 @@ struct CodexResponsesProvider: LLMProvider {
         self.verboseLogging = verboseLogging
         self.clientVersion = clientVersion
         self.session = session
+        self.behaviorFlags = behaviorFlags
+        self.reasoningEffortSupport = reasoningEffortSupport
+        self.modelCapabilities = modelCapabilities
     }
 
     // MARK: - Sending
@@ -83,14 +100,21 @@ struct CodexResponsesProvider: LLMProvider {
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
 
         let body = Self.buildRequestBody(
-            model: configuration.model,
+            configuration: configuration,
             messages: messages,
             tools: tools,
-            overrides: overrides)
+            overrides: overrides,
+            behaviorFlags: behaviorFlags,
+            reasoningEffortSupport: reasoningEffortSupport,
+            modelCapabilities: modelCapabilities)
+        // A non-finite Double (a caller-supplied temperature) reaching JSONSerialization raises an
+        // NSException that `try` cannot convert — pre-flight it into a normal throw.
         guard JSONSerialization.isValidJSONObject(body) else {
             throw LLMProviderError.invalidRequest(detail: "Codex request body is not valid JSON")
         }
-        let rawBody = try JSONSerialization.data(withJSONObject: body)
+        // .sortedKeys keeps the wire bytes stable across turns, the precondition for the
+        // endpoint's prefix cache to hit at all.
+        let rawBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         request.httpBody = rawBody
 
         let token = LLMRequestLogger.logRequest(
@@ -131,28 +155,90 @@ struct CodexResponsesProvider: LLMProvider {
 
     // MARK: - Request translation
 
+    /// Convenience for tests that only care about the message translation and one or two knobs:
+    /// no catalog data, so every gate sits at its "nothing known" default.
     static func buildRequestBody(
         model: String,
         messages: [LLMMessage],
         tools: [LLMToolDefinition],
         overrides: LLMCallOverrides
     ) -> [String: Any] {
+        buildRequestBody(
+            configuration: ModelConfiguration(
+                name: "codex:\(model)", providerID: BuiltInProviders.ID.codexChatGPT, modelID: model,
+                temperature: nil),
+            messages: messages, tools: tools, overrides: overrides)
+    }
+
+    /// The complete request body. `static` and pure so it can be asserted against without a
+    /// network or a credential.
+    ///
+    /// What is emitted, and why each gate is the way it is:
+    /// - `temperature` / `top_p` — sent when asked for, unless `mustNeverSendTemperatureParam`.
+    ///   The endpoint rejects both (verified live 2026-09-19); they are sent anyway so a probe
+    ///   measures that rejection and the flag is DERIVED from it, exactly as for every
+    ///   OpenAI-compatible model. Dropping them silently recorded "accepts temperature" for a
+    ///   model that 400s on it.
+    /// - `reasoning.effort` — the per-call override, else an explicit reasoning-off as `none`,
+    ///   else the configuration's level; withheld only when the ladder is KNOWN unsupported.
+    /// - `text.format` — structured output, fails CLOSED on the mode's capability like
+    ///   chat/completions (`response_format`), since an unsupported format is a 400.
+    /// - `tool_choice` — only when the caller set one, and only when the option is not KNOWN
+    ///   rejected (`permitsToolChoice`, fail-open), the same rule as chat/completions.
+    /// - `parallel_tool_calls: false` — only under `disableParallelToolCalls`; the endpoint's own
+    ///   default is `true`, so nothing is sent otherwise.
+    /// - `include: reasoning.encrypted_content` — always, so a stateless conversation can carry
+    ///   its reasoning forward (see ``CodexReasoningItem``).
+    /// - `extraJSONOverrides` — merged LAST and unconditionally, the probe-only escape hatch past
+    ///   every gate above. Before this the Codex builder ignored them, so every forced probe
+    ///   (effort ladders, structured output, tool_choice options) sent a bare request and graded
+    ///   the ordinary success as support.
+    /// - NO output-token cap, ever — see `neverSendsAnOutputCap`.
+    static func buildRequestBody(
+        configuration: ModelConfiguration,
+        messages: [LLMMessage],
+        tools: [LLMToolDefinition],
+        overrides: LLMCallOverrides,
+        behaviorFlags: BehaviorFlags = BehaviorFlags(),
+        reasoningEffortSupport: EffortSupport? = nil,
+        modelCapabilities: ModelCapabilities = ModelCapabilities()
+    ) -> [String: Any] {
         var body: [String: Any] = [
-            "model": model,
-            "input": buildInput(messages),
+            "model": configuration.model,
+            "input": buildInput(messages, behaviorFlags: behaviorFlags),
             // Stateless: the endpoint keeps nothing between turns, and we send the whole history.
             "store": false,
-            "stream": true
+            "stream": true,
+            "include": ["reasoning.encrypted_content"]
         ]
-        if let instructions = buildInstructions(messages) { body["instructions"] = instructions }
+        if let instructions = buildInstructions(messages, behaviorFlags: behaviorFlags) {
+            body["instructions"] = instructions
+        }
+        if !behaviorFlags.mustNeverSendTemperatureParam,
+           let temperature = overrides.temperature ?? configuration.temperature {
+            body["temperature"] = temperature
+        }
+        if let topP = overrides.topP {
+            body["top_p"] = topP
+        }
         if !tools.isEmpty {
             body["tools"] = encodeTools(tools)
-            body["tool_choice"] = encodeToolChoice(overrides.toolChoice)
+            if let choice = overrides.toolChoice, modelCapabilities.permitsToolChoice(choice) {
+                body["tool_choice"] = encodeToolChoice(choice)
+            }
+            if behaviorFlags.disableParallelToolCalls {
+                body["parallel_tool_calls"] = false
+            }
         }
-        if let effort = overrides.reasoningEffort {
+        if let effort = effectiveReasoningEffort(
+            configuration: configuration, overrides: overrides, support: reasoningEffortSupport) {
             // `summary: auto` is what makes the model emit reasoning_summary deltas; without it a
             // reasoning turn streams nothing until the answer lands.
             body["reasoning"] = ["effort": effort, "summary": "auto"]
+        }
+        if let format = overrides.responseFormat,
+           modelCapabilities.state(of: format.requiredCapability) == true {
+            body["text"] = ["format": format.responsesWireValue.mapValues(\.rawValue)]
         }
         // NO output-token cap is sent, and this builder deliberately takes NO cap argument —
         // there is nothing half-wired here for a later reader to "finish".
@@ -168,22 +254,63 @@ struct CodexResponsesProvider: LLMProvider {
         // worked by accident: it read the model's catalog ceiling, no Codex model publishes one,
         // so the field was never emitted. Making it honor the configuration — the obviously
         // correct change — broke every request. `neverSendsAnOutputCap` is the regression guard.
+        if let extra = configuration.extraJSONOverrides {
+            mergeJSONOverrides(&body, with: extra)
+        }
         return body
     }
 
-    /// System and developer messages, folded into the one `instructions` string the Responses shape
-    /// provides. Order is preserved; there is no separate developer channel here.
+    /// The `reasoning.effort` to send, if any. The per-call override outranks an explicit
+    /// reasoning-off, which outranks the configured depth — the same layering the
+    /// OpenAI-compatible provider applies to `reasoning_effort`. An explicit off has exactly one
+    /// wire form on an effort-only model, `none`, and is stated only when the ladder is not
+    /// KNOWN to reject it.
+    static func effectiveReasoningEffort(
+        configuration: ModelConfiguration,
+        overrides: LLMCallOverrides,
+        support: EffortSupport?
+    ) -> String? {
+        guard support?.isSupported != false else { return nil }
+        if let override = overrides.reasoningEffort, !override.isEmpty { return override }
+        if (overrides.reasoningEnabled ?? configuration.reasoningEnabled) == false,
+           support?.rejects("none") != true {
+            return "none"
+        }
+        if let configured = configuration.reasoningEffort, !configured.isEmpty { return configured }
+        return nil
+    }
+
+    /// System messages — and developer messages, unless the model is flagged as reading a
+    /// `developer` role — folded into the one `instructions` string the Responses shape provides.
+    /// Order is preserved.
+    ///
+    /// Folding is not a shortcut: the endpoint rejects a `{role: system}` input item outright
+    /// (`400 {"detail":"System messages are not allowed"}`, verified live 2026-09-19), so
+    /// `instructions` is the ONLY place a system turn can go — including a trailing steering
+    /// turn, which chat/completions would keep at the tail under `supportsTrailingSystemMessage`.
     ///
     /// Note that NO identity prefix is prepended. The "You are Codex, based on GPT-5…" string is
     /// widely reported as a hard OAuth gate; a request without it returns 200 (verified 2026-09-16),
     /// and prepending it would put a second, conflicting identity in front of every role prompt.
-    static func buildInstructions(_ messages: [LLMMessage]) -> String? {
+    static func buildInstructions(
+        _ messages: [LLMMessage], behaviorFlags: BehaviorFlags = BehaviorFlags()
+    ) -> String? {
         let parts: [String] = messages.compactMap { message in
-            guard message.role == .system || message.role == .developer else { return nil }
+            guard foldsIntoInstructions(message, behaviorFlags: behaviorFlags) else { return nil }
             guard case .text(let text) = message.content else { return nil }
             return text
         }
         return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
+    }
+
+    /// ONE predicate for "this message travels as `instructions`", shared by the instructions
+    /// builder and the input builder so a message can never be both folded AND emitted, or neither.
+    private static func foldsIntoInstructions(_ message: LLMMessage, behaviorFlags: BehaviorFlags) -> Bool {
+        switch message.role {
+        case .system: return true
+        case .developer: return !behaviorFlags.supportsDeveloperRole
+        case .user, .assistant, .tool: return false
+        }
     }
 
     /// Conversation history as Responses `input` items.
@@ -191,25 +318,37 @@ struct CodexResponsesProvider: LLMProvider {
     /// Tool traffic is the part that differs most from chat/completions: an assistant tool call is a
     /// TOP-LEVEL `function_call` item rather than a field on a message, and its result is a
     /// top-level `function_call_output` correlated by `call_id` rather than a `role: tool` message.
-    static func buildInput(_ messages: [LLMMessage]) -> [[String: Any]] {
+    ///
+    /// An assistant turn is preceded by the `reasoning` items the endpoint emitted for it, replayed
+    /// verbatim from `message.continuation` — the Responses analogue of Anthropic's signed thinking
+    /// blocks. A user turn carries its images and documents as `input_image` / `input_file` parts
+    /// beside the text; before 2026-09-19 they were dropped on the floor, and the model — quite
+    /// correctly — answered "I don't see an image attached".
+    static func buildInput(
+        _ messages: [LLMMessage], behaviorFlags: BehaviorFlags = BehaviorFlags()
+    ) -> [[String: Any]] {
         var items: [[String: Any]] = []
         for message in messages {
-            switch (message.role, message.content) {
-            case (.system, _), (.developer, _):
-                continue    // folded into `instructions`
+            if foldsIntoInstructions(message, behaviorFlags: behaviorFlags) { continue }
+            if message.role == .assistant,
+               let reasoning = message.continuation?.codexReasoningItems, !reasoning.isEmpty {
+                items.append(contentsOf: reasoning.map(reasoningItem))
+            }
+            switch message.content {
+            case .text(let text):
+                items.append(messageItem(role: message.role, text: text,
+                                         images: message.images ?? [],
+                                         documents: message.documents ?? []))
 
-            case (_, .text(let text)):
-                items.append(textItem(role: message.role, text: text))
-
-            case (_, .toolCalls(let calls)):
+            case .toolCalls(let calls):
                 items.append(contentsOf: calls.map(functionCallItem))
 
-            case (_, .mixed(let text, let calls)):
+            case .mixed(let text, let calls):
                 // The assistant's prose precedes the calls it made, preserving turn order.
-                if !text.isEmpty { items.append(textItem(role: message.role, text: text)) }
+                if !text.isEmpty { items.append(messageItem(role: message.role, text: text)) }
                 items.append(contentsOf: calls.map(functionCallItem))
 
-            case (_, .toolResult(let callID, let content)):
+            case .toolResult(let callID, let content):
                 items.append([
                     "type": "function_call_output",
                     "call_id": callID,
@@ -220,14 +359,54 @@ struct CodexResponsesProvider: LLMProvider {
         return items
     }
 
-    private static func textItem(role: LLMMessage.Role, text: String) -> [String: Any] {
+    private static func messageItem(
+        role: LLMMessage.Role, text: String,
+        images: [LLMImageContent] = [], documents: [LLMDocumentContent] = []
+    ) -> [String: Any] {
         // The content-part type is role-dependent: assistant text is `output_text`, everything the
         // caller supplies is `input_text`. Sending the wrong one is a 400.
-        let partType = role == .assistant ? "output_text" : "input_text"
+        let isAssistant = role == .assistant
+        var parts: [[String: Any]] = images.map { image in
+            var part: [String: Any] = [
+                "type": "input_image",
+                "image_url": "data:\(image.mimeType);base64,\(image.data.base64EncodedString())"
+            ]
+            if let detail = image.detail { part["detail"] = detail.rawValue }
+            return part
+        }
+        for document in documents {
+            // `filename` is required beside `file_data` here as on chat/completions; synthesize
+            // one when the caller didn't supply it rather than 400.
+            parts.append([
+                "type": "input_file",
+                "filename": document.filename ?? "document.pdf",
+                "file_data": "data:\(document.mimeType);base64,\(document.data.base64EncodedString())"
+            ])
+        }
+        parts.append(["type": isAssistant ? "output_text" : "input_text", "text": text])
         return [
             "type": "message",
-            "role": role == .assistant ? "assistant" : "user",
-            "content": [["type": partType, "text": text]]
+            "role": wireRole(role),
+            "content": parts
+        ]
+    }
+
+    /// The Responses role string. `.developer` only reaches here when the flag says the model reads
+    /// it (otherwise it was folded); `.tool` never does (tool results are their own item type).
+    private static func wireRole(_ role: LLMMessage.Role) -> String {
+        switch role {
+        case .assistant: return "assistant"
+        case .developer: return "developer"
+        case .user, .system, .tool: return "user"
+        }
+    }
+
+    private static func reasoningItem(_ item: CodexReasoningItem) -> [String: Any] {
+        [
+            "type": "reasoning",
+            "id": item.id,
+            "summary": item.summary.map { ["type": "summary_text", "text": $0] as [String: Any] },
+            "encrypted_content": item.encryptedContent
         ]
     }
 
@@ -242,7 +421,9 @@ struct CodexResponsesProvider: LLMProvider {
     }
 
     /// Tools are flat here — `{type, name, description, parameters}` — not nested under a
-    /// `function` key the way chat/completions nests them.
+    /// `function` key the way chat/completions nests them. `strict` is a first-class field of a
+    /// Responses function tool (accepted live 2026-09-19), so it is not capability-gated the way
+    /// chat/completions endpoints of unknown strictness require.
     static func encodeTools(_ tools: [LLMToolDefinition]) -> [[String: Any]] {
         tools.map { tool in
             var encoded: [String: Any] = [
@@ -256,13 +437,10 @@ struct CodexResponsesProvider: LLMProvider {
         }
     }
 
-    static func encodeToolChoice(_ choice: LLMToolChoice?) -> Any {
-        switch choice {
-        case .none, .some(.auto): return "auto"
-        case .some(.required): return "required"
-        case .some(.textOnly): return "none"
-        case .some(.specific(let name)): return ["type": "function", "name": name]
-        }
+    /// The Responses `tool_choice` shape — ONE source, shared with the probe that forces the raw
+    /// field, so what is measured is what is shipped.
+    static func encodeToolChoice(_ choice: LLMToolChoice) -> Any {
+        choice.responsesWireValue.rawValue
     }
 
     // MARK: - Response parsing
@@ -279,6 +457,7 @@ struct CodexResponsesProvider: LLMProvider {
         var callByItem: [String: (id: String, name: String)] = [:]
         var callOrder: [String] = []
         var reasoning = ""
+        var reasoningItems: [CodexReasoningItem] = []
         var usage: TokenUsage?
         var finishReason: String?
         var failure: String?
@@ -328,8 +507,19 @@ struct CodexResponsesProvider: LLMProvider {
                 // the item handle: that id is what correlates the result, so preserving beats
                 // re-deriving — the same rule the model-override sheets follow.
                 guard let item = event["item"] as? [String: Any],
-                      item["type"] as? String == "function_call",
                       let itemID = Self.itemKey(event) else { continue }
+                if item["type"] as? String == "reasoning" {
+                    // The sealed chain of thought for this turn, carried forward as continuation
+                    // (see `CodexReasoningItem`). Only a non-empty payload is worth replaying.
+                    if let sealed = item["encrypted_content"] as? String, !sealed.isEmpty {
+                        let summary = (item["summary"] as? [[String: Any]] ?? [])
+                            .compactMap { $0["text"] as? String }
+                        reasoningItems.append(
+                            CodexReasoningItem(id: itemID, encryptedContent: sealed, summary: summary))
+                    }
+                    continue
+                }
+                guard item["type"] as? String == "function_call" else { continue }
                 if callByItem[itemID] == nil { callOrder.append(itemID) }
                 callByItem[itemID] = (
                     id: item["call_id"] as? String ?? callByItem[itemID]?.id ?? itemID,
@@ -425,6 +615,8 @@ struct CodexResponsesProvider: LLMProvider {
             toolCalls: toolCalls,
             reasoning: reasoning.isEmpty ? nil : reasoning,
             usage: usage,
+            continuation: reasoningItems.isEmpty
+                ? nil : ProviderContinuation(codexReasoningItems: reasoningItems),
             finishReason: finishReason)
     }
 
@@ -470,6 +662,7 @@ struct CodexResponsesProvider: LLMProvider {
             outputTokens: usage["output_tokens"] as? Int ?? 0,
             reasoningTokens: outputDetails?["reasoning_tokens"] as? Int ?? 0,
             cacheReadTokens: inputDetails?["cached_tokens"] as? Int ?? 0,
-            cacheWriteTokens: inputDetails?["cache_write_tokens"] as? Int ?? 0)
+            cacheWriteTokens: inputDetails?["cache_write_tokens"] as? Int ?? 0,
+            rawUsage: TokenUsage.serializeRawUsage(usage))
     }
 }

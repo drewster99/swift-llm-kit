@@ -728,6 +728,12 @@ public struct ModelFetchService: Sendable {
             // `visibility: "hide"` marks internal entries (gpt-reserve, codex-auto-review). Hiding
             // is presentation, not deletion — the record survives and un-hiding is one field.
             if let visibility = model.visibility { facts.hidden = (visibility == "hide") }
+            // An ENDPOINT fact, stated here the way `isFree` is: the Codex backend answers
+            // `400 {"detail":"Unsupported parameter: temperature"}` for every model it serves
+            // (verified live 2026-09-19). The provider emits temperature when asked unless this
+            // flag says not to — so without it, the first configuration carrying a temperature
+            // would 400 on every call until a probe derived the flag the slow way.
+            facts.behaviorFlags.mustNeverSendTemperatureParam = true
             facts.isFree = true
             facts.pricing = ModelPricing(
                 base: PricingTier(input: 0, output: 0, cacheRead: 0, cacheWrite: 0))

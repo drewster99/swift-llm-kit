@@ -77,6 +77,19 @@ public extension LLMToolChoice {
         }
     }
 
+    /// The Responses API wire value (the Codex endpoint): the same enum strings as chat/completions,
+    /// but a named function is flat — `{"type": "function", "name": …}` — not nested under a
+    /// `function` key. Sending the chat/completions nesting here is a 400.
+    var responsesWireValue: AnyCodable {
+        switch self {
+        case .auto: return .string("auto")
+        case .required: return .string("required")
+        case .textOnly: return .string("none")
+        case .specific(let name):
+            return .dictionary(["type": .string("function"), "name": .string(name)])
+        }
+    }
+
     /// Anthropic's wire value: always an object, and its "force some tool" is spelled `any`.
     var anthropicWireValue: AnyCodable {
         switch self {
@@ -99,6 +112,7 @@ public extension LLMToolChoice {
         switch apiType {
         case .anthropic: return anthropicWireValue
         case .gemini: return nil
+        case .codexChatGPT: return responsesWireValue
         default: return openAIWireValue
         }
     }

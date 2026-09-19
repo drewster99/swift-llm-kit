@@ -20,6 +20,11 @@ import Foundation
 ///   OpenAI's own o-series keep reasoning state server-side and don't need
 ///   client replay; DeepSeek-R1 needs `reasoning_content` replayed and that's
 ///   already plumbed via `LLMMessage.reasoning` (no continuation needed).
+/// - **Codex (ChatGPT subscription)** is stateless (`store: false`), so the
+///   Responses endpoint hands back each turn's reasoning as an opaque
+///   `encrypted_content` item. Replaying those items ahead of the assistant
+///   turn's own output is how the model keeps its chain of thought across a
+///   tool round-trip; without them every turn reasons from scratch.
 ///
 /// All fields are optional. Each provider parses only what it knows and
 /// ignores other providers' blobs — a hydra-style rotation that puts a
@@ -51,14 +56,21 @@ public struct ProviderContinuation: Sendable, Codable, Equatable {
     @available(*, deprecated, message: "Superseded by geminiResponseParts in 0.0.26. Position-keyed signatures misalign when the factory collapses a multi-part response into a single .text/.toolCalls/.mixed content. Reads from disk for legacy saved conversations still work; new code path captures and replays the full parts structure.")
     public let geminiThoughtSignatures: [String: String]?
 
+    /// Codex Responses `reasoning` output items in original order, replayed
+    /// verbatim ahead of the assistant turn they preceded. Non-Codex providers
+    /// ignore this field.
+    public let codexReasoningItems: [CodexReasoningItem]?
+
     public init(
         anthropicThinkingBlocks: [AnthropicThinkingBlock]? = nil,
         geminiResponseParts: [GeminiResponsePart]? = nil,
-        geminiThoughtSignatures: [String: String]? = nil
+        geminiThoughtSignatures: [String: String]? = nil,
+        codexReasoningItems: [CodexReasoningItem]? = nil
     ) {
         self.anthropicThinkingBlocks = anthropicThinkingBlocks
         self.geminiResponseParts = geminiResponseParts
         self.geminiThoughtSignatures = geminiThoughtSignatures
+        self.codexReasoningItems = codexReasoningItems
     }
 
     /// True if every field is nil — no continuation data carried.
@@ -66,6 +78,7 @@ public struct ProviderContinuation: Sendable, Codable, Equatable {
         anthropicThinkingBlocks == nil
             && geminiResponseParts == nil
             && geminiThoughtSignatures == nil
+            && codexReasoningItems == nil
     }
 
     /// Backward-compatible decoder: legacy JSON without these keys decodes
@@ -78,10 +91,28 @@ public struct ProviderContinuation: Sendable, Codable, Equatable {
         self.anthropicThinkingBlocks = try c.decodeIfPresent([AnthropicThinkingBlock].self, forKey: .anthropicThinkingBlocks)
         self.geminiResponseParts = try c.decodeIfPresent([GeminiResponsePart].self, forKey: .geminiResponseParts)
         self.geminiThoughtSignatures = try c.decodeIfPresent([String: String].self, forKey: .geminiThoughtSignatures)
+        self.codexReasoningItems = try c.decodeIfPresent([CodexReasoningItem].self, forKey: .codexReasoningItems)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case anthropicThinkingBlocks, geminiResponseParts, geminiThoughtSignatures
+        case anthropicThinkingBlocks, geminiResponseParts, geminiThoughtSignatures, codexReasoningItems
+    }
+}
+
+/// One Codex Responses `reasoning` output item. The `encryptedContent` is the
+/// model's own chain of thought, sealed by the endpoint; it is replayed
+/// unchanged, under the item's own `id`, when the conversation continues.
+public struct CodexReasoningItem: Sendable, Codable, Equatable {
+    public let id: String
+    public let encryptedContent: String
+    /// The item's `summary_text` parts, kept so the replayed item is the
+    /// complete record the endpoint emitted rather than a stripped one.
+    public let summary: [String]
+
+    public init(id: String, encryptedContent: String, summary: [String]) {
+        self.id = id
+        self.encryptedContent = encryptedContent
+        self.summary = summary
     }
 }
 

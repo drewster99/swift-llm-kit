@@ -697,6 +697,30 @@ public final class LLMKitManager {
     /// either a non-empty API key is in the Keychain, or the provider's API type is
     /// one that works without authentication (local servers).
     ///
+    /// The bearer a MODEL LISTING for this provider is fetched with: the `codex` CLI's access token
+    /// for the ChatGPT-subscription provider — which has no Keychain entry by design — and the
+    /// Keychain key for everyone else. `nil` when there is nothing to send.
+    ///
+    /// Read WITHOUT refreshing: a listing is cheap to retry, a stale token simply fails it, and the
+    /// user can retry after signing in again. Public so a host's own listing fetch (a capability
+    /// probe seeding from the vendor payload) resolves the credential the same way this manager
+    /// does, instead of reading the Keychain and finding nothing for exactly this provider.
+    public func modelListingCredential(for provider: ModelProvider) -> String? {
+        let credential = provider.apiType == .codexChatGPT
+            ? CodexAuthStore().load()?.accessToken
+            : keychain.apiKey(forProviderID: provider.id)
+        guard let credential, !credential.isEmpty else { return nil }
+        return credential
+    }
+
+    /// Whether this provider can be called at all: a key in the Keychain, a local no-auth server,
+    /// or — for the ChatGPT-subscription provider — a signed-in `codex` CLI. The one place that
+    /// question is answered; a host deciding "is there anything to probe here?" must ask this
+    /// rather than test the Keychain, which is empty for the subscription provider by design.
+    public func providerHasCredential(_ provider: ModelProvider) -> Bool {
+        providerIsRefreshable(provider)
+    }
+
     /// Used by `refreshIfNeeded` to avoid hammering cloud providers with guaranteed
     /// 401s every launch when the user hasn't configured a key yet.
     private func providerIsRefreshable(_ provider: ModelProvider) -> Bool {
@@ -788,9 +812,7 @@ public final class LLMKitManager {
         // The ChatGPT-subscription provider has no Keychain entry by design — its bearer is the
         // `codex` CLI's access token. Read without refreshing: this is a listing, a stale token
         // simply fails the fetch, and the user can retry after signing in again.
-        let apiKey = provider.apiType == .codexChatGPT
-            ? CodexAuthStore().load()?.accessToken
-            : keychain.apiKey(forProviderID: provider.id)
+        let apiKey = modelListingCredential(for: provider)
         do {
             let decodedFacts = try await fetchService.fetchModelFacts(
                 from: provider,
@@ -1110,10 +1132,10 @@ public final class LLMKitManager {
             request.setValue(tokens.accountId, forHTTPHeaderField: "chatgpt-account-id")
         }
 
-        // Responses vocabulary, not chat/completions: `max_output_tokens`, and no `temperature` —
-        // the models behind this endpoint reject it.
-        var body: [String: Any] = ["model": config.modelID, "store": false, "stream": true]
-        if config.maxOutputTokens > 0 { body["max_output_tokens"] = config.maxOutputTokens }
+        // No output cap and no temperature: the endpoint answers `Unsupported parameter` to both
+        // (`CodexResponsesProvider.buildRequestBody` has the evidence). This base body used to
+        // carry `max_output_tokens`, which made every prepared request a guaranteed 400.
+        let body: [String: Any] = ["model": config.modelID, "store": false, "stream": true]
 
         return PreparedRequest(
             urlRequest: request, baseBody: body, providerType: .codexChatGPT, streaming: true)
@@ -1479,7 +1501,10 @@ public final class LLMKitManager {
             return CodexResponsesProvider(
                 configuration: config, provider: modelProvider,
                 verboseLogging: verbose,
-                session: session
+                session: session,
+                behaviorFlags: flags,
+                reasoningEffortSupport: reasoningEffortSupport,
+                modelCapabilities: modelCapabilities
             )
         case .openAICompatible, .lmStudio, .mistral, .huggingFace, .xAI, .zAI, .metaModel, .alibabaCloud, .openRouter:
             // `parallel_tool_calls: true` is sent by default for every OpenAI-compatible

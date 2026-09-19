@@ -96,7 +96,6 @@ struct CodexResponsesTests {
 
     @Test("Tool choice maps to the Responses vocabulary")
     func toolChoiceMapping() {
-        #expect(CodexResponsesProvider.encodeToolChoice(nil) as? String == "auto")
         #expect(CodexResponsesProvider.encodeToolChoice(.auto) as? String == "auto")
         #expect(CodexResponsesProvider.encodeToolChoice(.required) as? String == "required")
         #expect(CodexResponsesProvider.encodeToolChoice(.textOnly) as? String == "none")
@@ -320,6 +319,9 @@ struct CodexResponsesTests {
         #expect(first.facts.reasoningEffort == .levels(["low", "high", "xhigh"]))
         #expect(first.facts.hidden == false)
         #expect(first.facts.isFree == true)
+        // The endpoint rejects `temperature` for every model; stated as a vendor fact so the
+        // provider never sends it in production (a probe strips the flag and measures anyway).
+        #expect(first.facts.behaviorFlags.mustNeverSendTemperatureParam == true)
         // Present-but-zero, never nil: `CostBoard.costOf` returns 0 for a FAILED lookup too, so
         // absence would make "free" indistinguishable from "we don't know".
         let pricing = try #require(first.facts.pricing)
