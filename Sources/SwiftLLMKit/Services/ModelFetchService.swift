@@ -725,12 +725,12 @@ public struct ModelFetchService: Sendable {
             // `none`, which gpt-5.5 accepts, and declares `ultra` for gpt-6-astra, which the
             // endpoint refuses ("Supported values are: none, minimal, low, medium, high, xhigh,
             // max"). Decoding it as a closed ladder would win the merge over the probe (the
-            // provider layer is the base; probes only gap-fill) and ship a level that 400s. So a
-            // non-empty list states exactly what it proves — the parameter exists — and the probe
-            // establishes which values it takes.
-            if let levels = model.supportedReasoningLevels, !levels.isEmpty {
-                facts.reasoningEffort = .supportedLevelsUnknown
-            }
+            // provider layer is the base; probes only gap-fill an UNSET field) and ship a level
+            // that 400s — and even `.supportedLevelsUnknown` occupies the field, which is exactly
+            // what kept five measured ladders out of the catalog on the first attempt. So the
+            // listing states NOTHING about the ladder; the probe establishes it, and until it has,
+            // emission falls open on the unrecorded ladder as the Codex provider documents.
+            _ = model.supportedReasoningLevels
             // `visibility: "hide"` marks internal entries (gpt-reserve, codex-auto-review). Hiding
             // is presentation, not deletion — the record survives and un-hiding is one field.
             if let visibility = model.visibility { facts.hidden = (visibility == "hide") }

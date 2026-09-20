@@ -317,9 +317,9 @@ struct CodexResponsesTests {
         #expect(first.facts.maxInputTokens == 272000)
         #expect(first.facts.capabilities.vision == true, "stated by input_modalities, not inferred")
         // The listing's levels are the CLI's menu, not the API's accepted set (it omits `none`
-        // where accepted and declares `ultra` where refused), so a non-empty list states only
-        // that the parameter exists; the probe measures the ladder.
-        #expect(first.facts.reasoningEffort == .supportedLevelsUnknown)
+        // where accepted and declares `ultra` where refused). The field is left UNSET — any value
+        // here, even "levels unknown", blocks the probe's ladder from gap-filling the merge.
+        #expect(first.facts.reasoningEffort == nil)
         #expect(first.facts.hidden == false)
         #expect(first.facts.isFree == true)
         // The endpoint rejects `temperature` for every model; stated as a vendor fact so the
@@ -334,7 +334,7 @@ struct CodexResponsesTests {
         let hidden = try #require(decoded.first { $0.modelID == "gpt-reserve" })
         #expect(hidden.facts.hidden == true)
         #expect(hidden.facts.capabilities.vision == false)
-        #expect(hidden.facts.reasoningEffort == nil, "an empty ladder states nothing")
+        #expect(hidden.facts.reasoningEffort == nil, "the listing never states a ladder")
     }
 }
 
