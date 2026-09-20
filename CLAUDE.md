@@ -8,16 +8,25 @@ SwiftLLMKit is a Swift Package (library, no executable) targeting macOS 15+ with
 
 ## Commands
 
-This is a Swift Package that ships compiled resources (`Resources/*.json`). Per the parent CLAUDE.md, **always build via drews-xcode-mcp, never `swift build` or `xcodebuild` directly.**
+This is a Swift Package (no `.xcodeproj` or `.xcworkspace`) that ships compiled resources
+(`Resources/*.json`). The drews-xcode-mcp tools refuse a bare package directory, so this repo is
+the one exception to the parent CLAUDE.md's xcode-mcp rule: build and test with the package
+toolchain from the repo root, and **delete the `.build` folder afterwards** (it is not ignored
+and must never be committed).
 
 ```
-# Build / test the package
-mcp__drews-xcode-mcp__get_project_schemes --project_path /Users/andrew/cursor/swift-llm-kit
-mcp__drews-xcode-mcp__build_project        --project_path /Users/andrew/cursor/swift-llm-kit
-mcp__drews-xcode-mcp__run_project_tests    --project_path /Users/andrew/cursor/swift-llm-kit
+cd /Users/andrew/cursor/swift-llm-kit
+swift test                                   # full suite (~800 tests, ~1s once built)
+swift test --filter Codex                    # one area
+CODEX_LIVE_SMOKE=1 swift test --filter CodexLiveSmoke   # live calls against the real Codex endpoint
+rm -rf .build
 ```
 
-Tests use the Swift Testing framework (`import Testing`, `@Test` / `#expect`), not XCTest. The test suite is currently minimal — see ROADMAP.md for the planned test coverage list.
+The consuming app (`macos-agent-smith`) is what gets built through xcode-mcp; it depends on this
+package by versioned git tag, so a change here ships as: change → `swift test` → commit → push →
+tag → push tag → bump `from:` in the app's `Package.swift` and both `Package.resolved` files.
+
+Tests use the Swift Testing framework (`import Testing`, `@Test` / `#expect`), not XCTest.
 
 ## Architecture
 

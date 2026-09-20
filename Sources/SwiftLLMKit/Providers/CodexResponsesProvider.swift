@@ -39,6 +39,13 @@ struct CodexResponsesProvider: LLMProvider {
     /// Capabilities gating the knobs whose wrong emission is an HTTP 400 (structured output,
     /// tool_choice options).
     private let modelCapabilities: ModelCapabilities
+    /// The `prompt_cache_key` every request from this instance carries — one per provider, and a
+    /// provider is built per agent role, so one per conversation. It is the routing hint for the
+    /// endpoint's prefix cache: requests sharing a key land on the shard holding their prefix.
+    /// Measured 2026-09-19 with a ~5k-token identical prefix: with the key the SECOND call
+    /// reported 4,864 cached tokens; without it, only the third. (A ~1.2k prefix cached nothing
+    /// either way — the threshold is higher than the nominal 1,024 counts here.)
+    private let promptCacheKey: String
 
     /// The Codex backend rejects `/models` without a `client_version`, and may police it on
     /// `/responses` too. Hand-maintained and undocumented; `1.0.0` is accepted as of 2026-09-16
@@ -58,7 +65,8 @@ struct CodexResponsesProvider: LLMProvider {
         session: URLSession = llmURLSession,
         behaviorFlags: BehaviorFlags = BehaviorFlags(),
         reasoningEffortSupport: EffortSupport? = nil,
-        modelCapabilities: ModelCapabilities = ModelCapabilities()
+        modelCapabilities: ModelCapabilities = ModelCapabilities(),
+        promptCacheKey: String = UUID().uuidString
     ) {
         self.configuration = configuration
         self.provider = provider
@@ -69,6 +77,7 @@ struct CodexResponsesProvider: LLMProvider {
         self.behaviorFlags = behaviorFlags
         self.reasoningEffortSupport = reasoningEffortSupport
         self.modelCapabilities = modelCapabilities
+        self.promptCacheKey = promptCacheKey
     }
 
     // MARK: - Sending
@@ -106,7 +115,8 @@ struct CodexResponsesProvider: LLMProvider {
             overrides: overrides,
             behaviorFlags: behaviorFlags,
             reasoningEffortSupport: reasoningEffortSupport,
-            modelCapabilities: modelCapabilities)
+            modelCapabilities: modelCapabilities,
+            promptCacheKey: promptCacheKey)
         // A non-finite Double (a caller-supplied temperature) reaching JSONSerialization raises an
         // NSException that `try` cannot convert — pre-flight it into a normal throw.
         guard JSONSerialization.isValidJSONObject(body) else {
@@ -189,6 +199,8 @@ struct CodexResponsesProvider: LLMProvider {
     ///   default is `true`, so nothing is sent otherwise.
     /// - `include: reasoning.encrypted_content` — always, so a stateless conversation can carry
     ///   its reasoning forward (see ``CodexReasoningItem``).
+    /// - `prompt_cache_key` — the instance's key, when given, so a conversation's turns share a
+    ///   prefix-cache shard (see the stored property).
     /// - `extraJSONOverrides` — merged LAST and unconditionally, the probe-only escape hatch past
     ///   every gate above. Before this the Codex builder ignored them, so every forced probe
     ///   (effort ladders, structured output, tool_choice options) sent a bare request and graded
@@ -201,7 +213,8 @@ struct CodexResponsesProvider: LLMProvider {
         overrides: LLMCallOverrides,
         behaviorFlags: BehaviorFlags = BehaviorFlags(),
         reasoningEffortSupport: EffortSupport? = nil,
-        modelCapabilities: ModelCapabilities = ModelCapabilities()
+        modelCapabilities: ModelCapabilities = ModelCapabilities(),
+        promptCacheKey: String? = nil
     ) -> [String: Any] {
         var body: [String: Any] = [
             "model": configuration.model,
@@ -213,6 +226,9 @@ struct CodexResponsesProvider: LLMProvider {
         ]
         if let instructions = buildInstructions(messages, behaviorFlags: behaviorFlags) {
             body["instructions"] = instructions
+        }
+        if let promptCacheKey, !promptCacheKey.isEmpty {
+            body["prompt_cache_key"] = promptCacheKey
         }
         if !behaviorFlags.mustNeverSendTemperatureParam,
            let temperature = overrides.temperature ?? configuration.temperature {

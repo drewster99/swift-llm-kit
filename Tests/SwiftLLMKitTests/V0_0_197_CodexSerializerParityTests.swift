@@ -365,6 +365,23 @@ struct CodexSerializerParityTests {
         #expect(((body["text"] as? [String: Any])?["format"] as? [String: Any])?["type"] as? String == "json_object")
     }
 
+    // MARK: Prompt cache
+
+    @Test("Every request from one provider instance carries the same prompt_cache_key")
+    func promptCacheKeyIsStablePerInstance() {
+        let keyed = CodexResponsesProvider.buildRequestBody(
+            configuration: Self.config(), messages: [.user("a")], tools: [], overrides: LLMCallOverrides(),
+            promptCacheKey: "conv-1")
+        #expect(keyed["prompt_cache_key"] as? String == "conv-1")
+        // The test convenience builds no key; a body without one must not carry an empty string,
+        // which the endpoint would treat as a real (useless) key.
+        #expect(Self.body()["prompt_cache_key"] == nil)
+        let empty = CodexResponsesProvider.buildRequestBody(
+            configuration: Self.config(), messages: [.user("a")], tools: [], overrides: LLMCallOverrides(),
+            promptCacheKey: "")
+        #expect(empty["prompt_cache_key"] == nil)
+    }
+
     // MARK: Usage
 
     @Test("The raw usage object is preserved, as every other adapter preserves it")
