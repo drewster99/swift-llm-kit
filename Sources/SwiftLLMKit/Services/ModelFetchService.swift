@@ -720,10 +720,16 @@ public struct ModelFetchService: Sendable {
                 facts.capabilities.vision = modalities.contains("image")
             }
             // Every model on this endpoint is a reasoning model reached through the Responses API,
-            // and each states its own ladder — which runs deeper than the usual low/medium/high:
-            // `xhigh`, `max` and `ultra` appear, and the set VARIES per model.
+            // and each lists reasoning levels — but the list is the CLI's menu, not the API's
+            // accepted set, and it is wrong in both directions (measured 2026-09-19): it omits
+            // `none`, which gpt-5.5 accepts, and declares `ultra` for gpt-6-astra, which the
+            // endpoint refuses ("Supported values are: none, minimal, low, medium, high, xhigh,
+            // max"). Decoding it as a closed ladder would win the merge over the probe (the
+            // provider layer is the base; probes only gap-fill) and ship a level that 400s. So a
+            // non-empty list states exactly what it proves — the parameter exists — and the probe
+            // establishes which values it takes.
             if let levels = model.supportedReasoningLevels, !levels.isEmpty {
-                facts.reasoningEffort = .levels(levels.map(\.effort))
+                facts.reasoningEffort = .supportedLevelsUnknown
             }
             // `visibility: "hide"` marks internal entries (gpt-reserve, codex-auto-review). Hiding
             // is presentation, not deletion — the record survives and un-hiding is one field.

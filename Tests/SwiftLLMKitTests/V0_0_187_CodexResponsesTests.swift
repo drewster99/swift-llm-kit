@@ -297,7 +297,7 @@ struct CodexResponsesTests {
 
     // MARK: Models listing
 
-    @Test("The models listing decodes slugs, context, modalities, efforts and zero pricing")
+    @Test("The models listing decodes slugs, context, modalities, effort presence and zero pricing")
     func decodesModelsListing() throws {
         let json = """
             {"models":[
@@ -316,7 +316,10 @@ struct CodexResponsesTests {
         #expect(first.facts.displayName == "GPT-5.5")
         #expect(first.facts.maxInputTokens == 272000)
         #expect(first.facts.capabilities.vision == true, "stated by input_modalities, not inferred")
-        #expect(first.facts.reasoningEffort == .levels(["low", "high", "xhigh"]))
+        // The listing's levels are the CLI's menu, not the API's accepted set (it omits `none`
+        // where accepted and declares `ultra` where refused), so a non-empty list states only
+        // that the parameter exists; the probe measures the ladder.
+        #expect(first.facts.reasoningEffort == .supportedLevelsUnknown)
         #expect(first.facts.hidden == false)
         #expect(first.facts.isFree == true)
         // The endpoint rejects `temperature` for every model; stated as a vendor fact so the
