@@ -389,4 +389,21 @@ public enum EffortRank {
     public static var allKnown: [String] {
         table.keys.sorted { rank(of: $0) < rank(of: $1) }
     }
+
+    /// The prober version that first asked for a level. Absent = asked since the beginning.
+    ///
+    /// Exists for the complete-ladder gate: a record written by an older prober cannot carry an
+    /// answer for a level that prober never asked about, and demanding one would silently void
+    /// every ladder measured before the level was added. Adding `ultra` to the table did exactly
+    /// that on 2026-09-19 — 690 catalog entries lost their measured ladder, and with it the
+    /// `reasoning_effort` those models had been receiving.
+    static let introducedAtProberVersion: [String: Int] = [
+        "ultra": 8
+    ]
+
+    /// The levels a record written by `proberVersion` must have an answer for before its accepted
+    /// set may claim to BE the ladder.
+    public static func levelsRequiredForCompleteLadder(proberVersion: Int) -> Set<String> {
+        Set(table.keys.filter { (introducedAtProberVersion[$0] ?? 0) <= proberVersion })
+    }
 }

@@ -728,8 +728,14 @@ public final class LLMKitManager {
             return true
         }
         switch provider.apiType {
-        case .ollama, .lmStudio:
+        case .lmStudio:
             return true
+        case .ollama:
+            // The SAME apiType serves a local daemon (keyless) and Ollama Cloud at ollama.com,
+            // which 401s without a key — so the host decides, not the apiType. Waving the cloud
+            // one through keyless is a guaranteed 401 per refresh and a wasted probe battery.
+            let host = provider.endpoint.host?.lowercased() ?? ""
+            return ["localhost", "127.0.0.1", "0.0.0.0", "::1"].contains(host) || host.hasSuffix(".local")
         case .anthropic, .openAICompatible, .mistral, .gemini, .huggingFace,
              .xAI, .zAI, .metaModel, .alibabaCloud, .openRouter:
             return false

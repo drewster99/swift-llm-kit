@@ -324,7 +324,11 @@ extension ModelProfile {
     ///   trivially "passes"), so only the NEGATIVE is projected, as the flag derivation.
     /// - `isAvailable`: only the probe supplies it (the listing is not proof), and only explicit
     ///   gone-signals ever established false — a transient failure never reaches `established`.
-    public func asEmpiricalFacts(includeAccountScoped: Bool) -> ModelFacts {
+    /// - Parameter proberVersion: the version that wrote this profile's record, which decides which
+    ///   levels the complete-ladder gate may demand — see
+    ///   ``EffortRank/levelsRequiredForCompleteLadder(proberVersion:)``.
+    public func asEmpiricalFacts(includeAccountScoped: Bool,
+                                 proberVersion: Int = ModelProber.proberVersion) -> ModelFacts {
         var facts = ModelFacts()
         func probed<T>(_ finding: ProbeFinding<T>) -> T? {
             guard finding.status == .established, finding.source == .probed else { return nil }
@@ -378,8 +382,8 @@ extension ModelProfile {
             facts.isAccessDenied = probed(isAccessDenied)
             // Complete-ladder gate: every known level must have an established probed answer
             // (accepted or rejected) before the set of accepted levels can claim to BE the ladder.
-            facts.generalEffort = Self.projectedEffort(from: generalEffortLevels)
-            facts.reasoningEffort = Self.projectedEffort(from: reasoningEffortLevels)
+            facts.generalEffort = Self.projectedEffort(from: generalEffortLevels, proberVersion: proberVersion)
+            facts.reasoningEffort = Self.projectedEffort(from: reasoningEffortLevels, proberVersion: proberVersion)
         }
         return facts
     }
@@ -387,16 +391,19 @@ extension ModelProfile {
     /// Projects one effort dict into an ``EffortSupport``, or `nil` when the run cannot claim to
     /// have measured the ladder.
     ///
-    /// COMPLETE-LADDER GATE: every level in ``EffortRank/table`` must carry an established, probed
-    /// answer before the accepted set can claim to BE the ladder. A partial run understates it, and
-    /// an understated ladder is worse than silence — it would reject levels the model accepts.
+    /// COMPLETE-LADDER GATE: every level the writing prober knew (``EffortRank/levelsRequiredForCompleteLadder(proberVersion:)``)
+    /// must carry an established, probed answer before the accepted set can claim to BE the
+    /// ladder. A partial run understates it, and an understated ladder is worse than silence — it
+    /// would reject levels the model accepts. Keyed on the record's version rather than today's
+    /// table so a level added later does not void every ladder measured before it existed.
     ///
     /// A complete run where NOTHING was accepted is a real finding, not an absence: it projects
     /// ``EffortSupport/unsupported`` (via `init(levels:)` normalizing the empty set), which is
     /// precisely the evidence the previous empty-array representation threw away.
-    private static func projectedEffort(from levels: [String: ProbeFinding<Bool>]) -> EffortSupport? {
+    private static func projectedEffort(from levels: [String: ProbeFinding<Bool>], proberVersion: Int) -> EffortSupport? {
         let established = levels.filter { $0.value.status == .established && $0.value.source == .probed }
-        guard Set(established.keys).isSuperset(of: EffortRank.table.keys) else { return nil }
+        let required = EffortRank.levelsRequiredForCompleteLadder(proberVersion: proberVersion)
+        guard Set(established.keys).isSuperset(of: required) else { return nil }
         return EffortSupport(levels: established.filter { $0.value.value == true }.map(\.key))
     }
 }
@@ -474,7 +481,8 @@ public enum ProbeEvidenceCombiner {
         // providerID annotation — builtin provider IDs are identical on every machine, so a
         // shipped record that escaped export-stripping would otherwise sail through the gate.
         func facts(of record: ProbeRecord, isLocal: Bool) -> ModelFacts {
-            record.profile.asEmpiricalFacts(includeAccountScoped: isLocal && record.providerID == providerID)
+            record.profile.asEmpiricalFacts(includeAccountScoped: isLocal && record.providerID == providerID,
+                                            proberVersion: record.proberVersion)
         }
         switch (local, downloaded) {
         case (nil, nil):

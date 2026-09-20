@@ -490,6 +490,39 @@ struct CodexSerializerParityTests {
         #expect(chatTool["function"] != nil)
     }
 
+    @Test("A ladder measured by an older prober still projects; a level it never asked about is not demanded")
+    func ladderGateIsKeyedOnTheWritingVersion() {
+        var profile = ModelProfile(providerID: "p", modelID: "m")
+        for level in ["none", "minimal", "low", "medium", "high", "xhigh", "max"] {
+            profile.reasoningEffortLevels[level] = .established(level != "minimal", "probed")
+        }
+        // Written by v7, before `ultra` existed: the seven answers ARE the complete ladder.
+        let v7 = profile.asEmpiricalFacts(includeAccountScoped: true, proberVersion: 7)
+        #expect(v7.reasoningEffort == EffortSupport(levels: ["none", "low", "medium", "high", "xhigh", "max"]))
+        // Written by v8, which asks for `ultra`: the same seven answers are a PARTIAL run.
+        let v8 = profile.asEmpiricalFacts(includeAccountScoped: true, proberVersion: 8)
+        #expect(v8.reasoningEffort == nil)
+        profile.reasoningEffortLevels["ultra"] = .established(false, "probed")
+        let complete = profile.asEmpiricalFacts(includeAccountScoped: true, proberVersion: 8)
+        #expect(complete.reasoningEffort == EffortSupport(levels: ["none", "low", "medium", "high", "xhigh", "max"]))
+        #expect(EffortRank.levelsRequiredForCompleteLadder(proberVersion: 7).contains("ultra") == false)
+        #expect(EffortRank.levelsRequiredForCompleteLadder(proberVersion: 8).contains("ultra"))
+    }
+
+    @Test("A credential is required by host for Ollama, never by apiType alone")
+    @MainActor
+    func ollamaCredentialIsDecidedByHost() throws {
+        let kit = LLMKitManager(
+            appIdentifier: "test.credential.\(UUID().uuidString)",
+            keychainServicePrefix: "test.credential")
+        let local = ModelProvider(id: "local", name: "Ollama", apiType: .ollama,
+                                  endpoint: try #require(URL(string: "http://localhost:11434/api")))
+        let cloud = ModelProvider(id: "cloud", name: "Ollama Cloud", apiType: .ollama,
+                                  endpoint: try #require(URL(string: "https://ollama.com/api")))
+        #expect(kit.providerHasCredential(local))
+        #expect(kit.providerHasCredential(cloud) == false, "ollama.com 401s without a key")
+    }
+
     @Test("Continuation with only Codex items is not empty, and round-trips through Codable")
     func continuationCodable() throws {
         let item = CodexReasoningItem(id: "rs_9", encryptedContent: "X", summary: ["s"])

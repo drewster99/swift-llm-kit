@@ -730,7 +730,6 @@ public struct ModelFetchService: Sendable {
             // what kept five measured ladders out of the catalog on the first attempt. So the
             // listing states NOTHING about the ladder; the probe establishes it, and until it has,
             // emission falls open on the unrecorded ladder as the Codex provider documents.
-            _ = model.supportedReasoningLevels
             // `visibility: "hide"` marks internal entries (gpt-reserve, codex-auto-review). Hiding
             // is presentation, not deletion — the record survives and un-hiding is one field.
             if let visibility = model.visibility { facts.hidden = (visibility == "hide") }

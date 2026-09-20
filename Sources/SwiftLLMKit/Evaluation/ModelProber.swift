@@ -90,7 +90,12 @@ public enum ModelProber {
     /// n=1 was a coin flip (gpt-5.1 recorded a mechanism, its dated alias — the same model — none).
     /// v6 `structuredOutputSupportsJSONSchema`, Anthropic reasoning, keep, and mechanism findings
     /// are all suspect; reuse requires an exact version match, so every v6 record re-probes.
-    public static let proberVersion = 7
+    ///
+    /// v8 (2026-09-19): the ladder gained `ultra`, and the complete-ladder gate is now keyed on the
+    /// record's version (``EffortRank/levelsRequiredForCompleteLadder(proberVersion:)``) so v7
+    /// records keep projecting the seven-level ladders they measured. v7 findings are NOT suspect;
+    /// the bump exists so a record can say which ladder it was asked.
+    public static let proberVersion = 8
 
     /// Builds a probe seed from a TRI-STATE facts record — the preferred seeding path.
     ///
