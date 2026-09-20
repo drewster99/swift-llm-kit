@@ -12,6 +12,30 @@ public enum LLMProviderError: Error, LocalizedError {
     /// non-finite sampling parameter (NaN/±Inf temperature/top_p). Kept distinct from
     /// ``malformedResponse`` because this is our request's fault, not the server's.
     case invalidRequest(detail: String)
+    /// The server accepted the request and then declared the RESPONSE failed — the Responses API's
+    /// `response.failed` event, which arrives on an HTTP 200 stream with a typed error object.
+    /// `code` is the server's own error code, verbatim, and is the only signal that separates a
+    /// refusal of the request's CONTENT (which no retry can change) from a backend fault.
+    /// Kept distinct from ``malformedResponse``: the stream parsed fine, the provider said no.
+    case responseFailed(code: String?, message: String)
+
+    /// Error codes with which a provider refuses the CONTENT of a request on policy grounds.
+    ///
+    /// A refusal is deterministic over the request — resending it unchanged is refused again — so
+    /// a retry policy must classify it as permanent, not spend its whole budget on it.
+    public enum ContentPolicyRefusalCode: String, Sendable, CaseIterable {
+        /// `chatgpt.com/backend-api/codex/responses`, observed live 2026-09-19: "This content was
+        /// flagged for possible cybersecurity risk … join the Trusted Access for Cyber program".
+        case cyberPolicy = "cyber_policy"
+        /// OpenAI's documented moderation refusal code.
+        case contentPolicyViolation = "content_policy_violation"
+    }
+
+    /// The typed policy refusal this error carries, or nil when it is not one.
+    public var contentPolicyRefusal: ContentPolicyRefusalCode? {
+        guard case .responseFailed(let code?, _) = self else { return nil }
+        return ContentPolicyRefusalCode(rawValue: code)
+    }
 
     public var errorDescription: String? {
         switch self {
@@ -24,6 +48,8 @@ public enum LLMProviderError: Error, LocalizedError {
             return "Could not parse LLM response: \(detail)"
         case .invalidRequest(let detail):
             return "Could not build request: \(detail)"
+        case .responseFailed(let code, let message):
+            return "Provider failed the response (\(code ?? "no error code")): \(message)"
         }
     }
 

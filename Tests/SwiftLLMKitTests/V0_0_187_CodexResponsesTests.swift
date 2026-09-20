@@ -274,6 +274,42 @@ struct CodexResponsesTests {
         }
     }
 
+    @Test("A failed stream carries the server's error code, and a cyber_policy code is a typed refusal")
+    func failedStreamCarriesCode() {
+        let sse = """
+            data: {"type":"response.failed","response":{"status":"failed","error":{"code":"cyber_policy","message":"This content was flagged for possible cybersecurity risk."}}}
+            """
+        do {
+            _ = try CodexResponsesProvider.parseStream(sse)
+            Issue.record("expected a throw")
+        } catch let error as LLMProviderError {
+            guard case .responseFailed(let code, let message) = error else {
+                Issue.record("expected responseFailed, got \(error)")
+                return
+            }
+            #expect(code == "cyber_policy")
+            #expect(message.hasPrefix("This content was flagged"))
+            #expect(error.contentPolicyRefusal == .cyberPolicy)
+        } catch {
+            Issue.record("unexpected error type \(error)")
+        }
+    }
+
+    @Test("A failed stream with an unrecognised code is not a content-policy refusal")
+    func failedStreamUnknownCodeIsNotRefusal() {
+        let sse = """
+            data: {"type":"response.failed","response":{"error":{"code":"server_error","message":"on fire"}}}
+            """
+        do {
+            _ = try CodexResponsesProvider.parseStream(sse)
+            Issue.record("expected a throw")
+        } catch let error as LLMProviderError {
+            #expect(error.contentPolicyRefusal == nil)
+        } catch {
+            Issue.record("unexpected error type \(error)")
+        }
+    }
+
     @Test("Unknown events and [DONE] are ignored, not fatal")
     func unknownEventsIgnored() throws {
         let sse = """

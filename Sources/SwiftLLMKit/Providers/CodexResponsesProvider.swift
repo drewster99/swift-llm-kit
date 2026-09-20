@@ -479,7 +479,7 @@ struct CodexResponsesProvider: LLMProvider {
         var reasoningItems: [CodexReasoningItem] = []
         var usage: TokenUsage?
         var finishReason: String?
-        var failure: String?
+        var failure: (code: String?, message: String)?
 
         for line in sse.split(separator: "\n", omittingEmptySubsequences: true) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
@@ -599,8 +599,10 @@ struct CodexResponsesProvider: LLMProvider {
 
             case "response.failed":
                 finishReason = "failed"
-                let response = event["response"] as? [String: Any]
-                failure = (response?["error"] as? [String: Any])?["message"] as? String ?? "unknown error"
+                let serverError = (event["response"] as? [String: Any])?["error"] as? [String: Any]
+                failure = (
+                    code: serverError?["code"] as? String,
+                    message: serverError?["message"] as? String ?? "unknown error")
 
             default:
                 continue
@@ -608,7 +610,9 @@ struct CodexResponsesProvider: LLMProvider {
         }
 
         if let failure {
-            throw LLMProviderError.malformedResponse(detail: "Codex stream failed: \(failure)")
+            // Typed, not folded into `malformedResponse`: the code is what lets a caller tell a
+            // content-policy refusal (permanent) from a backend fault (worth a retry).
+            throw LLMProviderError.responseFailed(code: failure.code, message: failure.message)
         }
 
         // Arguments that never met a call. Silent before: the shipped defect produced exactly this
