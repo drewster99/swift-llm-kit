@@ -496,6 +496,13 @@ struct GeminiProvider: LLMProvider {
         guard let candidates = json["candidates"] as? [[String: Any]],
               let candidate = candidates.first
         else {
+            // A prompt the safety filter blocked outright carries no candidates at all — only
+            // `promptFeedback.blockReason`. That is a refusal, not a malformed body.
+            let blockReason = (json["promptFeedback"] as? [String: Any])?["blockReason"] as? String
+            if let refusal = LLMProviderError.contentPolicyRefusal(finishReason: blockReason) {
+                throw LLMProviderError.responseFailed(
+                    code: refusal.rawValue, message: "promptFeedback.blockReason \(refusal.rawValue): the prompt was blocked")
+            }
             let keys = json.keys.sorted().joined(separator: ", ")
             let preview = String(data: data.prefix(500), encoding: .utf8) ?? "(\(data.count) bytes)"
             logger.error("Missing candidates in response. Keys: \(keys, privacy: .public) Body: \(preview, privacy: .public)")
@@ -505,6 +512,10 @@ struct GeminiProvider: LLMProvider {
         // Gemini returns error finish reasons (e.g. MALFORMED_FUNCTION_CALL) when it fails to
         // produce a valid tool call. Surface these as actionable text so the agent can retry.
         let finishReason = candidate["finishReason"] as? String
+        if let refusal = LLMProviderError.contentPolicyRefusal(finishReason: finishReason) {
+            let finishMessage = candidate["finishMessage"] as? String ?? "the candidate was blocked"
+            throw LLMProviderError.responseFailed(code: refusal.rawValue, message: "finishReason \(refusal.rawValue): \(finishMessage)")
+        }
         if let finishReason, finishReason != "STOP" && finishReason != "MAX_TOKENS" {
             let finishMessage = candidate["finishMessage"] as? String ?? finishReason
             logger.warning("Gemini finished with \(finishReason, privacy: .public): \(finishMessage, privacy: .public)")

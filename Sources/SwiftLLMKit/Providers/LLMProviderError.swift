@@ -29,6 +29,28 @@ public enum LLMProviderError: Error, LocalizedError {
         case cyberPolicy = "cyber_policy"
         /// OpenAI's documented moderation refusal code.
         case contentPolicyViolation = "content_policy_violation"
+        /// Chat/completions `finish_reason` on an HTTP 200 whose content the filter removed.
+        case contentFilter = "content_filter"
+        /// Anthropic `stop_reason`: the streaming classifier stopped the turn. Anthropic documents
+        /// it as one that retrying does not clear unless the content changes.
+        case anthropicRefusal = "refusal"
+        /// Gemini candidate `finishReason` / prompt `blockReason`.
+        case geminiSafety = "SAFETY"
+        case geminiProhibitedContent = "PROHIBITED_CONTENT"
+    }
+
+    /// The refusal a provider's finish/stop reason spells, or nil for every ordinary stop.
+    ///
+    /// The vocabulary is per provider and passed through `LLMResponse.finishReason` verbatim, so
+    /// each adapter consults this table at parse time and throws ``responseFailed`` — the same
+    /// error the Responses API reports for the same fact — instead of returning a success whose
+    /// text the server already withheld.
+    public static func contentPolicyRefusal(finishReason: String?) -> ContentPolicyRefusalCode? {
+        guard let finishReason, let code = ContentPolicyRefusalCode(rawValue: finishReason) else { return nil }
+        switch code {
+        case .contentFilter, .anthropicRefusal, .geminiSafety, .geminiProhibitedContent: return code
+        case .cyberPolicy, .contentPolicyViolation: return nil   // error-object codes, never finish reasons
+        }
     }
 
     /// The typed policy refusal this error carries, or nil when it is not one.

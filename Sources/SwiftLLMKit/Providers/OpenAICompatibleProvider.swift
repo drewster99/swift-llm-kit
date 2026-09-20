@@ -698,12 +698,20 @@ struct OpenAICompatibleProvider: LLMProvider {
             }
         }
 
+        let finishReason = choice["finish_reason"] as? String
+        // A 200 whose content the filter withheld is a refusal, not an answer. Thrown as the same
+        // typed error the Responses endpoint reports, so a retry policy sees one fact once.
+        if let refusal = LLMProviderError.contentPolicyRefusal(finishReason: finishReason) {
+            throw LLMProviderError.responseFailed(
+                code: refusal.rawValue, message: "finish_reason \(refusal.rawValue): the content filter withheld the response")
+        }
+
         return LLMResponse(
             text: text?.isEmpty == true ? nil : text,
             toolCalls: toolCalls,
             reasoning: reasoningContent,
             usage: tokenUsage,
-            finishReason: choice["finish_reason"] as? String
+            finishReason: finishReason
         )
     }
 

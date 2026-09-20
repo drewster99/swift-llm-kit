@@ -630,13 +630,20 @@ struct AnthropicProvider: LLMProvider {
         // Anthropic's vocabulary for `finishReason`: "end_turn", "max_tokens",
         // "stop_sequence", "tool_use", "refusal", "pause_turn". Passed through
         // verbatim, like every other adapter — see `LLMResponse.finishReason`.
+        let stopReason = json["stop_reason"] as? String
+        // "refusal" is the streaming classifier ending the turn; Anthropic documents that resending
+        // the same content is refused again. Any partial text is the refused turn's, not an answer.
+        if let refusal = LLMProviderError.contentPolicyRefusal(finishReason: stopReason) {
+            throw LLMProviderError.responseFailed(
+                code: refusal.rawValue, message: "stop_reason \(refusal.rawValue): the request was refused on content-policy grounds")
+        }
         return LLMResponse(
             text: text?.isEmpty == true ? nil : text,
             toolCalls: toolCalls,
             reasoning: reasoning,
             usage: tokenUsage,
             continuation: continuation,
-            finishReason: json["stop_reason"] as? String
+            finishReason: stopReason
         )
     }
 
