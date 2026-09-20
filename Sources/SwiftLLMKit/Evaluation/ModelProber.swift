@@ -97,6 +97,18 @@ public enum ModelProber {
     /// the bump exists so a record can say which ladder it was asked.
     public static let proberVersion = 8
 
+    /// The oldest prober version whose records are still trustworthy enough to REUSE — to seed a
+    /// re-sweep so only gaps and new models cost calls.
+    ///
+    /// Two different questions hide behind a version bump. "Did the prober's MEASUREMENTS change
+    /// meaning?" (v5 declared v4 suspect, v6 declared v5 budgets fabricated) — then this must rise
+    /// with ``proberVersion``, and every older record re-probes. "Did the prober merely learn to
+    /// ask one more thing?" (v8 added `ultra` to the ladder) — then only ``proberVersion`` rises,
+    /// this stays put, and the older records are reused as they are, with the complete-ladder gate
+    /// keyed on the version they were written by. Requiring an exact match, as the sweep did,
+    /// turned every "asks one more thing" bump into a full re-probe of ~1,600 models.
+    public static let oldestReusableProberVersion = 7
+
     /// Builds a probe seed from a TRI-STATE facts record — the preferred seeding path.
     ///
     /// No per-apiType switch: the decoders already encode statedness (`nil` = the vendor didn't

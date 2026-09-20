@@ -523,6 +523,23 @@ struct CodexSerializerParityTests {
         #expect(kit.providerHasCredential(cloud) == false, "ollama.com 401s without a key")
     }
 
+    @Test("A reused record keeps the version that measured it when only its gaps were filled")
+    @MainActor
+    func storedRecordKeepsTheReusedVersion() throws {
+        let kit = LLMKitManager(
+            appIdentifier: "test.reuse.\(UUID().uuidString)",
+            keychainServicePrefix: "test.reuse")
+        let provider = ModelProvider(id: "p", name: "P", apiType: .openAICompatible,
+                                     endpoint: try #require(URL(string: "https://example.com/v1")))
+        var profile = ModelProfile(providerID: "p", modelID: "m")
+        profile.chat = .established(true, "probed")
+        try kit.storeProbeResult(profile: profile, provider: provider, modelID: "m", proberVersion: 7)
+        #expect(kit.probeRecords(provider: provider, modelID: "m").local?.proberVersion == 7)
+        try kit.storeProbeResult(profile: profile, provider: provider, modelID: "m")
+        #expect(kit.probeRecords(provider: provider, modelID: "m").local?.proberVersion == ModelProber.proberVersion)
+        #expect(ModelProber.oldestReusableProberVersion <= ModelProber.proberVersion)
+    }
+
     @Test("Continuation with only Codex items is not empty, and round-trips through Codable")
     func continuationCodable() throws {
         let item = CodexReasoningItem(id: "rs_9", encryptedContent: "X", summary: ["s"])

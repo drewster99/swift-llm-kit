@@ -244,12 +244,19 @@ public final class LLMKitManager {
     /// rate-gutted run must not overwrite a real record — except that a run authoritatively
     /// resolving the model as non-chat may `.prune` a stale capability-free record (see below).
     /// The catalog is NOT recomposed here; the next refresh reads the updated records.
+    ///
+    /// - Parameter proberVersion: the version to stamp the record with. Defaults to the current
+    ///   prober. A re-sweep that REUSED an older record and only filled its gaps must pass that
+    ///   record's version instead: the record's ladder was measured by the older prober, and the
+    ///   complete-ladder gate reads the stamped version to know which levels it may demand.
+    ///   Stamping it current would "launder" the record and void its ladder.
     @discardableResult
-    public func storeProbeResult(profile: ModelProfile, provider: ModelProvider, modelID: String) throws -> ProbeStoreOutcome {
+    public func storeProbeResult(profile: ModelProfile, provider: ModelProvider, modelID: String,
+                                 proberVersion: Int = ModelProber.proberVersion) throws -> ProbeStoreOutcome {
         let key = ProbeRecordKey(apiType: provider.apiType, endpoint: provider.endpoint, modelID: modelID)
         let stored = try probeStore.upsert(
             profile: profile, key: key, providerID: provider.id,
-            proberVersion: ModelProber.proberVersion
+            proberVersion: proberVersion
         )
         if stored {
             if let record = probeStore.record(forKey: key) { localProbeRecords[key] = record }
