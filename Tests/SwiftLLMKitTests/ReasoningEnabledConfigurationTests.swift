@@ -280,6 +280,17 @@ struct ReasoningEnabledConfigurationTests {
         #expect(state(effortSupport: nil).label == "unknown")
         #expect(state(effortSupport: EffortSupport(levels: ["low", "high"])).label == "unknown")
         #expect(state(effortSupport: EffortSupport(levels: ["none", "high"])).label == "off")
+        // The MEASURED off-switch outranks the ladder both ways: a Codex listing omits `none` for
+        // a model that accepts it, and declares nothing about one that refuses it.
+        func measured(_ canDisable: Bool, ladder: [String]) -> PlannedThinkingState {
+            ReasoningControl.plannedThinkingState(PlannedThinkingState.Inputs(
+                control: .reasoningEffortOnly, apiType: nil,
+                capabilities: ModelCapabilities(states: [.reasoningCanBeDisabled: canDisable]),
+                reasoningEnabled: false, thinkingBudget: nil,
+                reasoningEffort: nil, reasoningEffortSupport: EffortSupport(levels: ladder)))
+        }
+        #expect(measured(true, ladder: ["low", "high"]).label == "off")
+        #expect(measured(false, ladder: ["none", "high"]).label == "unknown")
         // And with no off request it is always on.
         #expect(ReasoningControl.plannedThinkingState(PlannedThinkingState.Inputs(
             control: .reasoningEffortOnly, apiType: nil, capabilities: ModelCapabilities(),

@@ -192,6 +192,16 @@ struct CodexSerializerParityTests {
         // …unless the ladder is known to reject `none`; then the configured depth stands.
         #expect(effort(Self.body(configuration: Self.config(reasoningEffort: "high", reasoningEnabled: false),
                                  effort: .levels(["low", "high"]))) == "high")
+        // The MEASURED off-switch outranks the declared ladder in both directions: the Codex
+        // listing omits `none` for gpt-5.5, which accepts it, and gpt-6-astra refuses it though
+        // nothing in its listing says so. `reasoningCanBeDisabled` is what the mechanism probe
+        // measured, so it decides when known.
+        #expect(effort(Self.body(configuration: Self.config(reasoningEffort: "high", reasoningEnabled: false),
+                                 effort: .levels(["low", "high"]),
+                                 capabilities: ModelCapabilities(states: [.reasoningCanBeDisabled: true]))) == "none")
+        #expect(effort(Self.body(configuration: Self.config(reasoningEffort: "high", reasoningEnabled: false),
+                                 effort: .levels(["none", "high"]),
+                                 capabilities: ModelCapabilities(states: [.reasoningCanBeDisabled: false]))) == "high")
         // The override still outranks an explicit off.
         #expect(effort(Self.body(overrides: LLMCallOverrides(reasoningEffort: "low", reasoningEnabled: false))) == "low")
         // Fail-OPEN: an unrecorded ladder does not withhold the field…

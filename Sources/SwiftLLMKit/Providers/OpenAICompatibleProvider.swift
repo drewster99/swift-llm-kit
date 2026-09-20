@@ -336,17 +336,18 @@ struct OpenAICompatibleProvider: LLMProvider {
             // (configured off beside a configured effort still sends the effort, below).
             if overrides.reasoningEnabled == false,
                control == .reasoningEffortOnly,
-               reasoningEffortSupport?.rejects("none") != true {
+               ReasoningControl.effortOffFormPermitted(support: reasoningEffortSupport, capabilities: modelCapabilities) {
                 return "none"
             }
             if let configured = configuration.reasoningEffort { return configured }
             // An explicit thinking-off on an effort-only model has exactly one wire form:
             // `reasoning_effort: "none"` — there is no thinking block or flag to withhold.
-            // Gated on the ladder not KNOWN-rejecting "none" (fails open on an unknown ladder,
-            // like the general-effort field: a clear API error beats a silently-ignored switch).
+            // The measured off-switch decides when known; otherwise gated on the ladder not
+            // KNOWN-rejecting "none" (fails open on an unknown ladder, like the general-effort
+            // field: a clear API error beats a silently-ignored switch).
             if (overrides.reasoningEnabled ?? configuration.reasoningEnabled) == false,
                control == .reasoningEffortOnly,
-               reasoningEffortSupport?.rejects("none") != true {
+               ReasoningControl.effortOffFormPermitted(support: reasoningEffortSupport, capabilities: modelCapabilities) {
                 return "none"
             }
             return nil

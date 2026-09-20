@@ -260,7 +260,8 @@ struct ModelProfileTests {
         #expect(EffortRank.rank(of: "low") < EffortRank.rank(of: "high"))
         #expect(EffortRank.rank(of: "none") < EffortRank.rank(of: "minimal"))
         #expect(EffortRank.rank(of: "some-future-level") == Int.max)
-        #expect(EffortRank.allKnown == ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+        #expect(EffortRank.rank(of: "max") < EffortRank.rank(of: "ultra"))
+        #expect(EffortRank.allKnown == ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"])
     }
 
     @Test("Profile round-trips through Codable")

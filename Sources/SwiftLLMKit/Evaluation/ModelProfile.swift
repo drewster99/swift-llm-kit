@@ -374,7 +374,8 @@ public enum EffortRank {
         "medium": 200,
         "high": 300,     // Anthropic's default; identical to omitting the parameter.
         "xhigh": 400,
-        "max": 500
+        "max": 500,
+        "ultra": 600     // Codex listing declares it for gpt-5.6-sol/terra and gpt-6-astra (2026-09).
     ]
 
     /// Unknown names sort last, so a level a vendor adds tomorrow appears at the deep end rather

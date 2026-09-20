@@ -231,7 +231,8 @@ struct CodexResponsesProvider: LLMProvider {
             }
         }
         if let effort = effectiveReasoningEffort(
-            configuration: configuration, overrides: overrides, support: reasoningEffortSupport) {
+            configuration: configuration, overrides: overrides, support: reasoningEffortSupport,
+            capabilities: modelCapabilities) {
             // `summary: auto` is what makes the model emit reasoning_summary deltas; without it a
             // reasoning turn streams nothing until the answer lands.
             body["reasoning"] = ["effort": effort, "summary": "auto"]
@@ -263,17 +264,19 @@ struct CodexResponsesProvider: LLMProvider {
     /// The `reasoning.effort` to send, if any. The per-call override outranks an explicit
     /// reasoning-off, which outranks the configured depth — the same layering the
     /// OpenAI-compatible provider applies to `reasoning_effort`. An explicit off has exactly one
-    /// wire form on an effort-only model, `none`, and is stated only when the ladder is not
-    /// KNOWN to reject it.
+    /// wire form on an effort-only model, `none`, and is stated only when
+    /// ``ReasoningControl/effortOffFormPermitted(support:capabilities:)`` allows it — the measured
+    /// off-switch first, the declared ladder's silence second.
     static func effectiveReasoningEffort(
         configuration: ModelConfiguration,
         overrides: LLMCallOverrides,
-        support: EffortSupport?
+        support: EffortSupport?,
+        capabilities: ModelCapabilities = ModelCapabilities()
     ) -> String? {
         guard support?.isSupported != false else { return nil }
         if let override = overrides.reasoningEffort, !override.isEmpty { return override }
         if (overrides.reasoningEnabled ?? configuration.reasoningEnabled) == false,
-           support?.rejects("none") != true {
+           ReasoningControl.effortOffFormPermitted(support: support, capabilities: capabilities) {
             return "none"
         }
         if let configured = configuration.reasoningEffort, !configured.isEmpty { return configured }

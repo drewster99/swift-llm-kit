@@ -92,6 +92,23 @@ public enum ReasoningControl: String, Sendable, Equatable, Hashable, Codable, Ca
         }
     }
 
+    /// Whether the effort-only mechanism's ONE off-form — `reasoning_effort: "none"` (or
+    /// `reasoning.effort` on the Responses dialect) — may be sent.
+    ///
+    /// The MEASURED off-switch outranks the DECLARED ladder. A vendor ladder enumerates the depths
+    /// a user may pick, and `none` is not a depth: the Codex listing omits it for every model, yet
+    /// gpt-5.5 accepts it and gpt-6-astra refuses it (live 2026-09-19). The mechanism probe asks
+    /// exactly that question and records it as `reasoningCanBeDisabled`, so when that fact is
+    /// known it decides; only when nobody has measured it does the ladder's silence on `none`
+    /// stand, failing open on an unknown ladder as before.
+    ///
+    /// ONE rule for the three places that answer it — both request builders and the planned-state
+    /// display — so they cannot drift.
+    public static func effortOffFormPermitted(support: EffortSupport?, capabilities: ModelCapabilities) -> Bool {
+        if let measured = capabilities.state(of: .reasoningCanBeDisabled) { return measured }
+        return support?.rejects("none") != true
+    }
+
     /// The raw body fields that put a reasoning-effort LEVEL on the wire for the given dialect.
     ///
     /// The mechanism is one — depth only, via a named level — but it is spelled two ways: top-level
@@ -324,11 +341,11 @@ extension ReasoningControl {
                 return .off("reasoning_effort: none")
             }
             if reasoningEffort == nil, reasoningEnabled == false {
-                if effortSendable, reasoningEffortSupport?.rejects("none") != true {
+                if effortSendable, effortOffFormPermitted(support: reasoningEffortSupport, capabilities: capabilities) {
                     return .off("reasoning_effort: none")
                 }
                 return .unknown(effortSendable
-                    ? "off requested, but the model's ladder rejects \"none\" — nothing sent"
+                    ? "off requested, but the model rejects \"none\" (measured, or by its ladder) — nothing sent"
                     : "off requested, but reasoning_effort is not measured-supported — nothing sent")
             }
             if let reasoningEffort, effortSendable {
