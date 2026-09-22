@@ -582,6 +582,12 @@ public final class LLMKitManager {
             return
         }
 
+        // The model catalog and metadata refresh date persist across launches; the metadata
+        // actor's provider index does not. Rehydrate it before the same-day fast path returns,
+        // otherwise every valid mapping is reported as an unknown LiteLLM provider until some
+        // unrelated action happens to force a network refresh.
+        await metadataService.loadPersistedMetadataIfNeeded()
+
         // Catalog looks fresh overall; fill in per-provider gaps for providers we
         // could plausibly refresh (saved key or no-auth local type).
         let stragglers = providers.filter { provider in

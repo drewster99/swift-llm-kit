@@ -52,6 +52,16 @@ public actor ModelMetadataService {
         return last != today
     }
 
+    /// Loads the persisted LiteLLM index when this process has not populated it yet.
+    ///
+    /// A same-day app relaunch can legitimately skip the network refresh while still needing to
+    /// reconstruct this actor's in-memory index from the last successful persisted download.
+    public func loadPersistedMetadataIfNeeded() {
+        if providerIndex.isEmpty {
+            loadFromDisk()
+        }
+    }
+
     /// Refreshes the LiteLLM cache if the YYYYMMDD gate allows it.
     public func refreshIfNeeded() async {
         guard needsRefresh() else {

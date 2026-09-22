@@ -99,6 +99,32 @@ struct LiteLLMResolutionTests {
         return service
     }
 
+    @Test("A fresh service rehydrates the persisted provider index")
+    func persistedMetadataRehydratesProviderIndex() async throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("litellm-persistence-tests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data(Self.sampleJSON.utf8).write(to: dir.appendingPathComponent("litellm_metadata.json"))
+
+        let service = ModelMetadataService(
+            storageDirectory: dir,
+            userDefaultsSuiteName: "litellm-persistence-tests-\(UUID().uuidString)"
+        )
+
+        #expect(await service.resolution(
+            forModelID: "claude-fable-5",
+            liteLLMProviderName: "anthropic"
+        ) == .providerNotFound)
+
+        await service.loadPersistedMetadataIfNeeded()
+
+        #expect(await service.resolution(
+            forModelID: "claude-fable-5",
+            liteLLMProviderName: "anthropic"
+        ) == .resolved)
+        #expect(await service.allLiteLLMProviderNames().map(\.name).contains("anthropic"))
+    }
+
     @Test("A bare-keyed Anthropic model resolves via the litellm_provider field")
     func anthropicResolves() async {
         let service = await makeService()
