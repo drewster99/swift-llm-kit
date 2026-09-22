@@ -44,9 +44,37 @@ struct ModelConfigurationOverrideTests {
     @Test("Fallbacks apply only when the model reports no limit and the field is unset")
     func fallbacksOnlyWhenUnknownAndUnset() {
         let resolved = ModelConfigurationOverride().resolved(against: model(maxOutput: nil, maxInput: nil, temp: nil))
-        #expect(resolved.maxOutputTokens == 4096)
+        #expect(resolved.maxOutputTokens == 32_768)
         #expect(resolved.maxContextTokens == 128_000)
         #expect(resolved.temperature == nil)           // no default → omit
+    }
+
+    @Test("An unknown output ceiling uses half of a smaller known context window")
+    func outputFallbackTracksSmallerContextWindow() {
+        let resolved = ModelConfigurationOverride().resolved(
+            against: model(maxOutput: nil, maxInput: 20_000)
+        )
+        #expect(resolved.maxOutputTokens == 10_000)
+        #expect(resolved.maxContextTokens == 20_000)
+    }
+
+    @Test("An explicit context override controls the unknown-output fallback")
+    func outputFallbackTracksOverriddenContextWindow() {
+        let resolved = ModelConfigurationOverride(maxContextTokens: 8_000).resolved(
+            against: model(maxOutput: nil, maxInput: 200_000)
+        )
+        #expect(resolved.maxOutputTokens == 4_000)
+        #expect(resolved.maxContextTokens == 8_000)
+    }
+
+    @Test("The standalone configuration initializer uses the same unknown-output policy")
+    func initializerUsesContextRelativeOutputFallback() {
+        let small = ModelConfiguration(
+            name: "small", providerID: "p", modelID: "m", maxContextTokens: 12_000
+        )
+        let large = ModelConfiguration(name: "large", providerID: "p", modelID: "m")
+        #expect(small.maxOutputTokens == 6_000)
+        #expect(large.maxOutputTokens == 32_768)
     }
 
     @Test("resolved() is a PURE projection: identical inputs give an Equatable-equal value (stable id)")

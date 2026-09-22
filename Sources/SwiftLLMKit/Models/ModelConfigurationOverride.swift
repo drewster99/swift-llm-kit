@@ -70,9 +70,16 @@ public struct ModelConfigurationOverride: Codable, Sendable, Equatable {
 
     /// The effective ``ModelConfiguration`` = the model's resolved defaults with this delta overlaid.
     /// Pure and cheap — call it fresh wherever the config is needed rather than storing the result.
-    /// Fallbacks (4096 / 128000) apply only when the model reports no limit AND the field is un-set.
+    /// The 128K context fallback applies only when the model reports no window and the field is
+    /// un-set. When the output ceiling is also unknown, output defaults to half that resolved
+    /// context window, capped at 32K.
     public func resolved(against modelInfo: ModelInfo, name: String? = nil) -> ModelConfiguration {
-        ModelConfiguration(
+        let resolvedMaxContextTokens = maxContextTokens ?? modelInfo.maxInputTokens ?? 128_000
+        let resolvedMaxOutputTokens = maxOutputTokens
+            ?? modelInfo.maxOutputTokens
+            ?? ModelConfiguration.defaultMaxOutputTokens(forContextWindow: resolvedMaxContextTokens)
+
+        return ModelConfiguration(
             // Deterministic so this projection is genuinely PURE (see the doc above): recomputing it
             // yields an identical value rather than a fresh random `id` that would defeat every
             // equality/`.task(id:)` check downstream. NOT the random `init(id:)` default.
@@ -81,8 +88,8 @@ public struct ModelConfigurationOverride: Codable, Sendable, Equatable {
             providerID: modelInfo.providerID,
             modelID: modelInfo.modelID,
             temperature: temperature ?? modelInfo.samplingDefaults?.temperature,
-            maxOutputTokens: maxOutputTokens ?? modelInfo.maxOutputTokens ?? 4096,
-            maxContextTokens: maxContextTokens ?? modelInfo.maxInputTokens ?? 128_000,
+            maxOutputTokens: resolvedMaxOutputTokens,
+            maxContextTokens: resolvedMaxContextTokens,
             thinkingBudget: thinkingBudget,
             reasoningEnabled: reasoningEnabled,
             effort: effort,

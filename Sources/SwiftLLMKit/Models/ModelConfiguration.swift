@@ -87,7 +87,7 @@ public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
         providerID: String,
         modelID: String,
         temperature: Double? = 0.7,
-        maxOutputTokens: Int = 4096,
+        maxOutputTokens: Int? = nil,
         maxContextTokens: Int = 128_000,
         thinkingBudget: Int? = nil,
         reasoningEnabled: Bool? = nil,
@@ -104,8 +104,10 @@ public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
         self.providerID = providerID
         self.modelID = modelID
         self.temperature = temperature
-        self.maxOutputTokens = maxOutputTokens
         self.maxContextTokens = maxContextTokens
+        self.maxOutputTokens = maxOutputTokens ?? Self.defaultMaxOutputTokens(
+            forContextWindow: maxContextTokens
+        )
         self.thinkingBudget = thinkingBudget
         self.reasoningEnabled = reasoningEnabled
         self.effort = effort
@@ -161,6 +163,17 @@ public struct ModelConfiguration: Codable, Identifiable, Sendable, Equatable {
     /// `useDefaultTemperature` field. Not used by the synthesized encoder.
     private enum LegacyCodingKeys: String, CodingKey {
         case useDefaultTemperature
+    }
+}
+
+// MARK: - Defaults
+
+extension ModelConfiguration {
+    /// Conservative output budget used when neither model metadata nor a probe establishes a
+    /// separate output ceiling. Large-context models receive at most 32K output tokens; smaller
+    /// contexts reserve at least half of the window for input.
+    public static func defaultMaxOutputTokens(forContextWindow contextWindow: Int) -> Int {
+        min(32_768, contextWindow / 2)
     }
 }
 
