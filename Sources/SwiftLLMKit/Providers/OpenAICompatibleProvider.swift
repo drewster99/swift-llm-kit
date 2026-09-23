@@ -578,6 +578,14 @@ struct OpenAICompatibleProvider: LLMProvider {
               let choice = choices.first,
               let message = choice["message"] as? [String: Any]
         else {
+            // Some servers (oMLX's prefill memory guard, 2026-09-23) report a failure as an error
+            // object on an HTTP 200. That is the server saying no with a typed code and a reason,
+            // not a body we failed to understand — reported as a parse failure it lost both, and
+            // retry policies could not tell it from a truncated stream.
+            if let serverError = LLMProviderError.serverErrorObject(in: json) {
+                logger.error("Server returned an error object on HTTP 2xx: code=\(serverError.code ?? "nil", privacy: .public) message=\(serverError.message, privacy: .public)")
+                throw LLMProviderError.responseFailed(code: serverError.code, message: serverError.message)
+            }
             let keys = json.keys.sorted().joined(separator: ", ")
             let preview = String(data: data.prefix(500), encoding: .utf8) ?? "(\(data.count) bytes)"
             logger.error("Missing choices[0].message in response. Keys: \(keys, privacy: .public) Body: \(preview, privacy: .public)")

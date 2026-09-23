@@ -59,6 +59,67 @@ public enum LLMProviderError: Error, LocalizedError {
         return ContentPolicyRefusalCode(rawValue: code)
     }
 
+    /// Error codes with which a server rejects a request because it lacks the MEMORY to run it.
+    ///
+    /// Neither a malformed request nor a content refusal: resending unchanged can succeed once the
+    /// server frees memory, and sending less context is what reliably helps. Keyed on the server's
+    /// typed `error.code`, never on its prose.
+    public enum ServerMemoryExhaustionCode: String, Sendable, CaseIterable {
+        /// oMLX's prefill memory guard, observed live 2026-09-23 on an HTTP 200 chat/completions
+        /// body: "Prefill would require ~53.28 GB peak … but dynamic ceiling is 51.58 GB".
+        case omlxPrefillMemoryExceeded = "prefill_memory_exceeded"
+    }
+
+    /// The typed memory-exhaustion rejection this error carries, or nil when it is not one.
+    ///
+    /// Reads a ``responseFailed`` code (the error object arrived on an HTTP 200) and also an
+    /// ``httpError`` body's error object, so the answer doesn't change if a server starts sending
+    /// the same rejection with a non-2xx status.
+    public var serverMemoryExhaustion: ServerMemoryExhaustionCode? {
+        switch self {
+        case .responseFailed(let code?, _):
+            return ServerMemoryExhaustionCode(rawValue: code)
+        case .httpError(_, let body, _, _):
+            guard let data = body.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let code = Self.serverErrorObject(in: json)?.code else { return nil }
+            return ServerMemoryExhaustionCode(rawValue: code)
+        default:
+            return nil
+        }
+    }
+
+    /// The error object an OpenAI-shaped body carries in place of a result, or nil when it has none.
+    ///
+    /// Accepts both shapes seen in the wild: `{"error": {"code", "message", …}}` and
+    /// `{"error": "text"}`. A numeric `code` is rendered as its decimal string. A JSON-null or
+    /// absent `error` is not an error object.
+    static func serverErrorObject(in json: [String: Any]) -> (code: String?, message: String)? {
+        switch json["error"] {
+        case let text as String:
+            return (code: nil, message: text)
+        case let object as [String: Any]:
+            let code: String?
+            switch object["code"] {
+            case let text as String: code = text
+            case let number as NSNumber: code = number.stringValue
+            default: code = nil
+            }
+            let message: String
+            if let text = object["message"] as? String {
+                message = text
+            } else if let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
+                      let text = String(data: data, encoding: .utf8) {
+                message = text
+            } else {
+                message = "unknown error"
+            }
+            return (code: code, message: message)
+        default:
+            return nil
+        }
+    }
+
     public var errorDescription: String? {
         switch self {
         case .invalidResponse:
