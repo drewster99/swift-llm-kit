@@ -27,8 +27,8 @@ struct ThinkingBudgetRangeTests {
                   overrides: LLMCallOverrides) async throws -> LLMResponse {
             recorder.attempts.append(budget)
             switch recorder.accept(budget) {
-            case true: return LLMResponse(text: "ok")
-            case false: throw LLMProviderError.httpError(statusCode: 400, body: "budget too large")
+            case true?: return LLMResponse(text: "ok")
+            case false?: throw LLMProviderError.httpError(statusCode: 400, body: "budget too large")
             case nil: throw LLMProviderError.invalidResponse   // classified as "no answer"
             }
         }
@@ -184,8 +184,8 @@ struct ThinkingBudgetMinimumTests {
                   overrides: LLMCallOverrides) async throws -> LLMResponse {
             recorder.attempts.append(budget)
             switch recorder.accept(budget) {
-            case true: return LLMResponse(text: "ok")
-            case false: throw LLMProviderError.httpError(statusCode: 400, body: "budget below minimum")
+            case true?: return LLMResponse(text: "ok")
+            case false?: throw LLMProviderError.httpError(statusCode: 400, body: "budget below minimum")
             case nil: throw LLMProviderError.invalidResponse
             }
         }

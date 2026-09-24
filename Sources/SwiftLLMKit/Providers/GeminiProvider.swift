@@ -169,13 +169,13 @@ struct GeminiProvider: LLMProvider {
         // Gemini's documented way to turn thinking off.
         let geminiBudget: Int? = {
             switch overrides.reasoningEnabled ?? configuration.reasoningEnabled {
-            case .some(false):
+            case false?:
                 return 0                                    // Gemini's documented "off"
-            case .some(true):
+            case true?:
                 // An explicit ON must beat a configured zero, which would otherwise disable it.
                 let requested = overrides.thinkingBudgetTokens ?? configuration.thinkingBudget ?? 0
                 return requested > 0 ? requested : ThinkingBudget.minimumTokens
-            case .none:
+            case nil:
                 return overrides.thinkingBudgetTokens ?? configuration.thinkingBudget
             }
         }()

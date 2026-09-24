@@ -1387,7 +1387,7 @@ public enum ModelProber {
 
         // If the whole allowance is accepted there is no ceiling to find inside it.
         switch await accepts(ceiling) {
-        case true:
+        case true?:
             // …unless the bound came from the OTHER limit. `searchCeiling` falls back when the
             // preferred limit is unknown, and a context window is not an output allowance: accepting
             // it says the endpoint tolerated a number, not that the number is a thinking budget.
@@ -1405,7 +1405,7 @@ public enum ModelProber {
         case nil:
             return .inconclusive("the endpoint gave no usable answer at \(ceiling)",
                                  duration: Date().timeIntervalSince(started))
-        case false:
+        case false?:
             break
         }
 
@@ -1413,13 +1413,13 @@ public enum ModelProber {
         var low = ThinkingBudget.minimumTokens
         var high = ceiling
         switch await accepts(low) {
-        case false:
+        case false?:
             return .established(0, "rejected even the minimum budget of \(low) — no usable budget range",
                                 duration: Date().timeIntervalSince(started))
         case nil:
             return .inconclusive("the endpoint gave no usable answer at the \(low)-token minimum",
                                  duration: Date().timeIntervalSince(started))
-        case true:
+        case true?:
             break
         }
 
@@ -1428,8 +1428,8 @@ public enum ModelProber {
         while high - low > ThinkingBudget.minimumTokens {
             let midpoint = low + (high - low) / 2
             switch await accepts(midpoint) {
-            case true: low = midpoint
-            case false: high = midpoint
+            case true?: low = midpoint
+            case false?: high = midpoint
             case nil:
                 return .established(low, "largest accepted budget before the endpoint stopped answering (≥ \(low))",
                                     duration: Date().timeIntervalSince(started))
@@ -1498,7 +1498,7 @@ public enum ModelProber {
 
         let hypothesis = min(ThinkingBudget.minimumTokens, knownAcceptedBudget)
         switch await accepts(hypothesis) {
-        case true:
+        case true?:
             // Confirm it is the FLOOR and not merely an accepted value: one call just below settles
             // the documented case outright.
             high = hypothesis
@@ -1507,19 +1507,19 @@ public enum ModelProber {
                                     duration: elapsed())
             }
             switch await accepts(hypothesis - 1) {
-            case false:
+            case false?:
                 return .established(hypothesis, "exactly \(hypothesis): accepted, and \(hypothesis - 1) rejected",
                                     duration: elapsed())
             case nil:
                 return .established(hypothesis, "smallest budget seen accepted (\(hypothesis)); the endpoint "
                                               + "stopped answering below it, so a lower floor cannot be ruled out",
                                     duration: elapsed())
-            case true:
+            case true?:
                 high = hypothesis - 1
             }
         case nil:
             return .inconclusive("the endpoint gave no usable answer at \(hypothesis)", duration: elapsed())
-        case false:
+        case false?:
             // The documented floor is REJECTED — the interesting case, and the reason this probe
             // exists. The real minimum is above it, somewhere below the cap.
             low = hypothesis
@@ -1534,8 +1534,8 @@ public enum ModelProber {
                 high = upper
             } else {
                 switch await accepts(upper) {
-                case true: high = upper
-                case false:
+                case true?: high = upper
+                case false?:
                     return .inconclusive("the minimum is above the \(searchCap)-token search cap — raise the cap "
                                        + "to measure it rather than record the cap as if it were the answer",
                                          duration: elapsed())
@@ -1550,8 +1550,8 @@ public enum ModelProber {
         while high - low > 1 {
             let midpoint = low + (high - low) / 2
             switch await accepts(midpoint) {
-            case true: high = midpoint
-            case false: low = midpoint
+            case true?: high = midpoint
+            case false?: low = midpoint
             case nil:
                 return .established(high, "smallest budget seen accepted (\(high)) before the endpoint stopped "
                                         + "answering; the true floor may be as low as \(low + 1)",
