@@ -270,7 +270,7 @@ API keys live in Keychain via `KeychainService`, keyed by provider ID. `apiKeyCh
 
 ### Logging
 
-`LLMRequestLogger` writes full request/response JSON to `$TMPDIR/SwiftLLMKit-Logs/`. Enabled per-`LLMKitManager` via `verboseLogging = true`. **Logs include API keys in headers and full prompt/response content** — there's a planned ROADMAP item to filter sensitive fields. `os.Logger` is used for everything else (subsystem `"SwiftLLMKit"`, per-file category).
+`LLMRequestLogger` writes full request/response JSON to `$TMPDIR/SwiftLLMKit-Logs/`. Enabled per-`LLMKitManager` via `verboseLogging = true`. Headers are deliberately NOT written (so API keys stay out), but **full prompt/response content is**. `os.Logger` is used for everything else (subsystem `"SwiftLLMKit"`, per-file category).
 
 ## Project conventions
 

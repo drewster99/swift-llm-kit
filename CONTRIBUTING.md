@@ -64,7 +64,7 @@ The most useful reports include the provider, the model ID, and the request and
 response JSON. Set `verboseLogging = true` on your `LLMKitManager` to write them
 to `$TMPDIR/SwiftLLMKit-Logs/`.
 
-> **Before you attach those logs, remove your API keys.** The request logs currently include auth headers.
+> Headers (and so API keys) are not written to these logs, but they do contain your full prompts and responses. Remove anything private before attaching them.
 
 Security problems go through [SECURITY.md](SECURITY.md), not public issues.
 

@@ -19,4 +19,4 @@ Only the latest tagged release receives fixes.
 ## Things worth knowing
 
 - API keys are stored in the macOS Keychain, not in UserDefaults or on disk.
-- `verboseLogging` writes full request and response bodies to `$TMPDIR/SwiftLLMKit-Logs/`, **including auth headers**. Never enable it in production builds. Redaction is tracked as an open issue.
+- `verboseLogging` writes full request and response bodies (prompts, responses, tool arguments) to `$TMPDIR/SwiftLLMKit-Logs/`. Headers are not written, so API keys stay out of the logs, but the content itself may be sensitive. Leave it off in production builds.

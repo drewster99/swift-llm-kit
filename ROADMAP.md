@@ -203,7 +203,7 @@ Minimal test coverage exists. Add tests for:
 
 ### Verbose logging security warning
 `LLMRequestLogger` writes full request/response JSON to disk, which can include API keys in headers/URLs and sensitive model responses. The log methods are public and can be enabled by any code. Consider:
-- Filtering sensitive headers before writing
+- ~~Filtering sensitive headers before writing~~ ✅ Completed — headers are no longer written at all (`LLMRequestLogger.logBodylessRequest` and `logRequest` record URL and body only)
 - Adding a prominent warning in the doc comment
 - Requiring explicit opt-in (e.g. a configuration flag rather than a static property)
 
