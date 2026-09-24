@@ -434,12 +434,12 @@ extension ReasoningControl {
                     : .unknown("thinkingConfig not measured-supported — nothing sent, model default applies")
             }
             switch reasoningEnabled {
-            case false:
+            case .some(false):
                 return gated(.off("thinkingConfig.thinkingBudget: 0"))
-            case true:
+            case .some(true):
                 let sent = budget > 0 ? budget : ThinkingBudget.minimumTokens
                 return gated(.on("thinkingConfig.thinkingBudget: \(sent.formatted())"))
-            case nil:
+            case .none:
                 if budget > 0 { return gated(.on("thinkingConfig.thinkingBudget: \(budget.formatted())")) }
                 if inputs.thinkingBudget == 0 { return gated(.off("thinkingConfig.thinkingBudget: 0")) }
                 return .unknown("nothing sent — model default (dynamic thinking) applies")
