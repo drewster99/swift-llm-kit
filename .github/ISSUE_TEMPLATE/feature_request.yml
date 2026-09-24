@@ -1,0 +1,27 @@
+name: Feature request
+description: Suggest an improvement or a new capability
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the use case first, before any particular solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What the API or behavior could look like. Code sketches are welcome.
+  - type: textarea
+    id: docs
+    attributes:
+      label: Vendor documentation
+      description: Links to the provider docs for any wire parameters involved.
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contributing
+      options:
+        - label: I'd like to implement this myself

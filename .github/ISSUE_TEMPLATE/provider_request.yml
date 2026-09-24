@@ -1,0 +1,35 @@
+name: New provider or model support
+description: Request a new built-in provider, or report a model whose capabilities are wrong
+labels: ["provider"]
+body:
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Request type
+      options:
+        - New built-in provider
+        - A model's capabilities or metadata are wrong
+        - A provider's wire format changed
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: Provider and model(s)
+      placeholder: "e.g. Cerebras / llama-4-scout"
+    validations:
+      required: true
+  - type: input
+    id: docs
+    attributes:
+      label: API documentation
+      placeholder: "https://…"
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: |
+        Is the endpoint OpenAI-compatible? What differs (auth, parameters, response shape)?
+        For a wrong capability, say what the catalog reports and what the model actually does.

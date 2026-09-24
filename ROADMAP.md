@@ -1,5 +1,7 @@
 # SwiftLLMKit — Roadmap
 
+This file holds the longer-term plans and the reasoning behind them. Concrete, claimable work items are tracked as [GitHub issues](https://github.com/drewster99/swift-llm-kit/issues).
+
 ## Completed
 
 ### ~~Effort split, reasoning control, and the model capability contract~~ ✅ Completed 2026-08-03 (0.0.139 – 0.0.143)

@@ -1,0 +1,48 @@
+name: Bug report
+description: Something doesn't work the way it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! Please **remove API keys** from anything you paste below.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: Provider and model
+      placeholder: "e.g. builtin.anthropic / claude-sonnet-5"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: SwiftLLMKit version
+      placeholder: "e.g. 0.0.210"
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Code to reproduce
+      description: The smallest snippet that shows the problem.
+      render: swift
+  - type: textarea
+    id: logs
+    attributes:
+      label: Request / response JSON
+      description: |
+        With `verboseLogging = true` on `LLMKitManager`, requests and responses are written to `$TMPDIR/SwiftLLMKit-Logs/`.
+        **Remove auth headers and API keys before pasting.**
+      render: json
+  - type: input
+    id: environment
+    attributes:
+      label: macOS and Xcode version
+      placeholder: "e.g. macOS 26.1, Xcode 26.1"

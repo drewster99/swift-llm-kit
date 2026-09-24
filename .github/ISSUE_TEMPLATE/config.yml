@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/drewster99/swift-llm-kit/discussions
+    about: Ask how to do something, or float an idea before filing an issue.
+  - name: Report a security vulnerability
+    url: https://github.com/drewster99/swift-llm-kit/security/advisories/new
+    about: Please report security issues privately.
