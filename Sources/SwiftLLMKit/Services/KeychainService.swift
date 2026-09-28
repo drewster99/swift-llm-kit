@@ -82,11 +82,50 @@ struct KeychainService: Sendable {
             addQuery[kSecValueData as String] = data
             addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
             let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
-            guard addStatus == errSecSuccess else {
-                throw KeychainError.saveFailed(status: addStatus)
+
+            switch Self.nextStep(afterAddStatus: addStatus) {
+            case .succeeded:
+                break
+
+            case .retryUpdate:
+                // Another writer (a concurrent `save` for the same provider, on
+                // another thread or in another process) added the item in the
+                // window between our SecItemUpdate above returning
+                // errSecItemNotFound and this SecItemAdd running. The item
+                // exists now, so retry the update instead of failing an
+                // operation that would otherwise succeed.
+                let retryStatus = SecItemUpdate(query as CFDictionary, updateAttributes as CFDictionary)
+                guard retryStatus == errSecSuccess else {
+                    throw KeychainError.saveFailed(status: retryStatus)
+                }
+
+            case .failed(let status):
+                throw KeychainError.saveFailed(status: status)
             }
         } else if updateStatus != errSecSuccess {
             throw KeychainError.saveFailed(status: updateStatus)
+        }
+    }
+
+    /// What `saveImpl` should do after `SecItemAdd` runs following an
+    /// `errSecItemNotFound` update.
+    ///
+    /// Pure and unit-testable on its own, since driving the real race through
+    /// the Keychain isn't practical in CI.
+    enum AddStep: Equatable {
+        case succeeded
+        case retryUpdate
+        case failed(OSStatus)
+    }
+
+    static func nextStep(afterAddStatus addStatus: OSStatus) -> AddStep {
+        switch addStatus {
+        case errSecSuccess:
+            return .succeeded
+        case errSecDuplicateItem:
+            return .retryUpdate
+        default:
+            return .failed(addStatus)
         }
     }
 
