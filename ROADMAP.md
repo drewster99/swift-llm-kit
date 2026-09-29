@@ -195,8 +195,10 @@ Minimal test coverage exists. Add tests for:
 ### Add protocol abstraction for networking
 `ModelFetchService` and `ModelMetadataService` use `URLSession.shared` directly, making unit testing difficult. Inject a protocol (or closure) for HTTP calls so tests can provide mock responses without hitting real APIs.
 
-### Keychain thread safety
+### ~~Keychain thread safety~~ ✅ Completed
 `KeychainService.save()` calls `SecItemUpdate` then falls back to `SecItemAdd`. Between these calls, another thread could insert the item, causing both to fail. Consider using a lock or serial queue for keychain operations.
+- ~~Fixed~~ — `saveImpl` now retries `SecItemUpdate` once when `SecItemAdd` reports `errSecDuplicateItem` (a concurrent save won the race), via `KeychainService.nextStep(afterAddStatus:)` (#27, closes #15).
+- A related issue remains open: the in-memory cache and the Keychain write aren't covered by one lock, so the cache can diverge from what's actually stored under concurrent saves. Tracked as #28.
 
 ### `PreparedRequest.baseBody` mutation safety
 `PreparedRequest` is `@unchecked Sendable` with a `[String: Any]` dictionary marked as "effectively immutable" by convention. There's no enforcement — callers could mutate it from another isolation domain. Consider making it truly immutable (e.g. copy-on-create, or a sealed wrapper type).
