@@ -35,7 +35,13 @@ public final class LLMKitManager {
     /// Most recent persistence error, if any. Observable so UI can show an alert/banner.
     public var persistenceError: String?
     /// When true, providers created by `makeProvider(for:)` will log full request/response JSON.
-    public var verboseLogging: Bool = false
+    ///
+    /// Also drives ``LLMRequestLogger/verboseLogging``, the package's single verbose-logging
+    /// switch, so model-fetch and LiteLLM-metadata requests log alongside chat traffic instead of
+    /// needing their own flags flipped separately.
+    public var verboseLogging: Bool = false {
+        didSet { LLMRequestLogger.verboseLogging = verboseLogging }
+    }
     /// Errors from the most recent model refresh, keyed by provider name.
     public private(set) var refreshErrors: [String: String] = [:]
 

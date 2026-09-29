@@ -13,6 +13,22 @@ public enum LLMRequestLogger {
     /// Set this early at app launch (before any providers are created) to customize.
     public nonisolated(unsafe) static var logDirectoryName = "SwiftLLMKit-Logs"
 
+    /// The single verbose-logging switch for the whole package: chat requests, model-fetch
+    /// requests, and LiteLLM metadata requests all gate on this one flag.
+    ///
+    /// `ModelFetchService.verboseLogging` and `ModelMetadataService.verboseLogging` used to be
+    /// their own independent `nonisolated(unsafe) static var`s — three unsynchronized copies of
+    /// the same on/off switch, none of which `LLMKitManager.verboseLogging` actually drove. A host
+    /// app that set the manager's flag got chat logging only; fetch and metadata logging silently
+    /// stayed off unless the app remembered to flip those two flags too. They now forward here, and
+    /// `OSAllocatedUnfairLock` replaces the unsynchronized statics so toggling from one isolation
+    /// domain while a provider reads from another can't race.
+    private static let verboseLoggingStorage = OSAllocatedUnfairLock<Bool>(initialState: false)
+    public static var verboseLogging: Bool {
+        get { verboseLoggingStorage.withLock { $0 } }
+        set { verboseLoggingStorage.withLock { $0 = newValue } }
+    }
+
     // MARK: - Log directory
 
     /// Lazily-created log directory. Uses `logDirectoryName` at first access.

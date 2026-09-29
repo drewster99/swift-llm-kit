@@ -11,7 +11,13 @@ private let logger = Logger(subsystem: "SwiftLLMKit", category: "ModelMetadata")
 public actor ModelMetadataService {
     /// When true, the LiteLLM fetch's request line and response are logged via ``LLMRequestLogger``,
     /// into whichever directory it is configured to use — the same one the chat traffic uses.
-    public nonisolated(unsafe) static var verboseLogging = false
+    ///
+    /// Forwards to ``LLMRequestLogger/verboseLogging``, the package's single verbose-logging
+    /// switch — kept as a same-named static here so existing callers don't need to change.
+    public static var verboseLogging: Bool {
+        get { LLMRequestLogger.verboseLogging }
+        set { LLMRequestLogger.verboseLogging = newValue }
+    }
 
     private let storageDirectory: URL
     private let userDefaults: UserDefaults

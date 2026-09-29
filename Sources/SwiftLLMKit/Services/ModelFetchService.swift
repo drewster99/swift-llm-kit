@@ -7,7 +7,13 @@ private let logger = Logger(subsystem: "SwiftLLMKit", category: "ModelFetch")
 public struct ModelFetchService: Sendable {
     /// When true, the full request line and response JSON are logged via ``LLMRequestLogger``,
     /// into whichever directory it is configured to use — the same one the chat traffic uses.
-    public nonisolated(unsafe) static var verboseLogging = false
+    ///
+    /// Forwards to ``LLMRequestLogger/verboseLogging``, the package's single verbose-logging
+    /// switch — kept as a same-named static here so existing callers don't need to change.
+    public static var verboseLogging: Bool {
+        get { LLMRequestLogger.verboseLogging }
+        set { LLMRequestLogger.verboseLogging = newValue }
+    }
 
     public init() {}
 
