@@ -206,8 +206,8 @@ Minimal test coverage exists. Add tests for:
 ### Verbose logging security warning
 `LLMRequestLogger` writes full request/response JSON to disk, which can include API keys in headers/URLs and sensitive model responses. The log methods are public and can be enabled by any code. Consider:
 - ~~Filtering sensitive headers before writing~~ ✅ Completed — headers are no longer written at all (`LLMRequestLogger.logBodylessRequest` and `logRequest` record URL and body only)
-- Adding a prominent warning in the doc comment
-- Requiring explicit opt-in (e.g. a configuration flag rather than a static property)
+- ~~Adding a prominent warning in the doc comment~~ ✅ Completed — `LLMRequestLogger`'s type doc now carries an explicit `- Warning:` covering what does and doesn't get written
+- Requiring explicit opt-in (e.g. a configuration flag rather than a static property) — still open; `verboseLogging` is already off by default and requires a caller to flip it, but it's a public static rather than a scoped/injected flag
 
 ### Streaming support
 The `LLMProvider` protocol is synchronous (`async throws -> LLMResponse`). `ModelConfiguration.streaming` is captured but never used by the providers. Add a streaming variant to the protocol (e.g. returning an `AsyncSequence` of partial responses) or document that streaming is not yet implemented.
@@ -243,5 +243,6 @@ The `LLMProvider.send()` method throws untyped errors. Callers cannot distinguis
 ### Replace `[String: Any]` dictionary construction with Codable structs
 All providers build API request bodies as `[String: Any]` dictionaries. This has no compile-time checking that keys or value types match the API schema. Consider defining Codable request/response structs per provider for type safety and easier maintenance.
 
-### Unit tests for `OllamaProvider.normalizeMessages`
+### ~~Unit tests for `OllamaProvider.normalizeMessages`~~ ✅ Completed
 `OllamaProvider.normalizeMessages` is ~60 lines of complex state management handling role alternation, tool call merging, and edge cases. It works but is hard to verify by inspection. Add targeted unit tests covering the key scenarios (consecutive same-role messages, interleaved tool calls, empty messages).
+- `Tests/SwiftLLMKitTests/OllamaRoleAlternationTests.swift` covers consecutive same-role merging, tool-role stripping, strict user/assistant alternation after a tool result, and document-attachment rejection.

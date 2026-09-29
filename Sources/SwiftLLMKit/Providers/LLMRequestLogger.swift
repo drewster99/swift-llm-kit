@@ -8,6 +8,12 @@ private let loggerOS = Logger(subsystem: "SwiftLLMKit", category: "LLMRequestLog
 /// When called, full JSON request and response bodies are written to
 /// `$TMPDIR/<logDirectoryName>/` with timestamped filenames.
 /// Callers decide whether to log based on their own `verboseLogging` flag.
+///
+/// - Warning: Enabling ``verboseLogging`` writes complete, unredacted request and response bodies
+///   to disk — including whatever the caller put in the prompt or the model returned in its reply.
+///   Request headers are never written (so bearer tokens and `x-api-key` stay out), but a provider
+///   that embeds a credential in the URL or body would still have it logged. Only enable this for
+///   local debugging, and treat `$TMPDIR/<logDirectoryName>/` as sensitive while it does.
 public enum LLMRequestLogger {
     /// Name of the subdirectory under `$TMPDIR` where log files are written.
     /// Set this early at app launch (before any providers are created) to customize.
