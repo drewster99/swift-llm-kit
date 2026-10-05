@@ -502,15 +502,20 @@ struct OpenAICompatibleProvider: LLMProvider {
         }
 
         // Replay reasoning_content for thinking models that require it (DeepSeek
-        // V4 Pro). Gated on the per-model `replayReasoningContent` flag because
+        // V4 Pro / Flash). Gated on the per-model `replayReasoningContent` flag because
         // other reasoning models reject this field on replay (e.g. deepseek-reasoner).
         // Only meaningful on assistant turns — `tool` (the rewritten toolResult role)
         // and `user`/`system` never carry reasoning.
-        if behaviorFlags.replayReasoningContent,
-           message.role == .assistant,
-           let reasoning = message.reasoning,
-           !reasoning.isEmpty {
-            result["reasoning_content"] = reasoning
+        //
+        // EVERY assistant turn carries the field, empty when the turn has no reasoning:
+        // DeepSeek's thinking-mode docs require reasoning_content "passed back to the API in
+        // all subsequent requests" whenever the request carries tools, and return 400 when it
+        // is missing. A turn with none — written by another model before a mid-conversation
+        // switch, or a DeepSeek turn that produced no reasoning — used to omit the field and so
+        // failed the whole request. The empty string is what other integrations send for such
+        // turns (no live verification here: api-docs.deepseek.com/guides/thinking_mode, 2026-10-05).
+        if behaviorFlags.replayReasoningContent, message.role == .assistant {
+            result["reasoning_content"] = message.reasoning ?? ""
         }
 
         return result

@@ -76,12 +76,25 @@ struct OpenAIReasoningContentReplayTests {
         #expect(encoded["reasoning_content"] == nil)
     }
 
-    @Test("flag on + assistant text without reasoning → reasoning_content absent")
-    func absentReasoningStaysAbsent() {
+    @Test("flag on + assistant turn without reasoning → reasoning_content is an empty string")
+    func absentReasoningIsSentEmpty() {
+        // DeepSeek requires the field on every assistant turn of a tools request; a turn written by
+        // another model (a mid-conversation switch) has none, and omitting the field is a 400.
         let p = provider(flags: BehaviorFlags(replayReasoningContent: true))
+        let text = LLMMessage(_role: .assistant, _content: .text("ack"))
+        #expect(p.encodeMessage(text)["reasoning_content"] as? String == "")
+        let toolCall = LLMMessage(
+            _role: .assistant,
+            _content: .toolCalls([LLMToolCall(id: "c00000001", name: "noop", arguments: "{}")])
+        )
+        #expect(p.encodeMessage(toolCall)["reasoning_content"] as? String == "")
+    }
+
+    @Test("flag off + assistant turn without reasoning → reasoning_content absent")
+    func flagOffStaysAbsent() {
+        let p = provider(flags: BehaviorFlags(replayReasoningContent: false))
         let msg = LLMMessage(_role: .assistant, _content: .text("ack"))
-        let encoded = p.encodeMessage(msg)
-        #expect(encoded["reasoning_content"] == nil)
+        #expect(p.encodeMessage(msg)["reasoning_content"] == nil)
     }
 
     @Test("LLMMessage round-trips reasoning through Codable")
