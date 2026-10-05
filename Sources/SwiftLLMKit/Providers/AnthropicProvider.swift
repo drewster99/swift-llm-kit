@@ -75,6 +75,9 @@ struct AnthropicProvider: LLMProvider {
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
 
         let body = try buildRequestBody(messages: messages, tools: tools, overrides: overrides)
+        if let beta = Self.betaHeader(forBody: body, endpoint: provider.endpoint) {
+            request.setValue(beta, forHTTPHeaderField: "anthropic-beta")
+        }
         // .sortedKeys keeps wire bytes stable across requests so Anthropic's
         // prompt cache (which is byte-prefix matched) keeps hitting.
         let requestData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
@@ -101,6 +104,24 @@ struct AnthropicProvider: LLMProvider {
         }
 
         return try parseResponse(data: data)
+    }
+
+    /// The beta that enables `thinking.block_binding`.
+    static let thinkingBindingBeta = "thinking-binding-controls-2026-08-01"
+
+    /// Whether `endpoint` is Anthropic's own API, where `thinking.block_binding` and its beta header
+    /// are documented. Anything else speaking the Anthropic wire format gets the plain request.
+    static func sendsThinkingBlockBinding(to endpoint: URL) -> Bool {
+        endpoint.host?.lowercased() == "api.anthropic.com"
+    }
+
+    /// The `anthropic-beta` header a built request needs, or nil. Derived from the body itself, so
+    /// the header is present exactly when the body carries the field it enables.
+    static func betaHeader(forBody body: [String: Any], endpoint: URL) -> String? {
+        guard sendsThinkingBlockBinding(to: endpoint),
+              let thinking = body["thinking"] as? [String: Any],
+              thinking["block_binding"] != nil else { return nil }
+        return thinkingBindingBeta
     }
 
     /// Convenience overload for tests that only care about a couple of knobs.
@@ -299,6 +320,23 @@ struct AnthropicProvider: LLMProvider {
                     body["thinking"] = ["type": "enabled", "budget_tokens": sent] as [String: Any]
                 }
             }
+        }
+
+        // Preserved thinking (Claude Fable 5.1, Opus 5.5, Sonnet 5.5, Mythos 5.1): the API checks
+        // each replayed thinking block against everything before it, and an edited earlier
+        // message, a changed `system`, or ANY change to `tools` invalidates it. For accounts created
+        // on or after 2026-08-31 the default is a 400 ("Invalid `signature` in `thinking` block…").
+        // Agent loops edit all three routinely — they prune history, rewrite the system prompt, and
+        // vary the tool list per turn — so a long conversation would fail on its next request.
+        // `drop_block` tells the API to drop an invalidated block instead, which is always valid
+        // (the model just loses that reasoning). Models that don't run the check accept the object
+        // and ignore it, so it is sent with every thinking request — but only to Anthropic's own
+        // API: a third-party Anthropic-compatible endpoint may reject an unknown field.
+        // platform.claude.com/docs/en/build-with-claude/preserved-thinking, checked 2026-10-05.
+        if Self.sendsThinkingBlockBinding(to: provider.endpoint),
+           var thinking = body["thinking"] as? [String: Any] {
+            thinking["block_binding"] = ["prefix_mismatch_behavior": "drop_block"] as [String: Any]
+            body["thinking"] = thinking
         }
 
         // Top-level `output_config.effort` (independent of thinking mode). Anthropic
