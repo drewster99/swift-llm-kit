@@ -1,7 +1,5 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
 ## Repository Overview
 
 SwiftLLMKit is a Swift Package (library, no executable) targeting macOS 15+ with Swift 6 strict concurrency. It manages LLM providers, model catalogs, configurations, and authenticated request preparation for multi-provider chat/tool-use applications. The package is consumed by host apps via SPM.
@@ -10,13 +8,13 @@ SwiftLLMKit is a Swift Package (library, no executable) targeting macOS 15+ with
 
 This is a Swift Package (no `.xcodeproj` or `.xcworkspace`) that ships compiled resources
 (`Resources/*.json`). The drews-xcode-mcp tools refuse a bare package directory, so this repo is
-the one exception to the parent CLAUDE.md's xcode-mcp rule: build and test with the package
+the one exception to the global 'use drews-xcode-mcp' rule: build and test with the package
 toolchain from the repo root, and **delete the `.build` folder afterwards** (it is git-ignored, but
 must never be committed).
 
 ```
 cd /Users/andrew/cursor/swift-llm-kit
-swift test                                   # full suite (~800 tests, ~1s once built)
+swift test                                   # full suite (hundreds of tests, ~1s once built)
 swift test --filter Codex                    # one area
 CODEX_LIVE_SMOKE=1 swift test --filter CodexLiveSmoke   # live calls against the real Codex endpoint
 rm -rf .build
@@ -42,7 +40,7 @@ To send a request, the host either:
 - Calls `makeProvider(for: configurationID)` to get a fully-built `LLMProvider` and calls `.send(messages:tools:)`, **or**
 - Calls `prepareRequest(for: configurationID)` to get a `PreparedRequest` (URL + auth headers + base body dict) and finishes constructing the body itself.
 
-Note the duplication between these two paths is a known issue tracked in ROADMAP.md ("Deprecate or reconcile `prepareRequest(for:)`").
+Request preparation logic is duplicated across `prepareRequest` and the individual `*Provider` adapters. This is a known issue tracked in ROADMAP.md ("Deprecate or reconcile `prepareRequest(for:)`"); when changing one provider, search for the others.
 
 ### Provider abstraction (`Providers/`)
 
@@ -108,7 +106,7 @@ described would be a behaviour change, not a safety measure.
 **A RECORDED mechanism is gated strictly; the legacy `apiType` fallback is not.** That distinction is
 the whole meaning of "nil keeps the legacy behaviour" — no Alibaba model has its capabilities
 recorded, so applying the strict gates to the fallback would stop sending `thinking_budget` to every
-one of them. Both read per-model catalog data
+one of them. Both effort gates (general and reasoning) read per-model catalog data
 injected at provider construction, the same path `behaviorFlags` travels — never an `apiType` branch.
 
 `BehaviorFlags.supportsReasoningEffort` is RETIRED; its 18 bundled entries migrated to
@@ -127,7 +125,7 @@ control" case is spelled **`unsupported`, never `none`**: the type is nearly alw
 `ReasoningControl?`, where `.none` binds to `Optional.none`, so "has no reasoning knob" and "nobody
 has said" would be written identically and mean opposite things.
 
-**`nil` keeps the legacy `apiType` behaviour rather than emitting nothing.** Silently disabling
+**`nil` keeps the legacy `apiType` behaviour rather than emitting nothing** (see "A RECORDED mechanism is gated strictly" above). Silently disabling
 reasoning on every not-yet-recorded model is a regression dressed up as caution.
 
 Whether reasoning can be turned on and whether it can be turned OFF are SEPARATE capabilities
@@ -193,15 +191,6 @@ A capability must also not share a spelling with a request KNOB. `thinkingBudget
 capability and an `Int?` on `LLMCallOverrides`, twenty lines apart in the same file; it is
 `thinkingSupportsTokenBudget` now.
 
-**`ModelCapability` rawValues are the persisted keys and are PINNED explicitly**, with a guard test
-asserting them against an independent table plus completeness. They were implicit, so a rename
-silently rewrote the key and orphaned every record using it — `vision` alone is in 1,414. Renaming a
-case is free; changing a wire string fails the build. When a wire string genuinely must change, it
-is a one-time script (`scripts/migrate_capability_wire_names.py`) run with the app quit, landing in
-the SAME commit as the pin change — the app reads exactly one spelling at a time. A record carrying
-an unmigrated spelling decodes with that capability ABSENT, never wrong, which is silent; that is
-why the script verifies zero survivors rather than trusting the pass.
-
 ### One source per wire shape, and per gate rule
 
 Both of these were duplicated, both drifted-in-waiting, and both cost a real bug before they were
@@ -228,8 +217,7 @@ drifted encoder ships a wrong capability table, which then suppresses a working 
 "this model cannot force a tool call" — flatly wrong for Claude. Likewise `CapabilityProbe` must not
 claim it FORCED a call through a field the provider suppressed, which is why it shares the gate
 rather than re-deriving it.
-
-**Switch exhaustiveness does not protect any of this.** It covers CASES, not wire strings, key names
+Switch exhaustiveness does not protect any of this: it covers CASES, not wire strings, key names
 or nesting. The worst instance was a capability mapping written as an ARRAY literal in the eval
 runner: adding an `LLMToolChoice` case breaks every switch loudly and leaves that array silently one
 probe short.
@@ -246,8 +234,20 @@ Two consumers: it bounds `probeThinkingBudgetRange`'s search ceiling, and it dec
 `OpenAICompatibleProvider`'s `thinkingBlock` branch pairs the emitted budget against `max_tokens`.
 Until the second existed, the type documented a truncation nothing anywhere prevented.
 
-### Probe records are schema-versioned and migrated, never soft-decoded
+### Persisted keys and schema changes
 
+Nothing persisted is ever soft-decoded: a record carrying an unmigrated spelling or schema silently loses data, so migrations are one-time scripts that verify afterwards.
+
+**`ModelCapability` rawValues are the persisted keys and are PINNED explicitly**, with a guard test
+asserting them against an independent table plus completeness. They were implicit, so a rename
+silently rewrote the key and orphaned every record using it — `vision` alone is in 1,414. Renaming a
+case is free; changing a wire string fails the build. When a wire string genuinely must change, it
+is a one-time script (`scripts/migrate_capability_wire_names.py`) run with the app quit, landing in
+the SAME commit as the pin change — the app reads exactly one spelling at a time. A record carrying
+an unmigrated spelling decodes with that capability ABSENT, never wrong, which is silent; that is
+why the script verifies zero survivors rather than trusting the pass.
+
+**Probe records are schema-versioned and migrated.**
 `ProbeRecord.currentSchemaVersion` is **3** (v2 split `effortLevels` into `generalEffortLevels` +
 `reasoningEffortLevels`; v3 added `capabilityFindings` and `maxThinkingBudgetTokens`). There is NO
 runtime migration — the script is the only path, deliberately, so a half-migrated corpus is a loud
@@ -266,6 +266,8 @@ exhaustive because those are the only providers that ever recorded a ladder.
 
 Both `LLMKitManager` and `StorageManager` track `providersLoadedOK` / `configurationsLoadedOK` flags — **if the initial decode fails (e.g. schema change), the in-memory state is empty but `save()` is suppressed** so the on-disk file isn't overwritten with empty data. Don't bypass this guard.
 
+Backward-compatible Codable (an explicit repo override of the global no-backward-compatibility rule): new optional fields on persisted types should use `decodeIfPresent` with a default (see `ModelConfiguration.init(from:)` for the pattern). Don't break old on-disk files.
+
 API keys live in Keychain via `KeychainService`, keyed by provider ID. `apiKeyChangeCounter` is bumped on every key write so SwiftUI views can observe a change to a non-observable Keychain read.
 
 ### Logging
@@ -275,6 +277,5 @@ API keys live in Keychain via `KeychainService`, keyed by provider ID. `apiKeyCh
 ## Project conventions
 
 - ROADMAP.md is the source of truth for planned work and known issues. Per the user's global rules, **completed items stay in the file** (marked complete with `~~strikethrough~~ ✅ Completed` and a brief note on what changed); they are not deleted.
-- The library deliberately exposes provider-specific quirks (Anthropic's `temperature = 1` requirement when `thinking` is enabled, Mistral's parallel-tool-call quirk in `makeProvider`, Gemini's per-request URL-keyed auth in `prepareRequest` vs. `x-goog-api-key` header in `ModelFetchService`). When changing one provider, search for the others — request preparation logic is duplicated across `prepareRequest` and the individual `*Provider` adapters.
+- The library deliberately exposes provider-specific quirks (Anthropic's `temperature = 1` requirement when `thinking` is enabled, Mistral's parallel-tool-call quirk in `makeProvider`, Gemini's per-request URL-keyed auth in `prepareRequest` vs. `x-goog-api-key` header in `ModelFetchService`). When changing one provider, search for the others — see the `prepareRequest` duplication note under "Entry point".
 - `ModelConfiguration.useDefaultTemperature` exists for models (e.g. Alibaba QVQ) that reject any explicit temperature; `extendedCacheTTL` toggles Anthropic's 1h vs 5min ephemeral cache.
-- Backward-compatible Codable: new optional fields on persisted types should use `decodeIfPresent` with a default (see `ModelConfiguration.init(from:)` for the pattern). Don't break old on-disk files.
