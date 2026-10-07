@@ -11,8 +11,8 @@ SwiftLLMKit is a Swift Package (library, no executable) targeting macOS 15+ with
 This is a Swift Package (no `.xcodeproj` or `.xcworkspace`) that ships compiled resources
 (`Resources/*.json`). The drews-xcode-mcp tools refuse a bare package directory, so this repo is
 the one exception to the parent CLAUDE.md's xcode-mcp rule: build and test with the package
-toolchain from the repo root, and **delete the `.build` folder afterwards** (it is not ignored
-and must never be committed).
+toolchain from the repo root, and **delete the `.build` folder afterwards** (it is git-ignored, but
+must never be committed).
 
 ```
 cd /Users/andrew/cursor/swift-llm-kit
@@ -46,7 +46,7 @@ Note the duplication between these two paths is a known issue tracked in ROADMAP
 
 ### Provider abstraction (`Providers/`)
 
-`LLMProvider` is the per-call protocol: `send(messages:tools:) async throws -> LLMResponse`. Concrete adapters: `AnthropicProvider`, `OpenAICompatibleProvider`, `GeminiProvider`, `OllamaProvider`. `OpenAICompatibleProvider` is reused for many `ProviderAPIType` cases (mistral, xAI, z.ai, huggingFace, lmStudio, metaLlama, alibabaCloud, openRouter) — when adding a new provider type, **always update every `switch` over `ProviderAPIType`** (in `SwiftLLMKit.swift` `prepareRequest` + `makeProvider`, `ProviderAPIType.swift`, `ModelFetchService.swift`).
+`LLMProvider` is the per-call protocol: `send(messages:tools:) async throws -> LLMResponse`. Concrete adapters: `AnthropicProvider`, `OpenAICompatibleProvider`, `GeminiProvider`, `OllamaProvider`, `CodexResponsesProvider` (serves `codexChatGPT`). `OpenAICompatibleProvider` is reused for many `ProviderAPIType` cases (mistral, xAI, z.ai, huggingFace, lmStudio, metaModel, alibabaCloud, openRouter) — when adding a new provider type, **always update every `switch` over `ProviderAPIType`** (in `SwiftLLMKit.swift` `prepareRequest` + `makeProvider`, `ProviderAPIType.swift`, `ModelFetchService.swift`).
 
 `LLMMessage.Content` is a tagged enum (`.text`, `.toolCalls`, `.mixed`, `.toolResult`) with custom Codable. `LLMResponse` carries text + toolCalls + reasoning + `TokenUsage` (which preserves `rawUsage` JSON verbatim for fields not yet parsed).
 
@@ -54,7 +54,7 @@ All providers share `llmURLSession` (10-min request / 15-min resource timeout) �
 
 ### `ProviderAPIType` (`Models/ProviderAPIType.swift`)
 
-The 12-case enum that drives every per-provider branch. Carries `temperatureRange`, `endpointPresets`, `liteLLMPrefix`, and `displayName`. The `URL.ensureAnthropicV1()` / `strippingAnthropicV1()` helpers are defined here — Anthropic's base endpoint is sometimes used with `/v1` and sometimes without, depending on the operation.
+The 13-case enum (including `codexChatGPT`) that drives every per-provider branch. Carries `temperatureRange`, `endpointPresets`, `liteLLMPrefix`, and `displayName`. The `URL.ensureAnthropicV1()` / `strippingAnthropicV1()` helpers are defined here — Anthropic's base endpoint is sometimes used with `/v1` and sometimes without, depending on the operation.
 
 ### Built-in providers
 
@@ -119,7 +119,7 @@ injected at provider construction, the same path `behaviorFlags` travels — nev
 `provider.apiType == .alibabaCloud` stopped working the moment Moonshot and DeepSeek arrived: both
 are `openAICompatible` alongside OpenAI, and all three want different keys. `ReasoningControl` makes
 the mechanism per-model data (`unsupported` / `reasoningEffortOnly` / `thinkingBlock` /
-`enableThinkingFlag` / `anthropicThinking` / `geminiThinkingConfig`).
+`enableThinkingFlag` / `anthropicThinking` / `anthropicAdaptiveThinking` / `geminiThinkingConfig`).
 
 An enum because the mechanisms are mutually exclusive — as booleans,
 `usesThinkingBlock && usesEnableThinkingFlag` would describe a model that cannot exist. The "no
