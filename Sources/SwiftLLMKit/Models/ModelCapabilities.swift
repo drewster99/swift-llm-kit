@@ -262,31 +262,60 @@ public struct ModelCapabilities: Sendable, Equatable {
     private func has(_ capability: ModelCapability) -> Bool { states[capability] == true }
     private mutating func set(_ capability: ModelCapability, _ on: Bool) { states[capability] = on }
 
+    // Compatibility views over the tri-state capability map: an accessor is true only when its capability is known true.
+    // Unknown and known-false states both read as false; use state(of:) to distinguish them.
+    // Setting an accessor records an explicit known true or false value.
+    /// Model can call tools. Frequently mis-reported as off for cloud/self-hosted models that do support it.
     public var toolUse: Bool { get { has(.toolUse) } set { set(.toolUse, newValue) } }
+    /// Model can accept images in the prompt. Off means a pasted image is rejected (HTTP 400).
     public var vision: Bool { get { has(.vision) } set { set(.vision, newValue) } }
+    /// Model supports extended reasoning (thinking budget / effort).
     public var reasoning: Bool { get { has(.reasoning) } set { set(.reasoning, newValue) } }
+    /// Model has a built-in code-execution tool.
     public var codeExecution: Bool { get { has(.codeExecution) } set { set(.codeExecution, newValue) } }
+    /// Provider supports prompt/context caching for this model.
     public var promptCaching: Bool { get { has(.promptCaching) } set { set(.promptCaching, newValue) } }
+    /// Model supports computer-use / GUI-control tooling.
     public var computerUse: Bool { get { has(.computerUse) } set { set(.computerUse, newValue) } }
+    /// Model can accept audio as input.
     public var audioInput: Bool { get { has(.audioInput) } set { set(.audioInput, newValue) } }
+    /// Model can produce audio output.
     public var audioOutput: Bool { get { has(.audioOutput) } set { set(.audioOutput, newValue) } }
+    /// Model can accept video as input.
     public var videoInput: Bool { get { has(.videoInput) } set { set(.videoInput, newValue) } }
+    /// Model supports structured-output / JSON-schema responses.
     public var structuredOutputSupportsJSONSchema: Bool { get { has(.structuredOutputSupportsJSONSchema) } set { set(.structuredOutputSupportsJSONSchema, newValue) } }
+    /// Model can emit multiple tool calls in one turn.
     public var parallelToolCalls: Bool { get { has(.parallelToolCalls) } set { set(.parallelToolCalls, newValue) } }
+    /// Model can accept PDF documents as input.
     public var pdfInput: Bool { get { has(.pdfInput) } set { set(.pdfInput, newValue) } }
+    /// Model has a built-in web-search tool.
     public var webSearch: Bool { get { has(.webSearch) } set { set(.webSearch, newValue) } }
+    /// Model accepts a system message (some backends fold it into the first user turn).
     public var systemMessages: Bool { get { has(.systemMessages) } set { set(.systemMessages, newValue) } }
+    /// Model supports prefilling the start of the assistant's reply.
     public var assistantPrefill: Bool { get { has(.assistantPrefill) } set { set(.assistantPrefill, newValue) } }
+    /// Model honors an explicit `tool_choice` selection.
     public var toolChoiceSupported: Bool { get { has(.toolChoiceSupported) } set { set(.toolChoiceSupported, newValue) } }
+    /// Model consumes tool results, not just emits calls; this is the half an agent depends on. Probe-established; force only to correct a stale verdict.
     public var toolResultRoundTrip: Bool { get { has(.toolResultRoundTrip) } set { set(.toolResultRoundTrip, newValue) } }
+    /// Model accepts an explicit request to enable reasoning. Some reasoning models only ever reason and reject being switched on.
     public var reasoningCanBeEnabled: Bool { get { has(.reasoningCanBeEnabled) } set { set(.reasoningCanBeEnabled, newValue) } }
+    /// Model accepts an explicit request to disable reasoning. Thinking-only models reject this.
     public var reasoningCanBeDisabled: Bool { get { has(.reasoningCanBeDisabled) } set { set(.reasoningCanBeDisabled, newValue) } }
+    /// Model accepts `thinking.keep: "all"` to retain reasoning content across turns. Applies only to the `thinking` block mechanism (Moonshot/DeepSeek); it is meaningless on any other reasoning control.
     public var thinkingSupportsKeepAll: Bool { get { has(.thinkingSupportsKeepAll) } set { set(.thinkingSupportsKeepAll, newValue) } }
+    /// Model accepts an explicit reasoning token budget rather than only a named effort level.
     public var thinkingSupportsTokenBudget: Bool { get { has(.thinkingSupportsTokenBudget) } set { set(.thinkingSupportsTokenBudget, newValue) } }
+    /// Model accepts `response_format: {type: json_object}` and returns syntactically valid JSON.
     public var structuredOutputSupportsJSONObject: Bool { get { has(.structuredOutputSupportsJSONObject) } set { set(.structuredOutputSupportsJSONObject, newValue) } }
+    /// Model accepts `tool_choice: required` (Anthropic `any`), forcing some tool call.
     public var toolChoiceSupportsValueRequired: Bool { get { has(.toolChoiceSupportsValueRequired) } set { set(.toolChoiceSupportsValueRequired, newValue) } }
+    /// Model accepts `tool_choice: none`, forbidding tool calls while tools are present.
     public var toolChoiceSupportsValueNone: Bool { get { has(.toolChoiceSupportsValueNone) } set { set(.toolChoiceSupportsValueNone, newValue) } }
+    /// Model accepts `tool_choice` naming one function, forcing that tool.
     public var toolChoiceSupportsNamedFunction: Bool { get { has(.toolChoiceSupportsNamedFunction) } set { set(.toolChoiceSupportsNamedFunction, newValue) } }
+    /// Model accepts `strict: true` on a function definition for guaranteed schema adherence.
     public var toolDefinitionsSupportStrict: Bool { get { has(.toolDefinitionsSupportStrict) } set { set(.toolDefinitionsSupportStrict, newValue) } }
 
     /// Whether the capability is KNOWN-TRUE. Unknown and known-false both read `false`.
